@@ -1,0 +1,56 @@
+{
+  "name": "code-agent",
+  "version": "0.2.4",
+  "description": "AI coding agent CLI with multi-provider LLM support, Cursor-compatible skills, and VS Code architecture",
+  "main": "build/agent-cli.js",
+  "bin": {
+    "agent-cli": "build/agent-cli.js",
+    "code-agent": "build/agent-cli.js"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding",
+    "llm",
+    "vscode",
+    "cursor",
+    "openai",
+    "anthropic",
+    "ollama",
+    "cli",
+    "devtools"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "homepage": "",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:release": "node build.mjs --minify",
+    "typecheck": "tsc --noEmit",
+    "start": "node build/agent-cli.js",
+    "start:mock": "MOCK_LLM=1 node standalone-demo/agent.mjs",
+    "clean": "rm -rf build",
+    "pack": "npm run build:release && npm pack",
+    "link": "npm run build && npm link",
+    "prepublishOnly": "npm run build:release"
+  },
+  "files": [
+    "build/agent-cli.js",
+    "build/agent-cli.js.map",
+    "config.template.yaml",
+    "USAGE.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "esbuild": "^0.25.3",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.8.3"
+  }
+}

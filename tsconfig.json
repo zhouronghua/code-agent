@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "ignoreDeprecations": "6.0",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "outDir": "./build",
+    "rootDir": ".",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": true,
+    "experimentalDecorators": true,
+    "baseUrl": ".",
+    "paths": {
+      "vs/workbench/services/agent/*": ["src/vs/workbench/services/agent/*"],
+      "vs/workbench/contrib/agent/*": ["src/vs/workbench/contrib/agent/*"],
+      "vs/base/*": ["vs-core/base/*"],
+      "vs/platform/*": ["vs-core/platform/*"],
+      "vs/workbench/*": ["vs-core/workbench/*"],
+      "vs/nls": ["vs-core/nls"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "vs-core/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "build",
+    "standalone-demo"
+  ]
+}

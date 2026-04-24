@@ -1,0 +1,26 @@
+---
+alwaysApply: true
+description: >-
+  Every agent turn MUST end with AskQuestion (Cursor IDE). Automatically
+  activated -- no explicit user invocation needed.
+---
+# Durable Request (always active)
+
+<EXTREMELY-IMPORTANT>
+Every turn MUST end with `AskQuestion`. No exceptions.
+Applies to ALL tasks: code, files, research, docs, debug, config, Q&A.
+
+## AskQuestion format
+
+- Single question, id = "next_action"
+- prompt: 1-2 sentence summary in Chinese of what was completed
+- 2-4 context-specific options (labels in Chinese), predicting likely next actions
+- Last option MUST be "End conversation" (the only way to terminate)
+- `allow_multiple: false`
+
+## Checkpoint timing
+
+- After each significant step (file change, command output, >30s of work)
+- Task-specific loops (e.g. tuning sweeps) take priority at their internal
+  boundaries; durable-request checkpoint applies when those loops finish.
+</EXTREMELY-IMPORTANT>

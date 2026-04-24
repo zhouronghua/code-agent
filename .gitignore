@@ -1,0 +1,10 @@
+node_modules/
+build/
+*.js.map
+/standalone-demo/hello.txt
+/standalone-demo/fibonacci.py
+/tmp/
+
+# Local config with API keys (use config.template.yaml as starting point)
+config.yaml
+code-agent-*.tgz

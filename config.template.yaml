@@ -1,0 +1,59 @@
+# CodeAgent Configuration Template
+# Copy this file to one of the following locations:
+#   - ./config.yaml              (project-level, highest priority)
+#   - ~/.codeagent/config.yaml   (global, shared across projects)
+#
+# Then fill in your API keys and adjust settings as needed.
+
+# Active profile (switch with --profile flag or AGENT_PROFILE env var)
+active_profile: openai
+
+# LLM Provider profiles
+# Each profile defines a provider, model, API key, and optional base URL.
+# You can define as many profiles as you need and switch between them.
+profiles:
+  openai:
+    provider: openai
+    model: gpt-4o
+    api_key: "sk-your-openai-key-here"
+    api_base: https://api.openai.com/v1
+
+  anthropic:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    api_key: "sk-ant-your-anthropic-key-here"
+    api_base: https://api.anthropic.com
+
+  ollama:
+    provider: ollama
+    model: llama3
+    api_base: http://localhost:11434
+
+  # Example: custom OpenAI-compatible provider
+  # my-custom:
+  #   provider: openai
+  #   model: deepseek-v4-flash
+  #   api_key: "your-key"
+  #   api_base: https://your-api-endpoint.example.com/v1
+
+# Agent settings
+agent:
+  max_steps: 25
+  max_context_tokens: 128000
+  temperature: 0
+  step_timeout: 60000
+  task_timeout: 600000
+
+# Skills directories (Cursor-compatible SKILL.md files)
+# The agent scans these directories for skill definitions.
+# Each skill is a directory containing a SKILL.md file with frontmatter.
+skills:
+  - ~/.cursor/skills
+  - ~/.cursor/skills-cursor
+  - .cursor/skills
+
+# Rules directories (Cursor-compatible .mdc rule files)
+# Rules with "alwaysApply: true" are automatically injected into every prompt.
+rules:
+  - ~/.cursor/rules
+  - .cursor/rules

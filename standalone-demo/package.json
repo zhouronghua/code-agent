@@ -1,0 +1,13 @@
+{
+  "name": "codeagent-demo",
+  "version": "0.1.0",
+  "description": "Standalone demo of VS Code Agent Mode",
+  "type": "module",
+  "scripts": {
+    "start": "node agent.mjs",
+    "start:mock": "MOCK_LLM=1 node agent.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

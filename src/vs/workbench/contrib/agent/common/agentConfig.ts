@@ -1,0 +1,199 @@
+/*---------------------------------------------------------------------------------------------
+ *  Agent Configuration - YAML-based config with profile support
+ *  
+ *  Resolution order:
+ *    1. CLI flags (--profile, --model, etc.)
+ *    2. Environment variables (OPENAI_API_KEY, LLM_MODEL, etc.)
+ *    3. Project config.yaml (in CWD)
+ *    4. Global ~/.codeagent/config.yaml
+ *    5. Built-in defaults
+ *--------------------------------------------------------------------------------------------*/
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { IAgentConfig, DEFAULT_AGENT_CONFIG } from 'vs/workbench/services/agent/common/agentModels';
+
+interface ConfigProfile {
+	provider: string;
+	model: string;
+	api_key: string;
+	api_base?: string;
+	temperature?: number;
+}
+
+interface ConfigFile {
+	active_profile?: string;
+	profiles?: Record<string, ConfigProfile>;
+	agent?: {
+		max_steps?: number;
+		max_context_tokens?: number;
+		temperature?: number;
+		step_timeout?: number;
+		task_timeout?: number;
+	};
+	skills?: string[];
+	rules?: string[];
+}
+
+function parseYaml(text: string): ConfigFile {
+	const result: ConfigFile = {};
+	const lines = text.split('\n');
+	let currentSection = '';
+	let currentProfile = '';
+	let inList = false;
+	let listKey = '';
+
+	for (const line of lines) {
+		const trimmed = line.trimEnd();
+		if (!trimmed || trimmed.trimStart().startsWith('#')) continue;
+
+		const indent = line.length - line.trimStart().length;
+
+		if (indent === 0 && trimmed.endsWith(':')) {
+			currentSection = trimmed.slice(0, -1);
+			currentProfile = '';
+			inList = false;
+			if (currentSection === 'profiles') result.profiles = result.profiles || {};
+			if (currentSection === 'agent') result.agent = result.agent || {};
+			continue;
+		}
+
+		if (indent === 0 && trimmed.includes(':')) {
+			const [key, ...rest] = trimmed.split(':');
+			const val = rest.join(':').trim();
+			if (key.trim() === 'active_profile') result.active_profile = val;
+			continue;
+		}
+
+		if (currentSection === 'profiles' && indent === 2 && trimmed.endsWith(':')) {
+			currentProfile = trimmed.slice(0, -1).trim();
+			result.profiles![currentProfile] = { provider: '', model: '', api_key: '' };
+			continue;
+		}
+
+		if (currentSection === 'profiles' && indent === 4 && currentProfile) {
+			const [key, ...rest] = trimmed.split(':');
+			const val = rest.join(':').trim();
+			const k = key.trim();
+			const profile = result.profiles![currentProfile];
+			if (k === 'provider') profile.provider = val;
+			else if (k === 'model') profile.model = val;
+			else if (k === 'api_key') profile.api_key = val.replace(/^["']|["']$/g, '');
+			else if (k === 'api_base') profile.api_base = val;
+			else if (k === 'temperature') profile.temperature = parseFloat(val);
+			continue;
+		}
+
+		if (currentSection === 'agent' && indent === 2) {
+			const [key, ...rest] = trimmed.split(':');
+			const val = rest.join(':').trim();
+			const k = key.trim();
+			if (!result.agent) result.agent = {};
+			if (k === 'max_steps') result.agent.max_steps = parseInt(val, 10);
+			else if (k === 'max_context_tokens') result.agent.max_context_tokens = parseInt(val, 10);
+			else if (k === 'temperature') result.agent.temperature = parseFloat(val);
+			else if (k === 'step_timeout') result.agent.step_timeout = parseInt(val, 10);
+			else if (k === 'task_timeout') result.agent.task_timeout = parseInt(val, 10);
+			continue;
+		}
+
+		if ((currentSection === 'skills' || currentSection === 'rules') && trimmed.trimStart().startsWith('- ')) {
+			const val = trimmed.trimStart().slice(2).trim();
+			if (!result[currentSection as 'skills' | 'rules']) {
+				(result as any)[currentSection] = [];
+			}
+			(result as any)[currentSection].push(val);
+			continue;
+		}
+	}
+
+	return result;
+}
+
+function findConfigFile(): string | undefined {
+	const candidates = [
+		path.join(process.cwd(), 'config.yaml'),
+		path.join(os.homedir(), '.codeagent', 'config.yaml'),
+	];
+	return candidates.find(p => fs.existsSync(p));
+}
+
+function resolveHomePath(p: string): string {
+	if (p.startsWith('~/') || p.startsWith('~\\')) {
+		return path.join(os.homedir(), p.slice(2));
+	}
+	return path.resolve(p);
+}
+
+export interface ResolvedConfig {
+	agentConfig: IAgentConfig;
+	skillsDirs: string[];
+	rulesDirs: string[];
+	profileName: string;
+	configFilePath?: string;
+}
+
+export function loadConfig(cliProfile?: string): ResolvedConfig {
+	let fileConfig: ConfigFile = {};
+	const configPath = findConfigFile();
+
+	if (configPath) {
+		try {
+			const raw = fs.readFileSync(configPath, 'utf-8');
+			fileConfig = parseYaml(raw);
+		} catch {
+			// ignore parse errors, fall through to env/defaults
+		}
+	}
+
+	const profileName = cliProfile
+		|| process.env.AGENT_PROFILE
+		|| fileConfig.active_profile
+		|| 'default';
+
+	const profile = fileConfig.profiles?.[profileName];
+	if (fileConfig.profiles && !profile && profileName !== 'default') {
+		const available = Object.keys(fileConfig.profiles).join(', ');
+		console.warn(`Warning: profile "${profileName}" not found in config. Available: ${available}`);
+	}
+
+	const agentConfig: IAgentConfig = {
+		...DEFAULT_AGENT_CONFIG,
+		provider: (process.env.LLM_PROVIDER || profile?.provider || DEFAULT_AGENT_CONFIG.provider) as any,
+		model: process.env.LLM_MODEL || profile?.model || DEFAULT_AGENT_CONFIG.model,
+		apiKey: process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || profile?.api_key || '',
+		apiBase: process.env.LLM_API_BASE || profile?.api_base || undefined,
+		maxSteps: fileConfig.agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
+		maxContextTokens: fileConfig.agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
+		temperature: profile?.temperature ?? fileConfig.agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
+		stepTimeout: fileConfig.agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
+		taskTimeout: fileConfig.agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,
+	};
+
+	const skillsDirs = (fileConfig.skills || ['~/.cursor/skills']).map(resolveHomePath);
+	const rulesDirs = (fileConfig.rules || ['~/.cursor/rules']).map(resolveHomePath);
+
+	return { agentConfig, skillsDirs, rulesDirs, profileName, configFilePath: configPath };
+}
+
+export function loadConfigForProfile(profileName: string): ResolvedConfig {
+	return loadConfig(profileName);
+}
+
+export function listProfiles(): Array<{ name: string; provider: string; model: string }> {
+	const configPath = findConfigFile();
+	if (!configPath) return [];
+
+	try {
+		const raw = fs.readFileSync(configPath, 'utf-8');
+		const config = parseYaml(raw);
+		return Object.entries(config.profiles || {}).map(([name, p]) => ({
+			name,
+			provider: p.provider,
+			model: p.model,
+		}));
+	} catch {
+		return [];
+	}
+}
