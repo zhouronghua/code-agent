@@ -310,8 +310,13 @@ async function main() {
 
 	const skillCount = skillsLoader.skills.length;
 	const ruleCount = skillsLoader.rules.length;
-	if (skillCount > 0 || ruleCount > 0) {
-		console.log(`${C.dim}Skills: ${skillCount} loaded | Rules: ${ruleCount} loaded${C.reset}`);
+	const mcpCount = resolved.mcpServers.length;
+	const parts: string[] = [];
+	if (skillCount > 0) parts.push(`Skills: ${skillCount}`);
+	if (ruleCount > 0) parts.push(`Rules: ${ruleCount}`);
+	if (mcpCount > 0) parts.push(`MCP Servers: ${mcpCount}`);
+	if (parts.length > 0) {
+		console.log(`${C.dim}${parts.join(' | ')}${C.reset}`);
 	}
 	console.log('');
 

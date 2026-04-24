@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: node build/agent-cli.js --version
+
+      - run: npm run build:release
+
+      - name: Upload build artifact
+        if: matrix.node-version == 20
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-cli
+          path: |
+            build/agent-cli.js
+            config.template.yaml

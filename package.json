@@ -20,13 +20,13 @@
     "cli",
     "devtools"
   ],
-  "author": "",
+  "author": "zhouronghua",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/zhouronghua/code-agent.git"
   },
-  "homepage": "",
+  "homepage": "https://github.com/zhouronghua/code-agent#readme",
   "scripts": {
     "build": "node build.mjs",
     "build:release": "node build.mjs --minify",

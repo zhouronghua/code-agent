@@ -4,10 +4,12 @@
 
 ## 安装
 
-### 方法一：从 npm 安装
+### 方法一：从 GitHub Releases 安装（推荐）
 
 ```bash
-npm install -g code-agent
+# 从 GitHub Release 下载 tgz 包
+curl -LO https://github.com/zhouronghua/code-agent/releases/latest/download/code-agent-0.2.4.tgz
+npm install -g code-agent-0.2.4.tgz
 
 # 验证安装
 code-agent --help
@@ -16,17 +18,16 @@ agent-cli --help    # 同一个程序，两个命令名都可以
 
 安装后会注册两个全局命令：`code-agent` 和 `agent-cli`。
 
-### 方法二：从 tgz 包安装
+### 方法二：从 npm 安装
 
 ```bash
-# 下载 tgz 包（从你的 Artifactory / release 页面等）
-npm install -g code-agent-x.y.z.tgz
+npm install -g code-agent
 ```
 
 ### 方法三：从源码安装
 
 ```bash
-git clone <your-repo-url> && cd code-agent
+git clone https://github.com/zhouronghua/code-agent.git && cd code-agent
 npm install
 npm run build          # 开发构建
 npm run build:release  # 生产构建（minify）
@@ -38,7 +39,14 @@ npm link               # 全局注册命令
 只需 `agent-cli.js` 一个文件即可运行，适合快速尝试：
 
 ```bash
-# 从 tgz 解压
+# 从 GitHub Release 下载单文件
+curl -LO https://github.com/zhouronghua/code-agent/releases/latest/download/agent-cli.js
+node agent-cli.js --help
+```
+
+或者从 tgz 解压：
+
+```bash
 tar xzf code-agent-x.y.z.tgz
 cp package/build/agent-cli.js ./agent-cli.js
 
@@ -234,48 +242,55 @@ rules:
   - .cursor/rules
 ```
 
-## 分发
+## MCP (Model Context Protocol) 支持
 
-### 通过 Artifactory / 私有仓库分发
+CodeAgent 支持通过 MCP 协议扩展工具能力。在 `config.yaml` 中配置 MCP 服务器：
 
-发布新版本到 JFrog Artifactory 或其他制品库：
+```yaml
+mcp_servers:
+  filesystem:
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem"
+      - /path/to/workspace
 
-```bash
-# 1. 构建 release 版本并生成 tgz 包
-npm run pack
-# 生成: code-agent-x.y.z.tgz
+  github:
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-github"
 
-# 2. 上传到 Artifactory（替换为你的实际地址和凭证）
-curl -u<USER>:<API_KEY> \
-  -T code-agent-x.y.z.tgz \
-  "http://your-artifactory.example.com/artifactory/your-repo/code-agent/code-agent-x.y.z.tgz"
+  custom-api:
+    url: http://localhost:3000/mcp
 ```
 
-同事安装方式见上方 "安装" 章节。
+每个 MCP 服务器提供额外的工具，agent 可以在对话中调用它们。
 
-**版本更新流程：**
+## 分发
+
+### 通过 GitHub Releases 分发（推荐）
+
+推送 git tag 即可自动触发 GitHub Actions 生成 Release：
 
 ```bash
-# 修改代码后...
 # 1. 更新版本号
 npm version patch   # 0.2.0 -> 0.2.1（修复）
 # 或 npm version minor  # 0.2.0 -> 0.3.0（新功能）
 # 或 npm version major  # 0.2.0 -> 1.0.0（重大变更）
 
-# 2. 重新打包上传
-npm run pack
-curl -u<USER>:<KEY> -T code-agent-*.tgz \
-  "http://your-artifactory.example.com/artifactory/your-repo/code-agent/"
+# 2. 推送 tag
+git push origin --tags
 ```
+
+CI 自动完成：构建 -> 打包 tgz -> 创建 GitHub Release -> 发布到 npm。
+
+用户安装：`npm install -g https://github.com/zhouronghua/code-agent/releases/latest/download/code-agent-x.y.z.tgz`
 
 ### 通过 npm registry 分发
 
 ```bash
-# 发布到内网 registry
-npm publish
-
-# 发布到公共 npmjs.org
-npm publish --registry https://registry.npmjs.org
+npm publish --access public
 ```
 
 ### 单文件分发
@@ -297,8 +312,8 @@ node agent-cli.js "your task"
 ## 快速上手（收到安装包后）
 
 ```bash
-# 1. 安装
-npm install -g code-agent-x.y.z.tgz
+# 1. 安装（从 GitHub Releases 或 npm）
+npm install -g code-agent
 
 # 2. 创建配置（全局，只需一次）
 mkdir -p ~/.codeagent

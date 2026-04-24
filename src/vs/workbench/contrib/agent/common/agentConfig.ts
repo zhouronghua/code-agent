@@ -22,6 +22,13 @@ interface ConfigProfile {
 	temperature?: number;
 }
 
+interface McpServerConfig {
+	command: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+}
+
 interface ConfigFile {
 	active_profile?: string;
 	profiles?: Record<string, ConfigProfile>;
@@ -34,6 +41,7 @@ interface ConfigFile {
 	};
 	skills?: string[];
 	rules?: string[];
+	mcp_servers?: Record<string, McpServerConfig>;
 }
 
 function parseYaml(text: string): ConfigFile {
@@ -98,6 +106,37 @@ function parseYaml(text: string): ConfigFile {
 			continue;
 		}
 
+		if (currentSection === 'mcp_servers' && indent === 2 && trimmed.endsWith(':')) {
+			currentProfile = trimmed.slice(0, -1).trim();
+			if (!result.mcp_servers) result.mcp_servers = {};
+			result.mcp_servers[currentProfile] = { command: '' };
+			continue;
+		}
+
+		if (currentSection === 'mcp_servers' && indent === 4 && currentProfile) {
+			const [key, ...rest] = trimmed.split(':');
+			const val = rest.join(':').trim();
+			const k = key.trim();
+			const srv = result.mcp_servers![currentProfile];
+			if (k === 'command') srv.command = val;
+			else if (k === 'url') srv.url = val;
+			else if (k === 'args') {
+				// single-line shorthand: args: --port 8080
+				if (val) srv.args = val.split(/\s+/);
+			}
+			continue;
+		}
+
+		if (currentSection === 'mcp_servers' && indent === 6 && trimmed.trimStart().startsWith('- ')) {
+			const val = trimmed.trimStart().slice(2).trim();
+			const srv = result.mcp_servers?.[currentProfile];
+			if (srv) {
+				if (!srv.args) srv.args = [];
+				srv.args.push(val);
+			}
+			continue;
+		}
+
 		if ((currentSection === 'skills' || currentSection === 'rules') && trimmed.trimStart().startsWith('- ')) {
 			const val = trimmed.trimStart().slice(2).trim();
 			if (!result[currentSection as 'skills' | 'rules']) {
@@ -126,12 +165,21 @@ function resolveHomePath(p: string): string {
 	return path.resolve(p);
 }
 
+export interface McpServerEntry {
+	name: string;
+	command: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+}
+
 export interface ResolvedConfig {
 	agentConfig: IAgentConfig;
 	skillsDirs: string[];
 	rulesDirs: string[];
 	profileName: string;
 	configFilePath?: string;
+	mcpServers: McpServerEntry[];
 }
 
 export function loadConfig(cliProfile?: string): ResolvedConfig {
@@ -174,7 +222,11 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 	const skillsDirs = (fileConfig.skills || ['~/.cursor/skills']).map(resolveHomePath);
 	const rulesDirs = (fileConfig.rules || ['~/.cursor/rules']).map(resolveHomePath);
 
-	return { agentConfig, skillsDirs, rulesDirs, profileName, configFilePath: configPath };
+	const mcpServers: McpServerEntry[] = Object.entries(fileConfig.mcp_servers || {}).map(
+		([name, srv]) => ({ name, ...srv })
+	);
+
+	return { agentConfig, skillsDirs, rulesDirs, profileName, configFilePath: configPath, mcpServers };
 }
 
 export function loadConfigForProfile(profileName: string): ResolvedConfig {

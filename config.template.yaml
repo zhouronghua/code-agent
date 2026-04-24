@@ -57,3 +57,20 @@ skills:
 rules:
   - ~/.cursor/rules
   - .cursor/rules
+
+# MCP (Model Context Protocol) servers
+# Each server provides additional tools the agent can invoke.
+# mcp_servers:
+#   filesystem:
+#     command: npx
+#     args:
+#       - -y
+#       - "@modelcontextprotocol/server-filesystem"
+#       - /path/to/workspace
+#   github:
+#     command: npx
+#     args:
+#       - -y
+#       - "@modelcontextprotocol/server-github"
+#   custom-api:
+#     url: http://localhost:3000/mcp
