@@ -52,8 +52,5 @@
     "esbuild": "^0.25.3",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.8.3"
-  },
-  "dependencies": {
-    "code-agent": "file:code-agent-0.2.10.tgz"
   }
 }
