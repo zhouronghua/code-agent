@@ -76,7 +76,13 @@ export class AgentContext {
 
 		const splitPoint = Math.floor(this._messages.length / 2);
 		const oldMessages = this._messages.slice(0, splitPoint);
-		const recentMessages = this._messages.slice(splitPoint);
+		let recentMessages = this._messages.slice(splitPoint);
+
+		// Remove orphaned tool messages at the start of recentMessages
+		// (tool messages without a preceding assistant message with tool_calls)
+		while (recentMessages.length > 0 && recentMessages[0].role === MessageRole.Tool) {
+			recentMessages = recentMessages.slice(1);
+		}
 
 		const summaryContent = oldMessages
 			.map(m => `[${m.role}]: ${m.content.substring(0, 200)}`)
@@ -104,6 +110,12 @@ export class AgentContext {
 		} catch {
 			// if summarization fails, just truncate
 			this._messages.splice(0, splitPoint);
+			
+			// Remove orphaned tool messages at the start after truncation
+			while (this._messages.length > 0 && this._messages[0].role === MessageRole.Tool) {
+				this._messages.shift();
+			}
+			
 			return true;
 		}
 	}
