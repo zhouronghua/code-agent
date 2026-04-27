@@ -203,21 +203,41 @@ export class OpenAIProvider implements ILLMProvider {
 			m.role === MessageRole.Assistant && m.reasoningContent
 		);
 
-		return messages
-			.filter(msg => {
-				// In thinking mode, filter out assistant messages without reasoning_content
-				// Keep messages with tool_calls (function calling responses are exempt)
-				if (hasThinking && msg.role === MessageRole.Assistant) {
-					if (!msg.reasoningContent) {
-						// Allow if it has tool calls (function calling response)
-						if (!msg.toolCalls || msg.toolCalls.length === 0) {
-							return false;
-						}
+		const filtered = messages.filter(msg => {
+			// In thinking mode, filter out assistant messages without reasoning_content
+			// BUT preserve messages with tool_calls to maintain message sequence integrity
+			if (hasThinking && msg.role === MessageRole.Assistant) {
+				if (!msg.reasoningContent && (!msg.toolCalls || msg.toolCalls.length === 0)) {
+					return false;
+				}
+			}
+			return true;
+		});
+
+		// Validate: ensure all tool messages have a preceding assistant with tool_calls
+		for (let i = 0; i < filtered.length; i++) {
+			if (filtered[i].role === MessageRole.Tool) {
+				// Find the preceding assistant message with matching tool_call
+				let foundToolCall = false;
+				for (let j = i - 1; j >= 0; j--) {
+					if (filtered[j].role === MessageRole.Assistant && filtered[j].toolCalls?.length) {
+						foundToolCall = true;
+						break;
+					}
+					// Stop if we hit another tool or user message
+					if (filtered[j].role === MessageRole.Tool || filtered[j].role === MessageRole.User) {
+						break;
 					}
 				}
-				return true;
-			})
-			.map(msg => {
+				// If orphaned tool message, remove it to avoid API error
+				if (!foundToolCall) {
+					filtered.splice(i, 1);
+					i--;
+				}
+			}
+		}
+
+		return filtered.map(msg => {
 				const converted: OpenAIChatMessage = {
 					role: msg.role,
 					content: msg.content || null,
