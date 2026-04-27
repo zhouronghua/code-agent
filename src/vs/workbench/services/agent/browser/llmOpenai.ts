@@ -203,39 +203,36 @@ export class OpenAIProvider implements ILLMProvider {
 			m.role === MessageRole.Assistant && m.reasoningContent
 		);
 
+		// Build tool_call tracking: map assistant messages to their expected tool responses
+		const toolCallIds = new Set<string>();
+		if (hasThinking) {
+			for (const msg of messages) {
+				if (msg.role === MessageRole.Assistant && msg.toolCalls) {
+					for (const tc of msg.toolCalls) {
+						toolCallIds.add(tc.id);
+					}
+				}
+			}
+		}
+
 		const filtered = messages.filter(msg => {
-			// In thinking mode, filter out assistant messages without reasoning_content
-			// BUT preserve messages with tool_calls to maintain message sequence integrity
-			if (hasThinking && msg.role === MessageRole.Assistant) {
-				if (!msg.reasoningContent && (!msg.toolCalls || msg.toolCalls.length === 0)) {
-					return false;
+			// In thinking mode, preserve message sequence integrity:
+			// - Keep assistant messages with tool_calls or reasoning_content
+			// - Keep all tool messages (to maintain tool_call/tool pairs)
+			// - Filter only "pure text" assistant messages without reasoning_content
+			if (hasThinking) {
+				if (msg.role === MessageRole.Assistant) {
+					if (!msg.reasoningContent && (!msg.toolCalls || msg.toolCalls.length === 0)) {
+						return false;
+					}
+				}
+				// Always keep tool messages to preserve tool_call responses
+				if (msg.role === MessageRole.Tool) {
+					return true;
 				}
 			}
 			return true;
 		});
-
-		// Validate: ensure all tool messages have a preceding assistant with tool_calls
-		for (let i = 0; i < filtered.length; i++) {
-			if (filtered[i].role === MessageRole.Tool) {
-				// Find the preceding assistant message with matching tool_call
-				let foundToolCall = false;
-				for (let j = i - 1; j >= 0; j--) {
-					if (filtered[j].role === MessageRole.Assistant && filtered[j].toolCalls?.length) {
-						foundToolCall = true;
-						break;
-					}
-					// Stop if we hit another tool or user message
-					if (filtered[j].role === MessageRole.Tool || filtered[j].role === MessageRole.User) {
-						break;
-					}
-				}
-				// If orphaned tool message, remove it to avoid API error
-				if (!foundToolCall) {
-					filtered.splice(i, 1);
-					i--;
-				}
-			}
-		}
 
 		return filtered.map(msg => {
 				const converted: OpenAIChatMessage = {
