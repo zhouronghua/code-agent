@@ -121,7 +121,8 @@ function parseArgs(): CLIOptions {
 	return opts;
 }
 
-const AGENT_VERSION = '0.2.4';
+declare const __AGENT_VERSION__: string;
+const AGENT_VERSION = __AGENT_VERSION__;
 
 function printVersion() {
 	console.log(`code-agent v${AGENT_VERSION}`);

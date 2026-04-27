@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const outDir = 'build';
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
 
 await esbuild.build({
 	entryPoints: ['vs-core/node-runtime/main.ts'],
@@ -13,6 +14,9 @@ await esbuild.build({
 	format: 'cjs',
 	sourcemap: true,
 	tsconfig: 'tsconfig.json',
+	define: {
+		'__AGENT_VERSION__': JSON.stringify(pkg.version),
+	},
 	external: [],
 	banner: {
 		js: '#!/usr/bin/env node',
