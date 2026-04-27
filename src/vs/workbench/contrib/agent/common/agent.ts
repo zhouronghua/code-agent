@@ -229,14 +229,13 @@ export class AgentLoop {
 			stepCount++;
 		}
 
-		// Step limit check disabled (maxSteps set to 999999)
-		// Kept for safety: if somehow reached, allow continuation without blocking
-		if (stepCount >= this._config.maxSteps && this._config.maxSteps < 100000) {
+		if (stepCount >= this._config.maxSteps) {
 			const limitMsg = createMessage(
 				MessageRole.Assistant,
 				`Reached the step limit (${this._config.maxSteps}). Type "continue" to proceed.`,
 			);
-			this._context.addMessage(limitMsg);
+			// Only fire event for display; do NOT add to context history
+			// to avoid breaking reasoning_content requirements on re-entry
 			this._onDidReceiveMessage.fire(limitMsg);
 		}
 	}

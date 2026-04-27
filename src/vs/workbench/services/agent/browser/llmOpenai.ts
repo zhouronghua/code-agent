@@ -198,33 +198,47 @@ export class OpenAIProvider implements ILLMProvider {
 	}
 
 	private _convertMessages(messages: IAgentMessage[]): OpenAIChatMessage[] {
-		return messages.map(msg => {
-			const converted: OpenAIChatMessage = {
-				role: msg.role,
-				content: msg.content || null,
-			};
+		const hasThinking = messages.some(m =>
+			m.role === MessageRole.Assistant && m.reasoningContent
+		);
 
-			if (msg.toolCalls && msg.toolCalls.length > 0) {
-				converted.tool_calls = msg.toolCalls.map(tc => ({
-					id: tc.id,
-					type: 'function' as const,
-					function: {
-						name: tc.name,
-						arguments: JSON.stringify(tc.arguments),
-					},
-				}));
-			}
+		return messages
+			.filter(msg => {
+				// In thinking mode, drop locally-injected assistant messages
+				// that lack reasoning_content to avoid API rejection
+				if (hasThinking && msg.role === MessageRole.Assistant
+					&& !msg.reasoningContent && !msg.toolCalls?.length) {
+					return false;
+				}
+				return true;
+			})
+			.map(msg => {
+				const converted: OpenAIChatMessage = {
+					role: msg.role,
+					content: msg.content || null,
+				};
 
-			if (msg.toolCallId) {
-				converted.tool_call_id = msg.toolCallId;
-			}
+				if (msg.toolCalls && msg.toolCalls.length > 0) {
+					converted.tool_calls = msg.toolCalls.map(tc => ({
+						id: tc.id,
+						type: 'function' as const,
+						function: {
+							name: tc.name,
+							arguments: JSON.stringify(tc.arguments),
+						},
+					}));
+				}
 
-			if (msg.reasoningContent) {
-				converted.reasoning_content = msg.reasoningContent;
-			}
+				if (msg.toolCallId) {
+					converted.tool_call_id = msg.toolCallId;
+				}
 
-			return converted;
-		});
+				if (msg.reasoningContent) {
+					converted.reasoning_content = msg.reasoningContent;
+				}
+
+				return converted;
+			});
 	}
 }
 
