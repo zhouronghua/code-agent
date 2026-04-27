@@ -54,6 +54,6 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "code-agent": "file:code-agent-0.2.7.tgz"
+    "code-agent": "file:code-agent-0.2.10.tgz"
   }
 }

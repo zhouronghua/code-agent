@@ -12,6 +12,19 @@ import {
 	generateId,
 } from '../common/agentModels';
 
+// Retry configuration for transient API errors
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY_MS = 1000;
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function shouldRetry(statusCode: number): boolean {
+	return RETRYABLE_STATUS_CODES.has(statusCode);
+}
+
 interface OpenAIChatMessage {
 	role: string;
 	content: string | null;
@@ -60,39 +73,68 @@ export class OpenAIProvider implements ILLMProvider {
 			body.tools = tools;
 		}
 
-		const response = await fetch(`${this._apiBase}/chat/completions`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${this._apiKey}`,
-			},
-			body: JSON.stringify(body),
-		});
+		let lastError: Error | undefined;
+		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+			try {
+				const response = await fetch(`${this._apiBase}/chat/completions`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${this._apiKey}`,
+					},
+					body: JSON.stringify(body),
+				});
 
-		if (!response.ok) {
-			const errorText = await response.text();
-			if (allowRetry && response.status === 400 && this._isTemperatureError(errorText)) {
-				this._skipTemperature = true;
-				return this._doComplete(messages, tools, temperature, false);
+				if (!response.ok) {
+					const errorText = await response.text();
+					
+					// Special handling for temperature validation error
+					if (allowRetry && response.status === 400 && this._isTemperatureError(errorText)) {
+						this._skipTemperature = true;
+						return this._doComplete(messages, tools, temperature, false);
+					}
+					
+					// Retry on transient errors (429, 5xx)
+					if (shouldRetry(response.status) && attempt < MAX_RETRIES) {
+						const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+						console.warn(`[LLM Retry] API error ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+						lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+						await sleep(delay);
+						continue;
+					}
+					
+					throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+				}
+
+				const data = await response.json();
+				const choice = data.choices[0];
+				const msg = choice.message;
+
+				const toolCalls = msg.tool_calls?.map((tc: OpenAIChatMessage['tool_calls'] extends (infer T)[] | undefined ? T : never) => ({
+					id: tc.id,
+					name: tc.function.name,
+					arguments: JSON.parse(tc.function.arguments),
+				}));
+
+				return createMessage(
+					MessageRole.Assistant,
+					msg.content || '',
+					{ toolCalls, reasoningContent: msg.reasoning_content },
+				);
+			} catch (error) {
+				// Network errors or other exceptions
+				if (attempt < MAX_RETRIES) {
+					const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+					console.warn(`[LLM Retry] Network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${error}`);
+					lastError = error as Error;
+					await sleep(delay);
+					continue;
+				}
+				throw error;
 			}
-			throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
 		}
 
-		const data = await response.json();
-		const choice = data.choices[0];
-		const msg = choice.message;
-
-		const toolCalls = msg.tool_calls?.map((tc: OpenAIChatMessage['tool_calls'] extends (infer T)[] | undefined ? T : never) => ({
-			id: tc.id,
-			name: tc.function.name,
-			arguments: JSON.parse(tc.function.arguments),
-		}));
-
-		return createMessage(
-			MessageRole.Assistant,
-			msg.content || '',
-			{ toolCalls, reasoningContent: msg.reasoning_content },
-		);
+		throw lastError || new Error('Max retries exceeded');
 	}
 
 	async *stream(
@@ -111,37 +153,72 @@ export class OpenAIProvider implements ILLMProvider {
 			body.tools = tools;
 		}
 
-		let response = await fetch(`${this._apiBase}/chat/completions`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${this._apiKey}`,
-			},
-			body: JSON.stringify(body),
-		});
+		let response: Response | undefined;
+		let lastError: Error | undefined;
 
-		if (!response.ok && response.status === 400) {
-			const errorText = await response.text();
-			if (this._isTemperatureError(errorText) && !this._skipTemperature) {
-				this._skipTemperature = true;
-				const retryBody = { ...body, ...this._temperatureParam(temperature) };
-				delete retryBody.temperature;
+		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+			try {
 				response = await fetch(`${this._apiBase}/chat/completions`, {
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/json',
 						'Authorization': `Bearer ${this._apiKey}`,
 					},
-					body: JSON.stringify(retryBody),
+					body: JSON.stringify(body),
 				});
-			} else {
-				throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+
+				if (!response.ok) {
+					const errorText = await response.text();
+					
+					// Special handling for temperature validation error
+					if (response.status === 400 && this._isTemperatureError(errorText) && !this._skipTemperature) {
+						this._skipTemperature = true;
+						const retryBody = { ...body, ...this._temperatureParam(temperature) };
+						delete retryBody.temperature;
+						response = await fetch(`${this._apiBase}/chat/completions`, {
+							method: 'POST',
+							headers: {
+								'Content-Type': 'application/json',
+								'Authorization': `Bearer ${this._apiKey}`,
+							},
+							body: JSON.stringify(retryBody),
+						});
+						
+						if (!response.ok) {
+							const retryErrorText = await response.text();
+							throw new Error(`OpenAI API error ${response.status}: ${retryErrorText}`);
+						}
+						break;
+					}
+					
+					// Retry on transient errors (429, 5xx)
+					if (shouldRetry(response.status) && attempt < MAX_RETRIES) {
+						const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+						console.warn(`[LLM Retry] API error ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+						lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+						await sleep(delay);
+						continue;
+					}
+					
+					throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+				}
+				
+				break; // Success, exit retry loop
+			} catch (error) {
+				// Network errors or other exceptions
+				if (attempt < MAX_RETRIES) {
+					const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+					console.warn(`[LLM Retry] Network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${error}`);
+					lastError = error as Error;
+					await sleep(delay);
+					continue;
+				}
+				throw error;
 			}
 		}
 
-		if (!response.ok) {
-			const errorText = await response.text();
-			throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+		if (!response || !response.ok) {
+			throw lastError || new Error('Max retries exceeded');
 		}
 
 		const reader = response.body!.getReader();
