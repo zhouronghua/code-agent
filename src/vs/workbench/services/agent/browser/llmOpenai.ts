@@ -198,43 +198,9 @@ export class OpenAIProvider implements ILLMProvider {
 	}
 
 	private _convertMessages(messages: IAgentMessage[]): OpenAIChatMessage[] {
-		// Check if any message has reasoning_content (thinking mode)
-		const hasThinking = messages.some(m =>
-			m.role === MessageRole.Assistant && m.reasoningContent
-		);
-
-		// Build tool_call tracking: map assistant messages to their expected tool responses
-		const toolCallIds = new Set<string>();
-		if (hasThinking) {
-			for (const msg of messages) {
-				if (msg.role === MessageRole.Assistant && msg.toolCalls) {
-					for (const tc of msg.toolCalls) {
-						toolCallIds.add(tc.id);
-					}
-				}
-			}
-		}
-
-		const filtered = messages.filter(msg => {
-			// In thinking mode, preserve message sequence integrity:
-			// - Keep assistant messages with tool_calls or reasoning_content
-			// - Keep all tool messages (to maintain tool_call/tool pairs)
-			// - Filter only "pure text" assistant messages without reasoning_content
-			if (hasThinking) {
-				if (msg.role === MessageRole.Assistant) {
-					if (!msg.reasoningContent && (!msg.toolCalls || msg.toolCalls.length === 0)) {
-						return false;
-					}
-				}
-				// Always keep tool messages to preserve tool_call responses
-				if (msg.role === MessageRole.Tool) {
-					return true;
-				}
-			}
-			return true;
-		});
-
-		return filtered.map(msg => {
+		// In thinking mode, don't filter anything to preserve message sequence integrity
+		// The API will handle any reasoning_content requirements
+		return messages.map(msg => {
 				const converted: OpenAIChatMessage = {
 					role: msg.role,
 					content: msg.content || null,

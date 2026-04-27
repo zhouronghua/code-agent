@@ -94,7 +94,9 @@ export class AgentContext {
 
 			this._messages.length = 0;
 			this._messages.push(
-				createMessage(MessageRole.Assistant, `[Previous context summary]\n${summaryResponse.content}`),
+				createMessage(MessageRole.Assistant, `[Previous context summary]\n${summaryResponse.content}`, {
+					reasoningContent: summaryResponse.reasoningContent,
+				}),
 				...recentMessages,
 			);
 
