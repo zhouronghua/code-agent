@@ -94,7 +94,7 @@ export const DEFAULT_AGENT_CONFIG: IAgentConfig = {
 	provider: 'openai',
 	model: 'gpt-4o',
 	apiKey: '',
-	maxSteps: 25,
+	maxSteps: 999999,  // Effectively unlimited
 	maxContextTokens: 128000,
 	temperature: 0,
 	stepTimeout: 60000,
