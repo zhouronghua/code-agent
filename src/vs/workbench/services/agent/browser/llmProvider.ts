@@ -20,6 +20,8 @@ export interface ILLMProvider {
 	): AsyncIterableIterator<string>;
 
 	countTokens(text: string): number;
+
+	supportsStreaming?(): boolean;
 }
 
 export class LLMProviderFactory {

@@ -103,6 +103,7 @@ export class OpenAIProvider implements ILLMProvider {
 						continue;
 					}
 					
+					// Non-retryable error - throw immediately without retry
 					throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
 				}
 
@@ -122,7 +123,13 @@ export class OpenAIProvider implements ILLMProvider {
 					{ toolCalls, reasoningContent: msg.reasoning_content },
 				);
 			} catch (error) {
-				// Network errors or other exceptions
+				const err = error as Error;
+				// Only retry on network errors (fetch failures), not API errors
+				if (err.message?.includes('OpenAI API error')) {
+					throw error; // Re-throw API errors immediately
+				}
+				
+				// Network/fetch errors - retry
 				if (attempt < MAX_RETRIES) {
 					const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
 					console.warn(`[LLM Retry] Network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${error}`);
@@ -205,7 +212,13 @@ export class OpenAIProvider implements ILLMProvider {
 				
 				break; // Success, exit retry loop
 			} catch (error) {
-				// Network errors or other exceptions
+				const err = error as Error;
+				// Only retry on network errors (fetch failures), not API errors
+				if (err.message?.includes('OpenAI API error')) {
+					throw error; // Re-throw API errors immediately
+				}
+				
+				// Network/fetch errors - retry
 				if (attempt < MAX_RETRIES) {
 					const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
 					console.warn(`[LLM Retry] Network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${error}`);
@@ -272,6 +285,12 @@ export class OpenAIProvider implements ILLMProvider {
 			lower.includes('only 1 is allowed') ||
 			lower.includes('not supported')
 		);
+	}
+
+	supportsStreaming(): boolean {
+		// DeepSeek reasoner models use reasoning_content which is incompatible with streaming
+		const modelLower = this._model.toLowerCase();
+		return !modelLower.includes('reasoner') && !modelLower.includes('deepseek-v4');
 	}
 
 	private _convertMessages(messages: IAgentMessage[]): OpenAIChatMessage[] {

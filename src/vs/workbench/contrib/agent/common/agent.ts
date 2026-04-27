@@ -188,10 +188,11 @@ export class AgentLoop {
 
 			// Disable streaming in thinking mode to preserve reasoning_content
 			const hasThinking = messages.some(m => m.role === MessageRole.Assistant && m.reasoningContent);
+			const providerSupportsStreaming = this._llmProvider.supportsStreaming?.() ?? true;
 
 			let response: IAgentMessage;
 
-			if (this._useStreaming && (!tools || tools.length === 0) && !hasThinking) {
+			if (this._useStreaming && (!tools || tools.length === 0) && !hasThinking && providerSupportsStreaming) {
 				const chunks: string[] = [];
 				const stream = this._llmProvider.stream(
 					messages,
