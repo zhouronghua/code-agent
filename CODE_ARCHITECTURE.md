@@ -429,8 +429,8 @@ profiles:
     api_base: https://api.openai.com/v1  # API 地址（可选）
 
 agent:                        # Agent 参数
-  max_steps: 25
-  max_context_tokens: 128000
+  max_steps: 999999
+  max_context_tokens: 200000
   temperature: 0
   step_timeout: 60000
   task_timeout: 600000
