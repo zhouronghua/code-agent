@@ -97,8 +97,8 @@ export const DEFAULT_AGENT_CONFIG: IAgentConfig = {
 	maxSteps: 999999,  // Effectively unlimited
 	maxContextTokens: 200000,
 	temperature: 0,
-	stepTimeout: 60000,
-	taskTimeout: 600000,
+	stepTimeout: 300000,  // 5 minutes - allow tools with custom timeouts to complete
+	taskTimeout: 3600000,  // 1 hour
 };
 
 export function createMessage(

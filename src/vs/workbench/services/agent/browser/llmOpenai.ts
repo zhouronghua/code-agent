@@ -198,17 +198,22 @@ export class OpenAIProvider implements ILLMProvider {
 	}
 
 	private _convertMessages(messages: IAgentMessage[]): OpenAIChatMessage[] {
+		// Check if any message has reasoning_content (thinking mode)
 		const hasThinking = messages.some(m =>
 			m.role === MessageRole.Assistant && m.reasoningContent
 		);
 
 		return messages
 			.filter(msg => {
-				// In thinking mode, drop locally-injected assistant messages
-				// that lack reasoning_content to avoid API rejection
-				if (hasThinking && msg.role === MessageRole.Assistant
-					&& !msg.reasoningContent && !msg.toolCalls?.length) {
-					return false;
+				// In thinking mode, filter out assistant messages without reasoning_content
+				// Keep messages with tool_calls (function calling responses are exempt)
+				if (hasThinking && msg.role === MessageRole.Assistant) {
+					if (!msg.reasoningContent) {
+						// Allow if it has tool calls (function calling response)
+						if (!msg.toolCalls || msg.toolCalls.length === 0) {
+							return false;
+						}
+					}
 				}
 				return true;
 			})

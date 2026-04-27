@@ -265,9 +265,11 @@ export class AgentLoop {
 		}
 
 		try {
+			// If tool specifies its own timeout, respect it; otherwise use stepTimeout
+			const effectiveTimeout = (args.timeout as number) || this._config.stepTimeout;
 			const result = await Promise.race([
 				tool.execute({ ...args, _toolCallId: toolCallId }),
-				this._timeout(this._config.stepTimeout, toolCallId),
+				this._timeout(effectiveTimeout, toolCallId),
 			]);
 			return result;
 		} catch (err) {
