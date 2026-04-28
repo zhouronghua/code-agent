@@ -223,7 +223,7 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
 	console.log(`\n${C.bold}${C.magenta}=== Parallel Agent Mode ===${C.reset}`);
 	console.log(`${C.dim}Running ${tasks.length} tasks concurrently (max 4)${C.reset}\n`);
 
-	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, checkpointManager, 4);
+	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4);
 
 	manager.onDidTaskStart(task => {
 		log(C.cyan, `TASK ${task.id.slice(-6)}`, `Started: ${task.description.substring(0, 80)}`);
@@ -330,7 +330,7 @@ async function main() {
 	const modeManager = new AgentModeManager();
 	modeManager.switchMode(opts.mode);
 
-	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager);
+	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd());
 	if (opts.streaming) {
 		agentLoop.setStreaming(true);
 	}

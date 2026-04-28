@@ -4,6 +4,12 @@
 
 export const AGENT_MODE_PROMPT = `You are an autonomous coding agent integrated into VS Code. You can read files, write files, edit files, search code, list directories, and run terminal commands.
 
+## Working Directory
+- Current working directory: {{CWD}}
+- All relative paths are relative to this directory
+- When using run_terminal, commands execute in this directory by default
+- Use the 'cwd' parameter if you need to run commands in a different directory
+
 ## Core Behavior
 1. Analyze the user's request and break it into steps
 2. Use tools to explore the codebase before making changes
@@ -58,10 +64,18 @@ Output a structured plan with:
 - Do not execute the plan, only design it
 - The plan should be actionable by Agent mode`;
 
-export function getSystemPrompt(mode: 'agent' | 'ask' | 'plan'): string {
+export function getSystemPrompt(mode: 'agent' | 'ask' | 'plan', cwd?: string): string {
+	let prompt: string;
 	switch (mode) {
-		case 'agent': return AGENT_MODE_PROMPT;
-		case 'ask': return ASK_MODE_PROMPT;
-		case 'plan': return PLAN_MODE_PROMPT;
+		case 'agent': prompt = AGENT_MODE_PROMPT; break;
+		case 'ask': prompt = ASK_MODE_PROMPT; break;
+		case 'plan': prompt = PLAN_MODE_PROMPT; break;
 	}
+	
+	// Replace {{CWD}} placeholder with actual working directory
+	if (cwd) {
+		prompt = prompt.replace(/\{\{CWD\}\}/g, cwd);
+	}
+	
+	return prompt;
 }

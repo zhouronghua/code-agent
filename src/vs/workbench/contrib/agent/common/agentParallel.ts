@@ -47,6 +47,7 @@ export class ParallelAgentManager extends Disposable {
 		private readonly _config: IAgentConfig,
 		private readonly _llmProvider: ILLMProvider,
 		private readonly _toolRegistry: ToolRegistry,
+		private readonly _workingDirectory: string,
 		private readonly _checkpointManager: AgentCheckpointManager,
 		maxConcurrent = 4,
 	) {
@@ -108,6 +109,7 @@ export class ParallelAgentManager extends Disposable {
 			this._toolRegistry,
 			modeManager,
 			this._checkpointManager,
+			this._workingDirectory,
 		);
 
 		const messages: IAgentMessage[] = [];

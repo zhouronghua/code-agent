@@ -50,6 +50,7 @@ export class AgentLoop {
 		private readonly _toolRegistry: ToolRegistry,
 		private readonly _modeManager: AgentModeManager,
 		private readonly _checkpointManager: AgentCheckpointManager,
+		private readonly _workingDirectory: string = process.cwd(),
 	) {
 		this._context = new AgentContext(_config.maxContextTokens, _llmProvider);
 		this._planner = new AgentPlanner(_llmProvider);
@@ -92,7 +93,7 @@ export class AgentLoop {
 
 		try {
 			const mode = this._modeManager.currentMode;
-			this._context.setSystemPrompt(getSystemPrompt(mode) + this._extraSystemPrompt);
+			this._context.setSystemPrompt(getSystemPrompt(mode, this._workingDirectory) + this._extraSystemPrompt);
 
 			const userMsg = createMessage(MessageRole.User, userMessage);
 			this._context.addMessage(userMsg);
@@ -134,7 +135,7 @@ export class AgentLoop {
 			}
 
 			this._modeManager.switchMode(AgentMode.Agent);
-			this._context.setSystemPrompt(getSystemPrompt(AgentMode.Agent) + this._extraSystemPrompt);
+			this._context.setSystemPrompt(getSystemPrompt(AgentMode.Agent, this._workingDirectory) + this._extraSystemPrompt);
 
 			const userMsg = createMessage(MessageRole.User,
 				`Execute this plan step by step:\n${existingPlan.steps.map((s: any, i: number) => `${i + 1}. ${s.description}`).join('\n')}`

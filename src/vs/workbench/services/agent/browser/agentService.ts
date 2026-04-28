@@ -112,6 +112,7 @@ export class AgentService extends Disposable implements IAgentService {
 			this._toolRegistry,
 			this._modeManager,
 			this._checkpointManager,
+			this._getWorkspaceRoot().fsPath,
 		);
 
 		this._register(this._agentLoop.onDidReceiveMessage(msg => {
