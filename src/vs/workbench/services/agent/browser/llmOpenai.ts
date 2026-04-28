@@ -294,8 +294,11 @@ export class OpenAIProvider implements ILLMProvider {
 	}
 
 	private _convertMessages(messages: IAgentMessage[]): OpenAIChatMessage[] {
-		// In thinking mode, don't filter anything to preserve message sequence integrity
-		// The API will handle any reasoning_content requirements
+		// Check if any message uses reasoning_content (thinking mode)
+		const hasThinking = messages.some(m => 
+			m.role === MessageRole.Assistant && m.reasoningContent
+		);
+
 		return messages.map(msg => {
 				const converted: OpenAIChatMessage = {
 					role: msg.role,
@@ -317,8 +320,13 @@ export class OpenAIProvider implements ILLMProvider {
 					converted.tool_call_id = msg.toolCallId;
 				}
 
-				if (msg.reasoningContent) {
-					converted.reasoning_content = msg.reasoningContent;
+				// In thinking mode, ALL assistant messages must have reasoning_content
+				if (msg.role === MessageRole.Assistant) {
+					if (hasThinking) {
+						converted.reasoning_content = msg.reasoningContent || '';
+					} else if (msg.reasoningContent) {
+						converted.reasoning_content = msg.reasoningContent;
+					}
 				}
 
 				return converted;
