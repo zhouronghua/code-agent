@@ -299,7 +299,15 @@ export class OpenAIProvider implements ILLMProvider {
 			m.role === MessageRole.Assistant && m.reasoningContent
 		);
 
-		return messages.map(msg => {
+		// In thinking mode, filter out assistant messages without reasoning_content
+		// to maintain consistency required by the API
+		const filtered = hasThinking 
+			? messages.filter(m => 
+				m.role !== MessageRole.Assistant || m.reasoningContent || m.toolCalls?.length
+			)
+			: messages;
+
+		return filtered.map(msg => {
 				const converted: OpenAIChatMessage = {
 					role: msg.role,
 					content: msg.content || null,
@@ -320,13 +328,9 @@ export class OpenAIProvider implements ILLMProvider {
 					converted.tool_call_id = msg.toolCallId;
 				}
 
-				// In thinking mode, ALL assistant messages must have reasoning_content
-				if (msg.role === MessageRole.Assistant) {
-					if (hasThinking) {
-						converted.reasoning_content = msg.reasoningContent || '';
-					} else if (msg.reasoningContent) {
-						converted.reasoning_content = msg.reasoningContent;
-					}
+				// Add reasoning_content if present
+				if (msg.reasoningContent) {
+					converted.reasoning_content = msg.reasoningContent;
 				}
 
 				return converted;
