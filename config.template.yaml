@@ -30,19 +30,37 @@ profiles:
     api_base: http://localhost:11434
 
   # Example: custom OpenAI-compatible provider
-  # my-custom:
-  #   provider: openai
-  #   model: deepseek-v4-flash
-  #   api_key: "your-key"
-  #   api_base: https://your-api-endpoint.example.com/v1
+  deepseek-v4-flash:
+    provider: openai
+    model: deepseek-v4-flash
+    api_key: "your-key"
+    api_base: https://api.enflame.cn/v1
+
+  deepseek-v4-pro:
+    provider: openai
+    model: deepseek-v4-pro
+    api_key: "your-key"
+    api_base: https://api.enflame.cn/v1
+    # Features:
+    #   - reasoning_content (thinking mode) auto-detected
+    #   - parallel_tool_calls enabled by default
+    #   - max_tokens: 8192 auto-set for reasoning models
+    #   - Streaming works but disabled in thinking mode
+
+  deepseek-v4-reasoner:
+    provider: openai
+    model: deepseek-v4-reasoner
+    api_key: "your-key"
+    api_base: https://api.enflame.cn/v1
+    # Reasoning model: uses reasoning_content for chain-of-thought
 
 # Agent settings
 agent:
   max_steps: 999999
   max_context_tokens: 200000
   temperature: 0
-  step_timeout: 60000
-  task_timeout: 600000
+  step_timeout: 120000    # 2 min (reasoning models need more time for tool execution)
+  task_timeout: 600000     # 10 min
 
 # Skills directories (Cursor-compatible SKILL.md files)
 # The agent scans these directories for skill definitions.
@@ -61,6 +79,7 @@ rules:
 # MCP (Model Context Protocol) servers
 # Each server provides additional tools the agent can invoke.
 # mcp_servers:
+#   # Standard stdio-based MCP server
 #   filesystem:
 #     command: npx
 #     args:
@@ -72,5 +91,12 @@ rules:
 #     args:
 #       - -y
 #       - "@modelcontextprotocol/server-github"
+#   # HTTP-based MCP server with authentication
+#   dolphin:
+#     type: streamableHttp
+#     url: http://10.9.92.215:9666/mcp
+#     headers:
+#       Authorization: JWT your-jwt-token-here
+#   # Simple HTTP MCP server
 #   custom-api:
 #     url: http://localhost:3000/mcp

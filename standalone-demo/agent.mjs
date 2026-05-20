@@ -24,7 +24,7 @@ const CONFIG = {
 	model: process.env.LLM_MODEL || 'gpt-4o',
 	apiKey: process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '',
 	apiBase: process.env.LLM_API_BASE || '',
-	maxSteps: 20,
+	maxSteps: 999999,  // Effectively unlimited
 	maxContextTokens: 128000,
 	temperature: 0,
 	useMock: process.env.MOCK_LLM === '1',
@@ -190,6 +190,32 @@ const TOOLS = {
 		},
 	},
 
+	search_files: {
+		description: 'Find files matching a glob pattern',
+		parameters: {
+			type: 'object',
+			properties: {
+				pattern: { type: 'string', description: 'Glob pattern (e.g. **/*.ts)' },
+				path: { type: 'string', description: 'Search directory' },
+				max_results: { type: 'number', description: 'Max results (default: 100)' },
+			},
+			required: ['pattern'],
+		},
+		execute(args) {
+			const searchPath = args.path || '.';
+			const maxResults = args.max_results || 100;
+			try {
+				const cmd = `find "${searchPath}" -name "${args.pattern}" -type f 2>/dev/null | head -${maxResults}`;
+				const output = execSync(cmd, { encoding: 'utf-8', timeout: 10000 }).trim();
+				const files = output.split('\n').filter(Boolean);
+				if (files.length === 0) return { success: true, output: 'No files found' };
+				return { success: true, output: `Found ${files.length} file(s):\n${files.join('\n')}` };
+			} catch {
+				return { success: true, output: 'No files found' };
+			}
+		},
+	},
+
 	run_terminal: {
 		description: 'Execute a shell command',
 		parameters: {
@@ -223,6 +249,11 @@ const TOOLS = {
 // ============================================================================
 
 async function callOpenAI(messages, tools) {
+	const isReasoning = (model) => {
+		const lower = model.toLowerCase();
+		return lower.includes('reasoner') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
+	};
+
 	const body = {
 		model: CONFIG.model,
 		messages: messages.map(m => {
@@ -234,21 +265,54 @@ async function callOpenAI(messages, tools) {
 		}),
 		temperature: CONFIG.temperature,
 	};
+
+	// Reasoning models need explicit max_tokens and may not support temperature
+	if (isReasoning(CONFIG.model)) {
+		body.max_tokens = 8192;
+	}
+
 	if (tools.length > 0) {
 		body.tools = tools.map(t => ({ type: 'function', function: t }));
+		body.parallel_tool_calls = true;
 	}
 
 	const base = CONFIG.apiBase || 'https://api.openai.com/v1';
-	const resp = await fetch(`${base}/chat/completions`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CONFIG.apiKey}` },
-		body: JSON.stringify(body),
-	});
-	if (!resp.ok) throw new Error(`OpenAI API ${resp.status}: ${await resp.text()}`);
-	const data = await resp.json();
-	const msg = data.choices[0].message;
-	if (msg.reasoning_content) msg.reasoning_content = msg.reasoning_content;
-	return msg;
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 300000); // 5 min API timeout
+
+	try {
+		const resp = await fetch(`${base}/chat/completions`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CONFIG.apiKey}` },
+			body: JSON.stringify(body),
+			signal: controller.signal,
+		});
+		clearTimeout(timeout);
+		if (!resp.ok) {
+			const errorText = await resp.text();
+			// Handle temperature errors gracefully
+			if (resp.status === 400 && errorText.toLowerCase().includes('temperature')) {
+				delete body.temperature;
+				const retryResp = await fetch(`${base}/chat/completions`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CONFIG.apiKey}` },
+					body: JSON.stringify(body),
+				});
+				if (!retryResp.ok) throw new Error(`OpenAI API ${retryResp.status}: ${await retryResp.text()}`);
+				const data = await retryResp.json();
+				return data.choices[0].message;
+			}
+			throw new Error(`OpenAI API ${resp.status}: ${errorText}`);
+		}
+		const data = await resp.json();
+		const msg = data.choices[0].message;
+		if (msg.reasoning_content) msg.reasoning_content = msg.reasoning_content;
+		return msg;
+	} catch (err) {
+		clearTimeout(timeout);
+		if (err.name === 'AbortError') throw new Error('OpenAI API request timed out');
+		throw err;
+	}
 }
 
 async function callAnthropic(messages, tools) {
@@ -415,11 +479,17 @@ async function agentLoop(userMessage) {
 
 			const result = tool.execute(toolArgs);
 
+			// Truncate large tool results to prevent context overflow
+			const MAX_RESULT_CHARS = 8000;
+			const truncatedOutput = result.success && result.output.length > MAX_RESULT_CHARS
+				? result.output.substring(0, MAX_RESULT_CHARS) + `\n... (truncated, ${result.output.length} chars total)`
+				: result.output;
+
 			if (result.success) {
-				const truncated = result.output.length > 500
-					? result.output.substring(0, 500) + `\n... (${result.output.length} chars total)`
-					: result.output;
-				log(C.yellow, 'RESULT', truncated);
+				const displayTruncated = truncatedOutput.length > 500
+					? truncatedOutput.substring(0, 500) + `\n... (${truncatedOutput.length} chars total)`
+					: truncatedOutput;
+				log(C.yellow, 'RESULT', displayTruncated);
 			} else {
 				log(C.red, 'RESULT', `Error: ${result.error}`);
 			}
@@ -427,7 +497,7 @@ async function agentLoop(userMessage) {
 			messages.push({
 				role: 'tool',
 				tool_call_id: tc.id,
-				content: result.success ? result.output : `Error: ${result.error}`,
+				content: result.success ? truncatedOutput : `Error: ${result.error}`,
 			});
 		}
 		console.log('');
