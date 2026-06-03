@@ -39,6 +39,7 @@ import { RunTerminalTool } from '../../src/vs/workbench/contrib/agent/common/too
 import { loadConfig, loadConfigForProfile, listProfiles, ResolvedConfig } from '../../src/vs/workbench/contrib/agent/common/agentConfig';
 import { SkillsLoader } from '../../src/vs/workbench/contrib/agent/common/agentSkills';
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
+import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common/agentSessions';
 import { NodeFileService } from './nodeFileService';
 import { NodeSearchService } from './nodeSearchService';
 import { NodeTerminalService } from './nodeTerminalService';
@@ -63,6 +64,10 @@ interface CLIOptions {
 	showProfiles: boolean;
 	showSkills: boolean;
 	useSkill?: string;
+	resumeLatest: boolean;
+	listSessions: boolean;
+	sessionId?: string;
+	deleteSessionId?: string;
 }
 
 function parseArgs(): CLIOptions {
@@ -74,6 +79,8 @@ function parseArgs(): CLIOptions {
 		tasks: [],
 		showProfiles: false,
 		showSkills: false,
+		resumeLatest: false,
+		listSessions: false,
 	};
 
 	let i = 0;
@@ -104,6 +111,20 @@ function parseArgs(): CLIOptions {
 			case '--use-skill':
 				i++;
 				opts.useSkill = args[i];
+				break;
+			case '--session':
+				i++;
+				opts.sessionId = args[i];
+				break;
+			case '--resume':
+				opts.resumeLatest = true;
+				break;
+			case '--sessions':
+				opts.listSessions = true;
+				break;
+			case '--delete-session':
+				i++;
+				opts.deleteSessionId = args[i];
 				break;
 			case '--help':
 				printHelp();
@@ -143,7 +164,17 @@ Options:
   --profiles                  List available config profiles
   --skills                    List loaded skills
   --use-skill <name>          Activate a specific skill for this session
+  --session <id>              Resume a specific session by ID
+  --resume                    Resume the most recent session
+  --sessions                  List saved sessions
+  --delete-session <id>       Delete a session
   --help                      Show this help
+
+Session Management:
+  Sessions persist your agent conversation context across restarts.
+  - Auto-save: after each run, the session is saved automatically.
+  - REPL commands: /save, /sessions, /resume, /new, /auto-save
+  - Storage: ~/.codeagent/sessions/
 
 Modes:
   agent   Full autonomy: read, write, edit files, run commands
@@ -256,6 +287,7 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
 
 async function main() {
 	const opts = parseArgs();
+	const sessionManager = new AgentSessionManager(process.cwd());
 
 	// Handle info-only commands
 	if (opts.showProfiles) {
@@ -267,6 +299,37 @@ async function main() {
 			for (const p of profiles) {
 				console.log(`  ${C.cyan}${p.name}${C.reset}  ${C.dim}${p.provider}/${p.model}${C.reset}`);
 			}
+		}
+		return;
+	}
+
+	if (opts.listSessions) {
+		const sessions = sessionManager.listSessions();
+		if (sessions.length === 0) {
+			console.log(`${C.dim}No saved sessions.${C.reset}`);
+		} else {
+			console.log(`\n${C.bold}Saved sessions (${sessions.length}):${C.reset}\n`);
+			for (const s of sessions) {
+				const date = new Date(s.updatedAt).toLocaleString();
+				const modeLabel = s.mode === AgentMode.Plan ? 'Plan' : s.mode === AgentMode.Ask ? 'Ask' : 'Agent';
+				console.log(`  ${C.cyan}${s.id}${C.reset}`);
+				console.log(`    ${C.bold}Name:${C.reset} ${s.name || '(unnamed)'}  ${C.bold}Mode:${C.reset} ${modeLabel}  ${C.bold}Msgs:${C.reset} ${s.messageCount}`);
+				console.log(`    ${C.bold}Updated:${C.reset} ${date}`);
+				if (s.summary) {
+					console.log(`    ${C.dim}${s.summary.substring(0, 120)}${C.reset}`);
+				}
+				console.log('');
+			}
+		}
+		return;
+	}
+
+	if (opts.deleteSessionId) {
+		const deleted = sessionManager.deleteSession(opts.deleteSessionId);
+		if (deleted) {
+			console.log(`${C.green}Session "${opts.deleteSessionId}" deleted.${C.reset}`);
+		} else {
+			console.log(`${C.yellow}Session "${opts.deleteSessionId}" not found.${C.reset}`);
 		}
 		return;
 	}
@@ -343,15 +406,79 @@ async function main() {
 
 	attachAgentListeners(agentLoop, opts);
 
+	// ---- Session management ----
+	let currentSessionId: string | undefined;
+	let currentSessionName = '';
+	let autoSaveEnabled = true;
+
+	// Determine if we should restore a session
+	const sessionToResume = opts.sessionId
+		? sessionManager.loadSession(opts.sessionId)
+		: opts.resumeLatest
+			? sessionManager.getLatestSession()
+			: undefined;
+
+	if (sessionToResume) {
+		// Restore session context
+		const restoreMode = sessionToResume.mode;
+		modeManager.switchMode(restoreMode);
+		agentLoop.restoreFromSession(
+			sessionToResume.messages,
+			sessionToResume.systemPrompt || '',
+			sessionToResume.extraSystemPrompt || '',
+		);
+		currentSessionId = sessionToResume.id;
+		currentSessionName = sessionToResume.name;
+
+		const date = new Date(sessionToResume.updatedAt).toLocaleString();
+		console.log(`${C.magenta}[SESSION]${C.reset} Resumed session "${currentSessionName || currentSessionId}" (${sessionToResume.messageCount} msgs, last updated ${date})`);
+		console.log(`${C.dim}  Summary: ${sessionToResume.summary || '(no summary)'}${C.reset}\n`);
+	} else if (!opts.sessionId && !opts.resumeLatest && sessionManager.count > 0) {
+		// Show a hint about the latest session
+		const latest = sessionManager.getLatestSession();
+		if (latest) {
+			const date = new Date(latest.updatedAt).toLocaleString();
+			console.log(`${C.dim}Tip: Resume your last session with --resume (${latest.name || latest.id}, ${latest.messageCount} msgs, ${date})${C.reset}\n`);
+		}
+	}
+
+	// Helper to auto-save the current session
+	const autoSaveSession = (name?: string) => {
+		if (!autoSaveEnabled) return;
+		const state = agentLoop.exportSessionState();
+		if (state.messages.length === 0) return;
+
+		const id = currentSessionId || sessionManager.generateId();
+		const sessionName = name || currentSessionName || `Session ${new Date().toLocaleString()}`;
+
+		const saved = sessionManager.saveSession(
+			id,
+			sessionName,
+			modeManager.currentMode,
+			state.messages,
+			state.systemPrompt,
+			state.extraSystemPrompt,
+			agentLoop.planner.currentPlan,
+		);
+		currentSessionId = saved.id;
+		currentSessionName = saved.name;
+	};
+
+	// ---- Single task (non-interactive) ----
 	if (opts.tasks.length > 0) {
 		const task = opts.tasks.join(' ');
 		await agentLoop.run(task);
+
+		// Auto-save after task completion
+		autoSaveSession(task.substring(0, 80));
+		console.log(`${C.dim}[Session saved: ${currentSessionId}]${C.reset}`);
 
 		if (opts.mode === AgentMode.Plan) {
 			const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 			rl.question(`\n${C.bold}Execute this plan? (y/n): ${C.reset}`, async (answer) => {
 				if (answer.trim().toLowerCase() === 'y') {
 					await agentLoop.executePlan();
+					autoSaveSession();
 				}
 				rl.close();
 				agentLoop.dispose();
@@ -362,36 +489,117 @@ async function main() {
 		return;
 	}
 
-	// Interactive REPL
+	// ---- Interactive REPL ----
 	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, exit${C.reset}\n`);
+	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, exit${C.reset}`);
+	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save${C.reset}\n`);
 
+	const modeLabelVar = modeLabel;
 	const prompt = () => {
-		rl.question(`${C.bold}${C.blue}${modeLabel}> ${C.reset}`, async (input) => {
+		rl.question(`${C.bold}${C.blue}${modeLabelVar}> ${C.reset}`, async (input) => {
 			const trimmed = input.trim();
 			if (!trimmed || trimmed === 'exit' || trimmed === 'quit') {
+				// Auto-save on exit
+				autoSaveSession();
+				if (currentSessionId) {
+					console.log(`${C.dim}Session saved: ${currentSessionId}${C.reset}`);
+				}
 				console.log(`${C.dim}Goodbye!${C.reset}`);
 				rl.close();
 				agentLoop.dispose();
 				return;
 			}
 
+			// ---- Session commands ----
+			if (trimmed.startsWith('/save')) {
+				const name = trimmed.slice(5).trim() || currentSessionName || '';
+				autoSaveSession(name);
+				console.log(`${C.green}Session saved: ${currentSessionId}${C.reset}${name ? ` (${name})` : ''}`);
+				prompt(); return;
+			}
+
+			if (trimmed === '/sessions') {
+				const sessions = sessionManager.listSessions();
+				if (sessions.length === 0) {
+					console.log(`${C.dim}No saved sessions.${C.reset}`);
+				} else {
+					console.log(`\n${C.bold}Saved sessions (${sessions.length}):${C.reset}\n`);
+					for (const s of sessions) {
+						const date = new Date(s.updatedAt).toLocaleString();
+						const modeLabel2 = s.mode === AgentMode.Plan ? 'Plan' : s.mode === AgentMode.Ask ? 'Ask' : 'Agent';
+						const isCurrent = s.id === currentSessionId ? ` ${C.green}(current)` : '';
+						console.log(`  ${C.cyan}${s.id}${C.reset}${isCurrent}`);
+						console.log(`    ${C.bold}Name:${C.reset} ${s.name || '(unnamed)'}  ${C.bold}Mode:${C.reset} ${modeLabel2}  ${C.bold}Msgs:${C.reset} ${s.messageCount}`);
+						console.log(`    ${C.bold}Updated:${C.reset} ${date}`);
+						if (s.summary) {
+							console.log(`    ${C.dim}${s.summary.substring(0, 120)}${C.reset}`);
+						}
+						console.log('');
+					}
+				}
+				prompt(); return;
+			}
+
+			if (trimmed.startsWith('/resume')) {
+				const targetId = trimmed.slice(7).trim();
+				const session = targetId
+					? sessionManager.loadSession(targetId)
+					: sessionManager.getLatestSession();
+
+				if (!session) {
+					log(C.yellow, 'SESSION', targetId ? `Session "${targetId}" not found` : 'No sessions to resume');
+					prompt(); return;
+				}
+
+				// Save current session before switching
+				autoSaveSession();
+
+				// Restore the session
+				modeManager.switchMode(session.mode);
+				agentLoop.restoreFromSession(
+					session.messages,
+					session.systemPrompt || '',
+					session.extraSystemPrompt || '',
+				);
+				currentSessionId = session.id;
+				currentSessionName = session.name;
+
+				const date = new Date(session.updatedAt).toLocaleString();
+				console.log(`${C.magenta}[SESSION]${C.reset} Resumed "${session.name || session.id}" (${session.messageCount} msgs, ${date})`);
+				prompt(); return;
+			}
+
+			if (trimmed === '/new') {
+				// Save current and start fresh
+				autoSaveSession();
+				agentLoop.restoreFromSession([], '', extraPrompt || '');
+				currentSessionId = undefined;
+				currentSessionName = '';
+				console.log(`${C.magenta}[SESSION]${C.reset} Started new session`);
+				prompt(); return;
+			}
+
+			if (trimmed === '/auto-save') {
+				autoSaveEnabled = !autoSaveEnabled;
+				console.log(`${C.magenta}[SESSION]${C.reset} Auto-save ${autoSaveEnabled ? 'enabled' : 'disabled'}`);
+				prompt(); return;
+			}
+
+			// ---- Mode/profile commands ----
 			if (trimmed.startsWith('/mode ')) {
 				const newMode = trimmed.slice(6).trim();
 				if (newMode === 'plan') modeManager.switchMode(AgentMode.Plan);
 				else if (newMode === 'ask') modeManager.switchMode(AgentMode.Ask);
 				else modeManager.switchMode(AgentMode.Agent);
 				log(C.magenta, 'MODE', `Switched to ${newMode}`);
-				prompt();
-				return;
+				prompt(); return;
 			}
 
 			if (trimmed === '/stream') {
 				agentLoop.setStreaming(!opts.streaming);
 				opts.streaming = !opts.streaming;
 				log(C.magenta, 'STREAM', `Streaming ${opts.streaming ? 'enabled' : 'disabled'}`);
-				prompt();
-				return;
+				prompt(); return;
 			}
 
 			if (trimmed === '/profiles') {
@@ -400,8 +608,7 @@ async function main() {
 					const active = p.name === resolved.profileName ? ` ${C.green}(active)` : '';
 					console.log(`  ${C.cyan}${p.name}${C.reset}  ${C.dim}${p.provider}/${p.model}${active}${C.reset}`);
 				}
-				prompt();
-				return;
+				prompt(); return;
 			}
 
 			if (trimmed.startsWith('/profile ')) {
@@ -410,8 +617,7 @@ async function main() {
 					const newResolved = loadConfigForProfile(newProfileName);
 					if (!newResolved.agentConfig.apiKey) {
 						log(C.red, 'ERROR', `Profile "${newProfileName}" has no API key configured`);
-						prompt();
-						return;
+						prompt(); return;
 					}
 					const newProvider = LLMProviderFactory.create(newResolved.agentConfig);
 					agentLoop.swapProvider(newResolved.agentConfig, newProvider);
@@ -421,16 +627,14 @@ async function main() {
 				} catch (err: any) {
 					log(C.red, 'ERROR', `Failed to switch profile: ${err.message}`);
 				}
-				prompt();
-				return;
+				prompt(); return;
 			}
 
 			if (trimmed === '/skills') {
 				for (const s of skillsLoader.skills) {
 					console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
 				}
-				prompt();
-				return;
+				prompt(); return;
 			}
 
 			if (trimmed.startsWith('/skill ')) {
@@ -438,8 +642,7 @@ async function main() {
 				const newExtra = buildSkillsContext(skillsLoader, skillName);
 				agentLoop.setExtraSystemPrompt(newExtra);
 				log(C.magenta, 'SKILL', skillName ? `Activated skill: ${skillName}` : 'Cleared active skill');
-				prompt();
-				return;
+				prompt(); return;
 			}
 
 			if (trimmed.startsWith('/parallel ')) {
@@ -449,12 +652,23 @@ async function main() {
 				} else {
 					log(C.red, 'ERROR', 'Provide at least 2 tasks in quotes: /parallel "task1" "task2"');
 				}
-				prompt();
-				return;
+				prompt(); return;
+			}
+
+			if (trimmed === '/continue' || trimmed === 'continue') {
+				try {
+					await agentLoop.continueSession();
+					autoSaveSession();
+				} catch (err: any) {
+					log(C.red, 'ERROR', err.message);
+				}
+				prompt(); return;
 			}
 
 			try {
 				await agentLoop.run(trimmed);
+				// Auto-save after each run
+				autoSaveSession(trimmed.substring(0, 80));
 			} catch (err: any) {
 				log(C.red, 'ERROR', err.message);
 			}

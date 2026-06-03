@@ -1,5 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Agent Core - The main ReAct loop that orchestrates LLM + Tools
+ *
+ *  Features:
+ *  - Tool result truncation to prevent context overflow
+ *  - API request timeout (separate from tool execution timeout)
+ *  - Reasoning model compatibility (DeepSeek reasoner, OpenAI o-series)
+ *  - Checkpoint before write/edit operations
+ *  - Streaming mode with reasoning model awareness
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, Event } from 'vs/base/common/event';
@@ -7,6 +14,7 @@ import { CancellationToken, CancellationTokenSource } from 'vs/base/common/cance
 import {
 	IAgentMessage,
 	IAgentConfig,
+	IAgentPlan,
 	AgentMode,
 	MessageRole,
 	createMessage,
@@ -22,9 +30,20 @@ import { AgentPlanner } from './agentPlanner';
 import { AgentCheckpointManager } from './agentCheckpoint';
 import { getSystemPrompt } from './agentPrompts';
 
+// Maximum characters for a single tool result sent back to the LLM.
+// Large outputs (e.g. read_file of a big file, run_terminal of a long build)
+// can easily overflow the context window. We truncate and notify the LLM.
+const MAX_TOOL_RESULT_CHARS = 8000;
+
+// Maximum consecutive steps that produce only tool calls with no text content.
+// If the agent calls tools repeatedly without any reasoning text for this many
+// steps, it's likely stuck in a loop and we intervene.
+const MAX_CONSECUTIVE_TOOL_ONLY_STEPS = 100;
+
 export class AgentLoop {
 	private _isRunning = false;
 	private _cancellation: CancellationTokenSource | undefined;
+	private _contextHistoryForContinue: IAgentMessage[] = [];
 
 	private readonly _onDidReceiveMessage = new Emitter<IAgentMessage>();
 	readonly onDidReceiveMessage: Event<IAgentMessage> = this._onDidReceiveMessage.event;
@@ -83,6 +102,51 @@ export class AgentLoop {
 		return this._planner;
 	}
 
+	get workingDirectory(): string {
+		return this._workingDirectory;
+	}
+
+	get systemPromptContent(): string {
+		return this._context.systemPromptContent;
+	}
+
+	get extraSystemPrompt(): string {
+		return this._extraSystemPrompt;
+	}
+
+	/**
+	 * Export the current agent state for session persistence.
+	 */
+	exportSessionState(): {
+		messages: IAgentMessage[];
+		systemPrompt: string;
+		extraSystemPrompt: string;
+	} {
+		return {
+			messages: [...this._context.messages],
+			systemPrompt: this._context.systemPromptContent,
+			extraSystemPrompt: this._extraSystemPrompt,
+		};
+	}
+
+	/**
+	 * Restore agent state from a previously saved session.
+	 * This fully resets the current context and replays the saved messages.
+	 */
+	restoreFromSession(messages: IAgentMessage[], systemPrompt: string, extraSystemPrompt?: string): void {
+		this._context.clear();
+		this._extraSystemPrompt = extraSystemPrompt || '';
+		const fullSystemPrompt = systemPrompt || getSystemPrompt(this._modeManager.currentMode, this._workingDirectory);
+		this._context.setSystemPrompt(fullSystemPrompt + this._extraSystemPrompt);
+
+		for (const msg of messages) {
+			this._context.addMessage(msg);
+		}
+
+		// Also populate the continue history
+		this._contextHistoryForContinue = [...messages];
+	}
+
 	async run(userMessage: string): Promise<void> {
 		if (this._isRunning) {
 			throw new Error('Agent is already running');
@@ -121,7 +185,56 @@ export class AgentLoop {
 		this._cancellation?.cancel();
 	}
 
-	async executePlan(plan?: any): Promise<void> {
+	/**
+	 * Continue a previously paused agent session (e.g., after hitting step limit).
+	 * Restores the saved conversation context and resumes the agent loop.
+	 */
+	async continueSession(): Promise<void> {
+		if (this._isRunning) {
+			throw new Error('Agent is already running');
+		}
+
+		if (this._contextHistoryForContinue.length === 0) {
+			throw new Error('No previous session to continue');
+		}
+
+		this._isRunning = true;
+		this._cancellation = new CancellationTokenSource();
+
+		try {
+			// Restore conversation context from the previous session
+			this._context.clear();
+			this._context.setSystemPrompt(
+				getSystemPrompt(this._modeManager.currentMode, this._workingDirectory) + this._extraSystemPrompt
+			);
+
+			// Replay saved messages into the context
+			for (const msg of this._contextHistoryForContinue) {
+				this._context.addMessage(msg);
+			}
+
+			// Add a continuation hint for the LLM
+			const continueMsg = createMessage(MessageRole.User,
+				'Please continue from where you left off. The previous response was cut off due to limits. Continue your work.'
+			);
+			this._context.addMessage(continueMsg);
+			this._onDidReceiveMessage.fire(continueMsg);
+
+			// Resume the agent loop
+			await this._runAgentLoop(this._cancellation.token);
+			this._onDidComplete.fire();
+		} catch (err) {
+			if (!(err instanceof Error && err.message === 'Cancelled')) {
+				this._onDidError.fire(err instanceof Error ? err : new Error(String(err)));
+			}
+		} finally {
+			this._isRunning = false;
+			this._cancellation?.dispose();
+			this._cancellation = undefined;
+		}
+	}
+
+	async executePlan(plan?: IAgentPlan): Promise<void> {
 		if (this._isRunning) {
 			throw new Error('Agent is already running');
 		}
@@ -137,8 +250,12 @@ export class AgentLoop {
 			this._modeManager.switchMode(AgentMode.Agent);
 			this._context.setSystemPrompt(getSystemPrompt(AgentMode.Agent, this._workingDirectory) + this._extraSystemPrompt);
 
+			const planSteps = existingPlan.steps
+				.map((s, i) => `${i + 1}. ${s.description}`)
+				.join('\n');
+
 			const userMsg = createMessage(MessageRole.User,
-				`Execute this plan step by step:\n${existingPlan.steps.map((s: any, i: number) => `${i + 1}. ${s.description}`).join('\n')}`
+				`Execute this plan step by step:\n${planSteps}`
 			);
 			this._context.addMessage(userMsg);
 			this._onDidReceiveMessage.fire(userMsg);
@@ -174,10 +291,23 @@ export class AgentLoop {
 
 	private async _runAgentLoop(token: CancellationToken): Promise<void> {
 		let stepCount = 0;
+		let consecutiveToolOnlySteps = 0;
 
 		while (stepCount < this._config.maxSteps) {
 			if (token.isCancellationRequested) {
 				throw new Error('Cancelled');
+			}
+
+			// Guard: if agent calls tools repeatedly without producing any text content
+			// for too many consecutive steps, it's likely stuck in a loop.
+			if (consecutiveToolOnlySteps >= MAX_CONSECUTIVE_TOOL_ONLY_STEPS) {
+				const warnMsg = createMessage(
+					MessageRole.Assistant,
+					`I've been calling tools without producing any analysis for ${consecutiveToolOnlySteps} consecutive steps. I may be stuck in a loop. Let me stop and summarize what I know so far. Please refine your request or check if I'm repeating myself.`,
+				);
+				this._context.addMessage(warnMsg);
+				this._onDidReceiveMessage.fire(warnMsg);
+				break;
 			}
 
 			await this._context.compactIfNeeded();
@@ -187,13 +317,28 @@ export class AgentLoop {
 				? this._toolRegistry.getReadOnlySchemas()
 				: this._toolRegistry.listSchemas();
 
-			// Disable streaming in thinking mode to preserve reasoning_content
+			// Check if the current context uses reasoning_content (thinking mode).
+			// Reasoning models require special handling:
+			//   - Streaming is incompatible because it doesn't capture reasoning_content
+			//   - Message filtering is needed to maintain API compatibility
 			const hasThinking = messages.some(m => m.role === MessageRole.Assistant && m.reasoningContent);
 			const providerSupportsStreaming = this._llmProvider.supportsStreaming?.() ?? true;
+			const isReasoningModel = this._llmProvider.supportsReasoning?.() ?? false;
 
 			let response: IAgentMessage;
 
-			if (this._useStreaming && (!tools || tools.length === 0) && !hasThinking && providerSupportsStreaming) {
+			// Streaming is only safe when:
+			//   1. Streaming is explicitly enabled by user
+			//   2. No tools are available (streaming with tools doesn't work well)
+			//   3. No reasoning_content in context (would be lost in streaming)
+			//   4. Provider claims to support streaming
+			const canStream = this._useStreaming
+				&& (!tools || tools.length === 0)
+				&& !hasThinking
+				&& providerSupportsStreaming
+				&& !isReasoningModel;
+
+			if (canStream) {
 				const chunks: string[] = [];
 				const stream = this._llmProvider.stream(
 					messages,
@@ -206,6 +351,7 @@ export class AgentLoop {
 				}
 				response = createMessage(MessageRole.Assistant, chunks.join(''));
 			} else {
+				// Use non-streaming complete() which preserves reasoning_content
 				response = await this._llmProvider.complete(
 					messages,
 					tools.length > 0 ? tools : undefined,
@@ -217,7 +363,17 @@ export class AgentLoop {
 			this._onDidReceiveMessage.fire(response);
 
 			if (!response.toolCalls || response.toolCalls.length === 0) {
+				// No tool calls = final answer. Save history and reset counters.
+				this._contextHistoryForContinue = [...this._context.messages];
+				consecutiveToolOnlySteps = 0;
 				break;
+			}
+
+			// Track whether this step produced any text content (analysis/reasoning)
+			if (!response.content || response.content.trim().length === 0) {
+				consecutiveToolOnlySteps++;
+			} else {
+				consecutiveToolOnlySteps = 0;
 			}
 
 			for (const toolCall of response.toolCalls) {
@@ -226,7 +382,11 @@ export class AgentLoop {
 				}
 
 				const result = await this._executeTool(toolCall.id, toolCall.name, toolCall.arguments);
-				const resultMsg = createToolResultMessage(result);
+
+				// Truncate large tool results to prevent context overflow
+				const truncatedResult = this._truncateToolResult(result);
+
+				const resultMsg = createToolResultMessage(truncatedResult);
 				this._context.addMessage(resultMsg);
 				this._onDidReceiveMessage.fire(resultMsg);
 			}
@@ -235,6 +395,9 @@ export class AgentLoop {
 		}
 
 		if (stepCount >= this._config.maxSteps) {
+			// Save context so "continue" can resume without breaking reasoning_content requirements
+			this._contextHistoryForContinue = [...this._context.messages];
+
 			const limitMsg = createMessage(
 				MessageRole.Assistant,
 				`Reached the step limit (${this._config.maxSteps}). Type "continue" to proceed.`,
@@ -243,6 +406,22 @@ export class AgentLoop {
 			// to avoid breaking reasoning_content requirements on re-entry
 			this._onDidReceiveMessage.fire(limitMsg);
 		}
+	}
+
+	/**
+	 * Truncate tool results that exceed MAX_TOOL_RESULT_CHARS.
+	 * Large outputs (build logs, file reads, search results) can overflow
+	 * the LLM context window, especially for reasoning models.
+	 */
+	private _truncateToolResult(result: IToolResult): IToolResult {
+		if (result.output && result.output.length > MAX_TOOL_RESULT_CHARS) {
+			return {
+				...result,
+				output: result.output.substring(0, MAX_TOOL_RESULT_CHARS)
+					+ `\n... (truncated, ${result.output.length} chars total)`,
+			};
+		}
+		return result;
 	}
 
 	private async _executeTool(

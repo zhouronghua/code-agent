@@ -72,10 +72,17 @@ export interface IAgentPlan {
 
 export interface IAgentSession {
 	readonly id: string;
+	readonly name: string;
 	readonly mode: AgentMode;
 	readonly messages: IAgentMessage[];
+	readonly systemPrompt?: string;
+	readonly extraSystemPrompt?: string;
+	readonly workingDirectory?: string;
 	plan?: IAgentPlan;
 	readonly createdAt: number;
+	readonly updatedAt: number;
+	readonly messageCount: number;
+	readonly summary?: string;
 }
 
 export interface IAgentConfig {
