@@ -48,6 +48,17 @@ export class SearchTextTool extends AgentTool {
 		const glob = args.glob as string | undefined;
 		const maxResults = (args.max_results as number) || 50;
 
+		// Validate regex safety before passing to ripgrep
+		try {
+			new RegExp(pattern);
+		} catch (regexErr) {
+			return this.failure(toolCallId,
+				`Invalid regex pattern: "${pattern}". ` +
+				`Error: ${(regexErr as Error).message}. ` +
+				`Tip: escape special chars like \\ . * + ? [ ] ( ) { } ^ $ | with backslash.`
+			);
+		}
+
 		try {
 			const folderUri = searchPath ? URI.file(searchPath) : this._workspaceRoot;
 

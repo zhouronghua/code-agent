@@ -227,6 +227,18 @@ const TOOLS = {
 			required: ['command'],
 		},
 		execute(args) {
+			// Defence-in-depth: detect dangerous commands
+			const dangerousPatterns = [
+				/\brm\s+-rf\s+\//, /\brm\s+-rf\s+\*\b/, /\brm\s+-rf\s+~/,
+				/\bdd\s+if=/, /\bmkfs\./, /\b>\/dev\/sd[a-z]\b/,
+				/\bchmod\s+(-R\s+)?777\s+\//, /\b:\(\)\s*\{/,
+			];
+			for (const pattern of dangerousPatterns) {
+				if (pattern.test(args.command)) {
+					return { success: false, output: '', error: 'Command blocked by safety filter: potentially destructive operation detected.' };
+				}
+			}
+
 			try {
 				const output = execSync(args.command, {
 					encoding: 'utf-8',
@@ -251,7 +263,12 @@ const TOOLS = {
 async function callOpenAI(messages, tools) {
 	const isReasoning = (model) => {
 		const lower = model.toLowerCase();
-		return lower.includes('reasoner') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
+		// DeepSeek reasoner variants
+		if (lower.includes('reasoner') || lower.includes('deepseek-r')) return true;
+		// DeepSeek v4-pro has reasoning capabilities
+		if (lower.includes('deepseek-v4-pro')) return true;
+		// OpenAI o-series reasoning models
+		return lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
 	};
 
 	const body = {

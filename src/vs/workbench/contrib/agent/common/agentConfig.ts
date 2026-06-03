@@ -23,10 +23,12 @@ interface ConfigProfile {
 }
 
 interface McpServerConfig {
-	command: string;
+	command?: string;
 	args?: string[];
 	env?: Record<string, string>;
 	url?: string;
+	type?: string;
+	headers?: Record<string, string>;
 }
 
 interface ConfigFile {
@@ -109,7 +111,7 @@ function parseYaml(text: string): ConfigFile {
 		if (currentSection === 'mcp_servers' && indent === 2 && trimmed.endsWith(':')) {
 			currentProfile = trimmed.slice(0, -1).trim();
 			if (!result.mcp_servers) result.mcp_servers = {};
-			result.mcp_servers[currentProfile] = { command: '' };
+			result.mcp_servers[currentProfile] = {};
 			continue;
 		}
 
@@ -120,9 +122,30 @@ function parseYaml(text: string): ConfigFile {
 			const srv = result.mcp_servers![currentProfile];
 			if (k === 'command') srv.command = val;
 			else if (k === 'url') srv.url = val;
+			else if (k === 'type') srv.type = val;
+			else if (k === 'headers') {
+				if (!srv.headers) srv.headers = {};
+				// headers section starts
+			}
 			else if (k === 'args') {
 				// single-line shorthand: args: --port 8080
 				if (val) srv.args = val.split(/\s+/);
+			}
+			continue;
+		}
+
+		if (currentSection === 'mcp_servers' && indent === 6 && currentProfile) {
+			const srv = result.mcp_servers?.[currentProfile];
+			if (srv && trimmed.trimStart().startsWith('- ')) {
+				// args list item
+				const val = trimmed.trimStart().slice(2).trim();
+				if (!srv.args) srv.args = [];
+				srv.args.push(val);
+			} else if (srv && srv.headers !== undefined) {
+				// headers key-value pair
+				const [key, ...rest] = trimmed.split(':');
+				const val = rest.join(':').trim();
+				srv.headers[key.trim()] = val;
 			}
 			continue;
 		}
@@ -167,10 +190,12 @@ function resolveHomePath(p: string): string {
 
 export interface McpServerEntry {
 	name: string;
-	command: string;
+	command?: string;
 	args?: string[];
 	env?: Record<string, string>;
 	url?: string;
+	type?: string;
+	headers?: Record<string, string>;
 }
 
 export interface ResolvedConfig {

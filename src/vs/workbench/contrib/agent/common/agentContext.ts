@@ -1,5 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Agent Context Manager - Sliding window + summary compression
+ *
+ *  Features:
+ *  - Sliding window with token budget management
+ *  - Automatic compression via LLM summarization when approaching context limit
+ *  - Reasoning_content preservation during compression
+ *  - Orphaned tool message cleanup
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -28,6 +34,10 @@ export class AgentContext {
 
 	get length(): number {
 		return this._messages.length;
+	}
+
+	get systemPromptContent(): string {
+		return this._systemPrompt?.content || '';
 	}
 
 	setSystemPrompt(content: string): void {
@@ -84,40 +94,68 @@ export class AgentContext {
 			recentMessages = recentMessages.slice(1);
 		}
 
+		// Check if we're in reasoning_content mode (any old message has it)
+		const hasThinking = oldMessages.some(m =>
+			m.role === MessageRole.Assistant && m.reasoningContent
+		);
+
 		const summaryContent = oldMessages
-			.map(m => `[${m.role}]: ${m.content.substring(0, 200)}`)
+			.map(m => {
+				let prefix = `[${m.role}]`;
+				if (m.role === MessageRole.Assistant && m.reasoningContent) {
+					prefix += `(reasoning: ${m.reasoningContent.substring(0, 100)})`;
+				}
+				return `${prefix}: ${m.content.substring(0, 200)}`;
+			})
 			.join('\n');
 
 		const summaryPrompt = createMessage(MessageRole.User,
 			`Summarize the following conversation context concisely, preserving key decisions, file changes made, and current task status:\n\n${summaryContent}`
 		);
 
-		try {
-			const summaryResponse = await this._llmProvider.complete([
-				createMessage(MessageRole.System, 'You are a conversation summarizer. Provide a concise summary.'),
-				summaryPrompt,
-			]);
+		// Retry summarization up to 2 times before falling back to truncation
+		const MAX_SUMMARY_RETRIES = 2;
+		for (let attempt = 0; attempt <= MAX_SUMMARY_RETRIES; attempt++) {
+			try {
+				const summaryResponse = await this._llmProvider.complete([
+					createMessage(MessageRole.System,
+						'You are a conversation summarizer. Provide a concise summary preserving all technical details.'),
+					summaryPrompt,
+				], undefined, 0); // no tools, temperature 0 for deterministic summary
 
-			this._messages.length = 0;
-			this._messages.push(
-				createMessage(MessageRole.Assistant, `[Previous context summary]\n${summaryResponse.content}`, {
-					reasoningContent: summaryResponse.reasoningContent,
-				}),
-				...recentMessages,
-			);
+				// Clear and rebuild messages
+				this._messages.length = 0;
 
-			return true;
-		} catch {
-			// if summarization fails, just truncate
-			this._messages.splice(0, splitPoint);
-			
-			// Remove orphaned tool messages at the start after truncation
-			while (this._messages.length > 0 && this._messages[0].role === MessageRole.Tool) {
-				this._messages.shift();
+				// Create the summary message. If the old context had reasoning_content,
+				// preserve that in the summary to maintain API compatibility.
+				const summaryMsg = hasThinking
+					? createMessage(MessageRole.Assistant, `[Previous context summary]\n${summaryResponse.content}`, {
+						reasoningContent: summaryResponse.reasoningContent || '(compressed summary)',
+					})
+					: createMessage(MessageRole.Assistant, `[Previous context summary]\n${summaryResponse.content}`);
+
+				this._messages.push(summaryMsg, ...recentMessages);
+				return true;
+			} catch (err) {
+				if (attempt < MAX_SUMMARY_RETRIES) {
+					console.warn(`[Context Summarization] Attempt ${attempt + 1} failed, retrying: ${(err as Error).message}`);
+					// Brief delay before retry
+					await new Promise(r => setTimeout(r, 1000));
+					continue;
+				}
+				// All retries exhausted: fall back to truncation
+				console.warn(`[Context Summarization] All retries exhausted, falling back to truncation`);
+				this._messages.splice(0, splitPoint);
+
+				// Remove orphaned tool messages at the start after truncation
+				while (this._messages.length > 0 && this._messages[0].role === MessageRole.Tool) {
+					this._messages.shift();
+				}
+				return true;
 			}
-			
-			return true;
 		}
+
+		return true;
 	}
 
 	clear(): void {
@@ -126,7 +164,12 @@ export class AgentContext {
 	}
 
 	private _estimateTokens(message: IAgentMessage): number {
-		return this._llmProvider.countTokens(message.content);
+		let total = this._llmProvider.countTokens(message.content);
+		// Account for reasoning_content tokens if present
+		if (message.reasoningContent) {
+			total += this._llmProvider.countTokens(message.reasoningContent);
+		}
+		return total;
 	}
 
 	private _estimateTotalTokens(): number {

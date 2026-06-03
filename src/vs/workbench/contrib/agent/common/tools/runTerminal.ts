@@ -42,6 +42,29 @@ export class RunTerminalTool extends AgentTool {
 		const cwd = (args.cwd as string) || this._defaultCwd;
 		const timeout = (args.timeout as number) || 30000;
 
+		// Defence-in-depth: detect obviously dangerous commands before execution.
+		// The system prompt instructs the LLM to avoid these, but this acts as a
+		// safety net in case the LLM hallucinates or is jailbroken.
+		const dangerousPatterns = [
+			/\brm\s+-rf\s+\//,           // rm -rf /
+			/\brm\s+-rf\s+\*\b/,          // rm -rf *
+			/\brm\s+-rf\s+~/,             // rm -rf ~
+			/\bdd\s+if=/,                 // dd destructive
+			/\bmkfs\./,                   // format filesystem
+			/\b>\/dev\/sd[a-z]\b/,       // overwrite block device
+			/\bchmod\s+(-R\s+)?777\s+\//, // chmod 777 /
+			/\b:\(\)\s*\{/,               // fork bomb
+			/\bDROP\s+(TABLE|DATABASE)\b/i, // SQL destructive
+		];
+		for (const pattern of dangerousPatterns) {
+			if (pattern.test(command)) {
+				return this.failure(toolCallId,
+					`Command blocked by safety filter: potentially destructive operation detected. ` +
+					`If this is intentional, please run it manually in your terminal.`
+				);
+			}
+		}
+
 		try {
 			const output = await this._executeCommand(command, cwd, timeout);
 			return this.success(toolCallId, output);
@@ -55,13 +78,6 @@ export class RunTerminalTool extends AgentTool {
 			const chunks: string[] = [];
 			let settled = false;
 
-			const timer = setTimeout(() => {
-				if (!settled) {
-					settled = true;
-					resolve(chunks.join('') + '\n[Command timed out after ' + timeout + 'ms]');
-				}
-			}, timeout);
-
 			const instance = this._terminalService.createTerminal({
 				config: {
 					name: 'Agent Command',
@@ -70,6 +86,23 @@ export class RunTerminalTool extends AgentTool {
 				},
 			});
 
+			const cleanup = () => {
+				clearTimeout(timer);
+				dataDisposable.dispose();
+				exitDisposable.dispose();
+				// Kill the underlying process to prevent zombie processes
+				instance.dispose();
+			};
+
+			const timer = setTimeout(() => {
+				if (!settled) {
+					settled = true;
+					cleanup();
+					const output = chunks.join('').trim();
+					resolve(output + '\n[Command timed out after ' + timeout + 'ms]');
+				}
+			}, timeout);
+
 			const dataDisposable = instance.onData(data => {
 				chunks.push(data);
 			});
@@ -77,10 +110,7 @@ export class RunTerminalTool extends AgentTool {
 			const exitDisposable = instance.onExit(exitCode => {
 				if (!settled) {
 					settled = true;
-					clearTimeout(timer);
-					dataDisposable.dispose();
-					exitDisposable.dispose();
-
+					cleanup();
 					const output = chunks.join('').trim();
 					const exitInfo = `\n[Exit code: ${exitCode?.code ?? 'unknown'}]`;
 					resolve(output + exitInfo);

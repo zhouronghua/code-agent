@@ -101,9 +101,12 @@ export class AgentService extends Disposable implements IAgentService {
 
 		this._session = {
 			id: generateId(),
+			name: `Session ${new Date().toLocaleString()}`,
 			mode,
 			messages: [],
 			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			messageCount: 0,
 		};
 
 		this._agentLoop = new AgentLoop(

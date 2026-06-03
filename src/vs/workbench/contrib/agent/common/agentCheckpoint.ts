@@ -19,6 +19,14 @@ export class AgentCheckpointManager {
 
 	constructor(private readonly _fileService: IFileService) { }
 
+	/**
+	 * Create an independent checkpoint manager sharing the same file service.
+	 * Used by parallel agents to avoid race conditions on shared checkpoint state.
+	 */
+	clone(): AgentCheckpointManager {
+		return new AgentCheckpointManager(this._fileService);
+	}
+
 	async captureFile(filePath: string): Promise<string | undefined> {
 		try {
 			const uri = URI.file(filePath);

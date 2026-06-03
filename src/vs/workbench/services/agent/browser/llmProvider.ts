@@ -22,6 +22,9 @@ export interface ILLMProvider {
 	countTokens(text: string): number;
 
 	supportsStreaming?(): boolean;
+
+	/** Does this model use reasoning_content (thinking/chain-of-thought)? */
+	supportsReasoning?(): boolean;
 }
 
 export class LLMProviderFactory {

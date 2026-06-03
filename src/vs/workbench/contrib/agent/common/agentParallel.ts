@@ -103,12 +103,15 @@ export class ParallelAgentManager extends Disposable {
 		this._onDidTaskStart.fire(task);
 
 		const modeManager = new AgentModeManager();
+		// Each parallel agent gets its own isolated checkpoint manager to avoid
+		// race conditions when multiple agents snapshot files concurrently.
+		const checkpointManager = this._checkpointManager.clone();
 		const agentLoop = new AgentLoop(
 			this._config,
 			this._llmProvider,
 			this._toolRegistry,
 			modeManager,
-			this._checkpointManager,
+			checkpointManager,
 			this._workingDirectory,
 		);
 
