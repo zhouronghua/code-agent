@@ -40,6 +40,21 @@ const MAX_TOOL_RESULT_CHARS = 8000;
 // steps, it's likely stuck in a loop and we intervene.
 const MAX_CONSECUTIVE_TOOL_ONLY_STEPS = 100;
 
+// Maximum self-verification rounds before accepting the agent's conclusion.
+// When the agent produces a response with no tool calls, we inject a verification
+// prompt to ensure it has fully verified its work. After this many rounds, we
+// accept the conclusion to prevent infinite verify-loops.
+const MAX_VERIFICATION_ROUNDS = 2;
+
+// Keywords that indicate a complex task — triggers deep thinking mode with
+// extra system prompt instructions.
+const COMPLEX_TASK_KEYWORDS = [
+	'refactor', '重构', 'migrate', '迁移', 'implement', '实现',
+	'redesign', '重新设计', 'complex', '复杂', 'multiple files',
+	'architecture', '架构', 'performance', '性能', 'debug', '调试',
+	'optimize', '优化', 'redesign', 'overhaul', 'rewrite', '重写',
+];
+
 export class AgentLoop {
 	private _isRunning = false;
 	private _cancellation: CancellationTokenSource | undefined;
@@ -162,6 +177,21 @@ export class AgentLoop {
 			const userMsg = createMessage(MessageRole.User, userMessage);
 			this._context.addMessage(userMsg);
 			this._onDidReceiveMessage.fire(userMsg);
+
+			// Complexity detection: inject deep thinking instructions for complex tasks
+			if (mode === 'agent' && this._isComplexTask(userMessage)) {
+				const deepThinkMsg = createMessage(MessageRole.User,
+					`[System note: Complex task detected — Deep Thinking Mode activated]\n` +
+					`This appears to be a non-trivial task. Before making any changes:\n` +
+					`1. Explore the relevant code thoroughly (3+ read_file/search_text calls)\n` +
+					`2. Build a detailed mental model of the affected components\n` +
+					`3. Consider edge cases, side effects, and interactions between files\n` +
+					`4. Plan your changes step-by-step, verifying each independently\n` +
+					`5. Do NOT conclude until you have run all relevant tests successfully`
+				);
+				this._context.addMessage(deepThinkMsg);
+				// Don't fire — internal instruction, not user-visible
+			}
 
 			if (this._modeManager.shouldPlanFirst) {
 				await this._runPlanMode(userMessage);
@@ -292,6 +322,7 @@ export class AgentLoop {
 	private async _runAgentLoop(token: CancellationToken): Promise<void> {
 		let stepCount = 0;
 		let consecutiveToolOnlySteps = 0;
+		let verificationRounds = 0;
 
 		while (stepCount < this._config.maxSteps) {
 			if (token.isCancellationRequested) {
@@ -363,11 +394,31 @@ export class AgentLoop {
 			this._onDidReceiveMessage.fire(response);
 
 			if (!response.toolCalls || response.toolCalls.length === 0) {
-				// No tool calls = final answer. Save history and reset counters.
+				// No tool calls — agent thinks it's done.
+				// Inject a verification round to make sure it has actually verified.
+				if (verificationRounds < MAX_VERIFICATION_ROUNDS) {
+					verificationRounds++;
+					const verifyMsg = createMessage(MessageRole.User,
+						`[System verification round ${verificationRounds}/${MAX_VERIFICATION_ROUNDS}]\n` +
+						`Before concluding, please verify: (1) Have you run tests or build to confirm correctness? ` +
+						`(2) Are there any errors or warnings? (3) Is every subtask fully completed? ` +
+						`If anything is incomplete or unverified, continue working. ` +
+						`Otherwise, provide your final summary.`
+					);
+					this._context.addMessage(verifyMsg);
+					this._onDidReceiveMessage.fire(verifyMsg);
+					stepCount++;
+					continue;
+				}
+				// Max verification rounds reached — accept conclusion.
 				this._contextHistoryForContinue = [...this._context.messages];
 				consecutiveToolOnlySteps = 0;
+				verificationRounds = 0;
 				break;
 			}
+
+			// Agent is taking action — reset verification counter
+			verificationRounds = 0;
 
 			// Track whether this step produced any text content (analysis/reasoning)
 			if (!response.content || response.content.trim().length === 0) {
@@ -470,6 +521,15 @@ export class AgentLoop {
 		return new Promise((_, reject) => {
 			setTimeout(() => reject(new Error(`Tool execution timed out after ${ms}ms`)), ms);
 		});
+	}
+
+	/**
+	 * Detect complex tasks by keyword matching. When a complex task is detected,
+	 * the agent injects extra deep thinking instructions before starting the loop.
+	 */
+	private _isComplexTask(message: string): boolean {
+		const lower = message.toLowerCase();
+		return COMPLEX_TASK_KEYWORDS.some(kw => lower.includes(kw.toLowerCase()));
 	}
 
 	dispose(): void {

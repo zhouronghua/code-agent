@@ -46,12 +46,16 @@ interface OpenAIChatMessage {
 /**
  * Check if a model is a reasoning/thinking model that returns reasoning_content.
  * These models require special handling for message ordering and streaming.
+ *
+ * IMPORTANT: deepseek-v4-flash is intentionally NOT listed here — it may occasionally
+ * return reasoning_content but does not have a stable deep thinking mode.
+ * deepseek-v4-pro has deep thinking enabled by default and explicitly via thinking param.
  */
 function isReasoningModel(model: string): boolean {
 	const lower = model.toLowerCase();
 	// DeepSeek reasoner variants (deepseek-reasoner, deepseek-r1, etc.)
 	if (lower.includes('reasoner') || lower.includes('deepseek-r')) return true;
-	// DeepSeek v4-pro has reasoning capabilities
+	// DeepSeek v4-pro has deep thinking capabilities (explicitly enabled via thinking param)
 	if (lower.includes('deepseek-v4-pro')) return true;
 	// OpenAI o-series reasoning models
 	if (lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4')) return true;
@@ -92,9 +96,11 @@ export class OpenAIProvider implements ILLMProvider {
 			...this._temperatureParam(temperature),
 		};
 
-		// Reasoning models may need max_tokens for long chain-of-thought outputs
+		// Reasoning models: enable deep thinking explicitly and set high max_tokens
+		// for long chain-of-thought outputs (65536 = 8x default, allows deep reasoning)
 		if (this._isReasoning) {
-			body.max_tokens = 8192;
+			body.thinking = { type: 'enabled' };
+			body.max_tokens = 65536;
 		}
 
 		if (tools && tools.length > 0) {
@@ -222,7 +228,8 @@ export class OpenAIProvider implements ILLMProvider {
 		};
 
 		if (this._isReasoning) {
-			body.max_tokens = 8192;
+			body.thinking = { type: 'enabled' };
+			body.max_tokens = 65536;
 		}
 
 		if (tools && tools.length > 0) {
