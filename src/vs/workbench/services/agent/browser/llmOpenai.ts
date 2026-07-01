@@ -27,6 +27,33 @@ function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Sleep with a live progress indicator showing elapsed and remaining time.
+ * Used during API retry backoff so the user isn't left wondering what's happening.
+ */
+function sleepWithProgress(ms: number, label: string): Promise<void> {
+	const totalSec = Math.ceil(ms / 1000);
+	const start = Date.now();
+
+	return new Promise(resolve => {
+		let lastUpdate = 0;
+		const timer = setInterval(() => {
+			const elapsed = Math.floor((Date.now() - start) / 1000);
+			if (elapsed !== lastUpdate) {
+				lastUpdate = elapsed;
+				const remaining = Math.max(0, totalSec - elapsed);
+				process.stdout.write(`\r  ⏳ ${label} — waited ${elapsed}s, ${remaining}s remaining...`);
+			}
+		}, 250);
+
+		setTimeout(() => {
+			clearInterval(timer);
+			process.stdout.write(`\r  ✅ ${label} — done after ${totalSec}s    \n`);
+			resolve();
+		}, ms);
+	});
+}
+
 function shouldRetry(statusCode: number): boolean {
 	return RETRYABLE_STATUS_CODES.has(statusCode);
 }
@@ -68,12 +95,14 @@ export class OpenAIProvider implements ILLMProvider {
 	private readonly _apiBase: string;
 	private readonly _model: string;
 	private readonly _isReasoning: boolean;
+	private readonly _maxOutputTokens: number;
 
 	constructor(config: IAgentConfig) {
 		this._apiKey = config.apiKey;
 		this._apiBase = config.apiBase || 'https://api.openai.com/v1';
 		this._model = config.model;
 		this._isReasoning = isReasoningModel(config.model);
+		this._maxOutputTokens = config.maxOutputTokens || 65536;
 	}
 
 	async complete(
@@ -97,10 +126,10 @@ export class OpenAIProvider implements ILLMProvider {
 		};
 
 		// Reasoning models: enable deep thinking explicitly and set high max_tokens
-		// for long chain-of-thought outputs (65536 = 8x default, allows deep reasoning)
+		// for long chain-of-thought outputs (configurable via max_output_tokens per profile)
 		if (this._isReasoning) {
 			body.thinking = { type: 'enabled' };
-			body.max_tokens = 65536;
+			body.max_tokens = this._maxOutputTokens;
 		}
 
 		if (tools && tools.length > 0) {
@@ -138,18 +167,18 @@ export class OpenAIProvider implements ILLMProvider {
 					// Graceful recovery from DeepSeek-specific transient errors
 					if (this._isDeepSeekRecoverableError(response.status, errorText, attempt)) {
 						const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
-						console.warn(`[LLM Retry] Transient API error ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${errorText.substring(0, 200)}`);
+						console.warn(`[LLM Retry] Transient API error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES})`);
 						lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
-						await sleep(delay);
+						await sleepWithProgress(delay, 'Retry backoff');
 						continue;
 					}
 
 					// Retry on transient errors (429, 5xx)
 					if (shouldRetry(response.status) && attempt < MAX_RETRIES) {
 						const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
-						console.warn(`[LLM Retry] API error ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+						console.warn(`[LLM Retry] API error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES})`);
 						lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
-						await sleep(delay);
+						await sleepWithProgress(delay, 'Retry backoff');
 						continue;
 					}
 
@@ -192,18 +221,18 @@ export class OpenAIProvider implements ILLMProvider {
 				// Handle JSON parse errors in tool_arguments gracefully (retry)
 				if (err.message?.includes('JSON.parse') && attempt < MAX_RETRIES) {
 					const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
-					console.warn(`[LLM Retry] JSON parse error in tool arguments, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+					console.warn(`[LLM Retry] JSON parse error (attempt ${attempt + 1}/${MAX_RETRIES})`);
 					lastError = error as Error;
-					await sleep(delay);
+					await sleepWithProgress(delay, 'Retry backoff');
 					continue;
 				}
 
 				// Network/fetch errors - retry
 				if (attempt < MAX_RETRIES) {
 					const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
-					console.warn(`[LLM Retry] Network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${error}`);
+					console.warn(`[LLM Retry] Network error (attempt ${attempt + 1}/${MAX_RETRIES})`);
 					lastError = error as Error;
-					await sleep(delay);
+					await sleepWithProgress(delay, 'Retry backoff');
 					continue;
 				}
 				clearTimeout(apiTimeout);
@@ -229,7 +258,7 @@ export class OpenAIProvider implements ILLMProvider {
 
 		if (this._isReasoning) {
 			body.thinking = { type: 'enabled' };
-			body.max_tokens = 65536;
+			body.max_tokens = this._maxOutputTokens;
 		}
 
 		if (tools && tools.length > 0) {
@@ -282,18 +311,18 @@ export class OpenAIProvider implements ILLMProvider {
 					// Graceful recovery from DeepSeek-specific transient errors
 					if (this._isDeepSeekRecoverableError(response.status, errorText, attempt)) {
 						const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
-						console.warn(`[LLM Retry] Transient API error ${response.status}, retrying in ${delay}ms`);
+						console.warn(`[LLM Retry] Transient API error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES})`);
 						lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
-						await sleep(delay);
+						await sleepWithProgress(delay, 'Retry backoff');
 						continue;
 					}
 
 					// Retry on transient errors (429, 5xx)
 					if (shouldRetry(response.status) && attempt < MAX_RETRIES) {
 						const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
-						console.warn(`[LLM Retry] API error ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+						console.warn(`[LLM Retry] API error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES})`);
 						lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
-						await sleep(delay);
+						await sleepWithProgress(delay, 'Retry backoff');
 						continue;
 					}
 
@@ -317,9 +346,9 @@ export class OpenAIProvider implements ILLMProvider {
 				// Network/fetch errors - retry
 				if (attempt < MAX_RETRIES) {
 					const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
-					console.warn(`[LLM Retry] Network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${error}`);
+					console.warn(`[LLM Retry] Network error (attempt ${attempt + 1}/${MAX_RETRIES})`);
 					lastError = error as Error;
-					await sleep(delay);
+					await sleepWithProgress(delay, 'Retry backoff');
 					continue;
 				}
 				clearTimeout(apiTimeout);

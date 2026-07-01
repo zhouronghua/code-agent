@@ -44,8 +44,12 @@ profiles:
     # Features:
     #   - reasoning_content (thinking mode) auto-detected
     #   - parallel_tool_calls enabled by default
-    #   - max_tokens: 8192 auto-set for reasoning models
+    #   - max_tokens: configurable via max_output_tokens (default 65536)
+    #   - Input context limit: configurable via max_input_tokens (default 200000)
     #   - Streaming works but disabled in thinking mode
+    # Model limits (override as needed):
+    max_input_tokens: 1000000
+    max_output_tokens: 393216
 
   deepseek-v4-reasoner:
     provider: openai

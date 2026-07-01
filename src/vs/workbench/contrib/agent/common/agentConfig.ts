@@ -20,6 +20,8 @@ interface ConfigProfile {
 	api_key: string;
 	api_base?: string;
 	temperature?: number;
+	max_input_tokens?: number;
+	max_output_tokens?: number;
 }
 
 interface McpServerConfig {
@@ -92,6 +94,8 @@ function parseYaml(text: string): ConfigFile {
 			else if (k === 'api_key') profile.api_key = val.replace(/^["']|["']$/g, '');
 			else if (k === 'api_base') profile.api_base = val;
 			else if (k === 'temperature') profile.temperature = parseFloat(val);
+			else if (k === 'max_input_tokens') profile.max_input_tokens = parseInt(val, 10);
+			else if (k === 'max_output_tokens') profile.max_output_tokens = parseInt(val, 10);
 			continue;
 		}
 
@@ -238,7 +242,8 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		apiKey: process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || profile?.api_key || '',
 		apiBase: process.env.LLM_API_BASE || profile?.api_base || undefined,
 		maxSteps: fileConfig.agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
-		maxContextTokens: fileConfig.agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
+		maxContextTokens: profile?.max_input_tokens || fileConfig.agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
+		maxOutputTokens: profile?.max_output_tokens || DEFAULT_AGENT_CONFIG.maxOutputTokens,
 		temperature: profile?.temperature ?? fileConfig.agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
 		stepTimeout: fileConfig.agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
 		taskTimeout: fileConfig.agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,

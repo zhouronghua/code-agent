@@ -92,6 +92,7 @@ export interface IAgentConfig {
 	apiBase?: string;
 	maxSteps: number;
 	maxContextTokens: number;
+	maxOutputTokens: number;
 	temperature: number;
 	stepTimeout: number;
 	taskTimeout: number;
@@ -103,6 +104,7 @@ export const DEFAULT_AGENT_CONFIG: IAgentConfig = {
 	apiKey: '',
 	maxSteps: 999999,  // Effectively unlimited
 	maxContextTokens: 200000,
+	maxOutputTokens: 65536,
 	temperature: 0,
 	stepTimeout: 300000,  // 5 minutes - allow tools with custom timeouts to complete
 	taskTimeout: 3600000,  // 1 hour

@@ -176,6 +176,11 @@ Session Management:
   - REPL commands: /save, /sessions, /resume, /new, /auto-save
   - Storage: ~/.codeagent/sessions/
 
+Intervention:
+  /btw <hint>    Inject a hint into the agent's reasoning for subsequent
+                 turns. Accumulates across multiple /btw calls.
+                 Useful for course-correcting or adding context mid-session.
+
 Modes:
   agent   Full autonomy: read, write, edit files, run commands
   plan    Generate implementation plan without executing
@@ -489,33 +494,102 @@ async function main() {
 		return;
 	}
 
-	// ---- Interactive REPL ----
+	// ---- Interactive REPL (event-driven, allows /btw during agent execution) ----
 	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, exit${C.reset}`);
-	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save${C.reset}\n`);
+	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, exit${C.reset}`);
+	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save${C.reset}`);
+	console.log(`${C.dim}Tip: use /btw <hint> any time — even while agent is running${C.reset}\n`);
 
-	const modeLabelVar = modeLabel;
-	const prompt = () => {
-		rl.question(`${C.bold}${C.blue}${modeLabelVar}> ${C.reset}`, async (input) => {
-			const trimmed = input.trim();
-			if (!trimmed || trimmed === 'exit' || trimmed === 'quit') {
-				// Auto-save on exit
-				autoSaveSession();
-				if (currentSessionId) {
-					console.log(`${C.dim}Session saved: ${currentSessionId}${C.reset}`);
-				}
-				console.log(`${C.dim}Goodbye!${C.reset}`);
-				rl.close();
-				agentLoop.dispose();
-				return;
+	let agentIsRunning = false;
+	const bufferedLines: string[] = [];
+	let processingLock = false;
+
+	const displayPrompt = () => {
+		if (agentIsRunning) {
+			process.stdout.write(`${C.bold}${C.yellow}[running - /btw to intervene]${C.reset} `);
+		} else {
+			process.stdout.write(`${C.bold}${C.blue}${modeLabel}> ${C.reset}`);
+		}
+	};
+
+	const processTask = async (task: string) => {
+		agentIsRunning = true;
+		try {
+			await agentLoop.run(task);
+			autoSaveSession(task.substring(0, 80));
+		} catch (err: any) {
+			log(C.red, 'ERROR', err.message);
+		}
+		agentIsRunning = false;
+	};
+
+	// Shared graceful exit — saves session, disposes agent, and exits cleanly.
+	// Used by both the "exit" command and Ctrl+C (SIGINT).
+	const gracefulExit = () => {
+		try {
+			// Cancel agent if running
+			if (agentIsRunning) {
+				agentLoop.cancel();
+				agentIsRunning = false;
 			}
+			// Save session for resuming later
+			autoSaveSession();
+			if (currentSessionId) {
+				console.log(`\n${C.dim}Session saved: ${currentSessionId}${C.reset}`);
+			}
+			console.log(`${C.dim}Goodbye!${C.reset}`);
+		} catch (e) {
+			// Ensure we always try to clean up even if save fails
+			console.error('Error during graceful exit:', e);
+		}
+		rl.close();
+		agentLoop.dispose();
+		// Ensure process exits cleanly (readline close may not be enough with active promises)
+		setTimeout(() => process.exit(0), 100);
+	};
 
+	rl.on('line', async (input) => {
+		const trimmed = input.trim();
+
+		// ---- Agent is running: intercept /btw, buffer everything else ----
+		if (agentIsRunning) {
+			if (trimmed.startsWith('/btw ')) {
+				const hint = trimmed.slice(5).trim();
+				if (hint) {
+					agentLoop.injectBtwHint(hint);
+					log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+				} else {
+					log(C.yellow, 'BTW', 'Usage: /btw <your hint>');
+				}
+			} else if (trimmed) {
+				bufferedLines.push(trimmed);
+				log(C.dim, 'QUEUED', `"${trimmed.substring(0, 60)}${trimmed.length > 60 ? '...' : ''}" — will process after current task`);
+			}
+			displayPrompt();
+			return;
+		}
+
+		// ---- Prevent overlapping line processing ----
+		if (processingLock) {
+			bufferedLines.push(trimmed);
+			return;
+		}
+
+		// ---- Normal REPL processing (agent is idle) ----
+		if (!trimmed || trimmed === 'exit' || trimmed === 'quit') {
+			gracefulExit();
+			return;
+		}
+
+		processingLock = true;
+
+		try {
 			// ---- Session commands ----
 			if (trimmed.startsWith('/save')) {
 				const name = trimmed.slice(5).trim() || currentSessionName || '';
 				autoSaveSession(name);
 				console.log(`${C.green}Session saved: ${currentSessionId}${C.reset}${name ? ` (${name})` : ''}`);
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed === '/sessions') {
@@ -537,7 +611,7 @@ async function main() {
 						console.log('');
 					}
 				}
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed.startsWith('/resume')) {
@@ -548,13 +622,10 @@ async function main() {
 
 				if (!session) {
 					log(C.yellow, 'SESSION', targetId ? `Session "${targetId}" not found` : 'No sessions to resume');
-					prompt(); return;
+					processingLock = false; displayPrompt(); return;
 				}
 
-				// Save current session before switching
 				autoSaveSession();
-
-				// Restore the session
 				modeManager.switchMode(session.mode);
 				agentLoop.restoreFromSession(
 					session.messages,
@@ -566,23 +637,22 @@ async function main() {
 
 				const date = new Date(session.updatedAt).toLocaleString();
 				console.log(`${C.magenta}[SESSION]${C.reset} Resumed "${session.name || session.id}" (${session.messageCount} msgs, ${date})`);
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed === '/new') {
-				// Save current and start fresh
 				autoSaveSession();
 				agentLoop.restoreFromSession([], '', extraPrompt || '');
 				currentSessionId = undefined;
 				currentSessionName = '';
 				console.log(`${C.magenta}[SESSION]${C.reset} Started new session`);
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed === '/auto-save') {
 				autoSaveEnabled = !autoSaveEnabled;
 				console.log(`${C.magenta}[SESSION]${C.reset} Auto-save ${autoSaveEnabled ? 'enabled' : 'disabled'}`);
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			// ---- Mode/profile commands ----
@@ -592,14 +662,14 @@ async function main() {
 				else if (newMode === 'ask') modeManager.switchMode(AgentMode.Ask);
 				else modeManager.switchMode(AgentMode.Agent);
 				log(C.magenta, 'MODE', `Switched to ${newMode}`);
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed === '/stream') {
 				agentLoop.setStreaming(!opts.streaming);
 				opts.streaming = !opts.streaming;
 				log(C.magenta, 'STREAM', `Streaming ${opts.streaming ? 'enabled' : 'disabled'}`);
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed === '/profiles') {
@@ -608,7 +678,7 @@ async function main() {
 					const active = p.name === resolved.profileName ? ` ${C.green}(active)` : '';
 					console.log(`  ${C.cyan}${p.name}${C.reset}  ${C.dim}${p.provider}/${p.model}${active}${C.reset}`);
 				}
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed.startsWith('/profile ')) {
@@ -617,7 +687,7 @@ async function main() {
 					const newResolved = loadConfigForProfile(newProfileName);
 					if (!newResolved.agentConfig.apiKey) {
 						log(C.red, 'ERROR', `Profile "${newProfileName}" has no API key configured`);
-						prompt(); return;
+						processingLock = false; displayPrompt(); return;
 					}
 					const newProvider = LLMProviderFactory.create(newResolved.agentConfig);
 					agentLoop.swapProvider(newResolved.agentConfig, newProvider);
@@ -627,14 +697,14 @@ async function main() {
 				} catch (err: any) {
 					log(C.red, 'ERROR', `Failed to switch profile: ${err.message}`);
 				}
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed === '/skills') {
 				for (const s of skillsLoader.skills) {
 					console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
 				}
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed.startsWith('/skill ')) {
@@ -642,7 +712,7 @@ async function main() {
 				const newExtra = buildSkillsContext(skillsLoader, skillName);
 				agentLoop.setExtraSystemPrompt(newExtra);
 				log(C.magenta, 'SKILL', skillName ? `Activated skill: ${skillName}` : 'Cleared active skill');
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed.startsWith('/parallel ')) {
@@ -652,7 +722,7 @@ async function main() {
 				} else {
 					log(C.red, 'ERROR', 'Provide at least 2 tasks in quotes: /parallel "task1" "task2"');
 				}
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
 			if (trimmed === '/continue' || trimmed === 'continue') {
@@ -662,20 +732,52 @@ async function main() {
 				} catch (err: any) {
 					log(C.red, 'ERROR', err.message);
 				}
-				prompt(); return;
+				processingLock = false; displayPrompt(); return;
 			}
 
-			try {
-				await agentLoop.run(trimmed);
-				// Auto-save after each run
-				autoSaveSession(trimmed.substring(0, 80));
-			} catch (err: any) {
-				log(C.red, 'ERROR', err.message);
+			// ---- /btw when agent is idle: accumulate for next run ----
+			if (trimmed.startsWith('/btw ')) {
+				const hint = trimmed.slice(5).trim();
+				if (hint) {
+					agentLoop.appendExtraSystemPrompt(hint);
+					log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+					console.log(`${C.dim}(Will affect subsequent agent reasoning in this session)${C.reset}`);
+				} else {
+					log(C.yellow, 'BTW', 'Usage: /btw <your hint>');
+				}
+				processingLock = false; displayPrompt(); return;
 			}
-			prompt();
-		});
-	};
-	prompt();
+
+			// ---- Task execution ----
+			await processTask(trimmed);
+
+			// Process any buffered input (typed during agent execution)
+			while (bufferedLines.length > 0) {
+				const next = bufferedLines.shift()!;
+				if (next.startsWith('/btw ')) {
+					// Handle /btw that was buffered during execution
+					const hint = next.slice(5).trim();
+					if (hint) {
+						agentLoop.appendExtraSystemPrompt(hint);
+						log(C.magenta, 'BTW', `Buffered hint applied: "${hint.substring(0, 80)}${hint.length > 80 ? '...' : ''}"`);
+					}
+					continue;
+				}
+				console.log(`\n${C.dim}--- Processing queued: "${next.substring(0, 80)}${next.length > 80 ? '...' : ''}" ---${C.reset}`);
+				await processTask(next);
+			}
+		} finally {
+			processingLock = false;
+			displayPrompt();
+		}
+	});
+
+	// Handle Ctrl+C gracefully — same as "exit": save session and quit
+	rl.on('SIGINT', () => {
+		gracefulExit();
+	});
+
+	displayPrompt();
 }
 
 const CLI_EXCLUDED_RULE_PATTERNS = ['askquestion', 'durable-request', 'durable request'];

@@ -78,6 +78,9 @@ export class AgentLoop {
 	private _useStreaming = false;
 	private _extraSystemPrompt = '';
 
+	/** Pending /btw hints injected during agent execution — consumed each loop iteration. */
+	private _pendingBtwHints: string[] = [];
+
 	constructor(
 		private _config: IAgentConfig,
 		private _llmProvider: ILLMProvider,
@@ -103,6 +106,31 @@ export class AgentLoop {
 
 	setExtraSystemPrompt(prompt: string): void {
 		this._extraSystemPrompt = prompt;
+	}
+
+	/**
+	 * Append an additional instruction/hint to the extra system prompt.
+	 * Used by /btw when the agent is idle — hints accumulate for the next run().
+	 * Multiple /btw commands accumulate; each hint is separated clearly.
+	 */
+	appendExtraSystemPrompt(hint: string): void {
+		const separator = '\n\n---\n## User Intervention (via /btw)\n';
+		if (this._extraSystemPrompt) {
+			this._extraSystemPrompt += separator + hint.trim();
+		} else {
+			this._extraSystemPrompt = '\n## User Intervention (via /btw)\n' + hint.trim();
+		}
+	}
+
+	/**
+	 * Inject a /btw hint while the agent is actively running.
+	 * The hint is queued and will be delivered as a User message at the
+	 * start of the next ReAct loop iteration, allowing mid-reasoning intervention.
+	 */
+	injectBtwHint(hint: string): void {
+		this._pendingBtwHints.push(hint.trim());
+		// Also append to extraSystemPrompt so the hint persists across runs
+		this.appendExtraSystemPrompt(hint);
 	}
 
 	get isRunning(): boolean {
@@ -327,6 +355,17 @@ export class AgentLoop {
 		while (stepCount < this._config.maxSteps) {
 			if (token.isCancellationRequested) {
 				throw new Error('Cancelled');
+			}
+
+			// ---- Inject any /btw hints received during agent execution ----
+			while (this._pendingBtwHints.length > 0) {
+				const hint = this._pendingBtwHints.shift()!;
+				const btwMsg = createMessage(MessageRole.User,
+					`[User intervention via /btw]: ${hint}\n` +
+					`(This is a hint from the user to adjust your reasoning. Follow it in subsequent steps.)`
+				);
+				this._context.addMessage(btwMsg);
+				this._onDidReceiveMessage.fire(btwMsg);
 			}
 
 			// Guard: if agent calls tools repeatedly without producing any text content
