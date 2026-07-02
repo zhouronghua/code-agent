@@ -8,4 +8,3 @@ build/
 # Local config with API keys (use config.template.yaml as starting point)
 config.yaml
 code-agent-*.tgz
-package-lock.json
