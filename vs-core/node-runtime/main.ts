@@ -55,6 +55,171 @@ function log(color: string, prefix: string, msg: string) {
 	console.log(`${color}${C.bold}[${prefix}]${C.reset} ${msg}`);
 }
 
+/**
+ * Creates a readline completer for tab-completion of REPL commands.
+ *
+ * Supported completions:
+ *   /resume [partial]   → session IDs from current working directory
+ *   /session [partial]  → session IDs
+ *   /delete-session [partial] → session IDs
+ *   /mode               → agent | plan | ask
+ *   /profile [partial]  → available config profile names
+ *   /skill [partial]    → available skill names
+ *   /use-skill [partial] → available skill names
+ *   /save [name]        → (no completion — free text name)
+ */
+function createCompleter(
+	sessionManager: AgentSessionManager,
+	_skillsLoader: SkillsLoader,
+) {
+	// All known slash commands (for prefix matching)
+	const knownCommands = [
+		'/resume', '/mode', '/profile', '/skill', '/use-skill',
+		'/save', '/sessions', '/new', '/auto-save', '/btw',
+		'/stream', '/profiles', '/skills', '/parallel',
+		'/continue', '/session', '/delete-session', '/help',
+	];
+
+	return (line: string): [string[], string] => {
+		// Only complete lines starting with '/'
+		if (!line.startsWith('/')) {
+			return [[], line];
+		}
+
+		const trimmed = line.trim();
+
+		// ---- /resume <partial session id> ----
+		const resumeMatch = trimmed.match(/^\/resume(\s+(\S*))?$/);
+		if (resumeMatch) {
+			const partial = (resumeMatch[2] || '').toLowerCase();
+			const sessions = sessionManager.listSessions();
+			const matches = sessions.filter(s =>
+				s.id.toLowerCase().startsWith(partial) ||
+				s.name.toLowerCase().includes(partial)
+			);
+			if (matches.length > 0) {
+				const completions = matches.map(s => `/resume ${s.id}`);
+				return [completions, line];
+			}
+			// If no specific match, show latest session as hint
+			const latest = sessionManager.getLatestSession();
+			if (latest && !partial) {
+				return [[`/resume ${latest.id}`], line];
+			}
+			return [[], line];
+		}
+
+		// ---- /session <partial session id> ----
+		const sessionMatch = trimmed.match(/^\/session(\s+(\S*))?$/);
+		if (sessionMatch) {
+			const partial = (sessionMatch[2] || '').toLowerCase();
+			const sessions = sessionManager.listSessions();
+			const matches = sessions.filter(s =>
+				s.id.toLowerCase().startsWith(partial) ||
+				s.name.toLowerCase().includes(partial)
+			);
+			if (matches.length > 0) {
+				return [matches.map(s => `/session ${s.id}`), line];
+			}
+			return [[], line];
+		}
+
+		// ---- /delete-session <partial session id> ----
+		const deleteMatch = trimmed.match(/^\/delete-session(\s+(\S*))?$/);
+		if (deleteMatch) {
+			const partial = (deleteMatch[2] || '').toLowerCase();
+			const sessions = sessionManager.listSessions();
+			const matches = sessions.filter(s =>
+				s.id.toLowerCase().startsWith(partial) ||
+				s.name.toLowerCase().includes(partial)
+			);
+			if (matches.length > 0) {
+				return [matches.map(s => `/delete-session ${s.id}`), line];
+			}
+			return [[], line];
+		}
+
+		// ---- /mode <partial> → agent, plan, ask ----
+		const modeMatch = trimmed.match(/^\/mode(\s+(\S*))?$/);
+		if (modeMatch) {
+			const partial = (modeMatch[2] || '').toLowerCase();
+			const modes = ['agent', 'plan', 'ask'];
+			const matches = modes.filter(m => m.startsWith(partial));
+			if (matches.length > 0) {
+				return [matches.map(m => `/mode ${m}`), line];
+			}
+			return [modes.map(m => `/mode ${m}`), line];
+		}
+
+		// ---- /profile <partial profile name> ----
+		const profileMatch = trimmed.match(/^\/profile(\s+(\S*))?$/);
+		if (profileMatch) {
+			const partial = (profileMatch[2] || '').toLowerCase();
+			try {
+				const profiles = listProfiles();
+				const matches = profiles.filter(p =>
+					p.name.toLowerCase().startsWith(partial)
+				);
+				if (matches.length > 0) {
+					return [matches.map(p => `/profile ${p.name}`), line];
+				}
+				if (profiles.length > 0 && !partial) {
+					return [profiles.map(p => `/profile ${p.name}`), line];
+				}
+			} catch {
+				// config not available
+			}
+			return [[], line];
+		}
+
+		// ---- /skill <partial skill name> ----
+		const skillMatch = trimmed.match(/^\/skill(\s+(\S*))?$/);
+		if (skillMatch) {
+			const partial = (skillMatch[2] || '').toLowerCase();
+			const skills = _skillsLoader.skills;
+			const matches = skills.filter(s =>
+				s.name.toLowerCase().startsWith(partial)
+			);
+			if (matches.length > 0) {
+				return [matches.map(s => `/skill ${s.name}`), line];
+			}
+			if (skills.length > 0 && !partial) {
+				return [skills.map(s => `/skill ${s.name}`), line];
+			}
+			return [[], line];
+		}
+
+		// ---- /use-skill <partial skill name> ----
+		const useSkillMatch = trimmed.match(/^\/use-skill(\s+(\S*))?$/);
+		if (useSkillMatch) {
+			const partial = (useSkillMatch[2] || '').toLowerCase();
+			const skills = _skillsLoader.skills;
+			const matches = skills.filter(s =>
+				s.name.toLowerCase().startsWith(partial)
+			);
+			if (matches.length > 0) {
+				return [matches.map(s => `/use-skill ${s.name}`), line];
+			}
+			if (skills.length > 0 && !partial) {
+				return [skills.map(s => `/use-skill ${s.name}`), line];
+			}
+			return [[], line];
+		}
+
+		// ---- Partial command name completion ----
+		// If user typed a partial command like /res, suggest matching commands
+		const partialCmd = trimmed.split(/\s+/, 1)[0];
+		const cmdMatches = knownCommands.filter(cmd =>
+			cmd.startsWith(partialCmd) && cmd !== partialCmd
+		);
+		if (cmdMatches.length > 0) {
+			return [cmdMatches, line];
+		}
+
+		return [[], line];
+	};
+}
+
 interface CLIOptions {
 	mode: AgentMode;
 	streaming: boolean;
@@ -174,6 +339,7 @@ Session Management:
   Sessions persist your agent conversation context across restarts.
   - Auto-save: after each run, the session is saved automatically.
   - REPL commands: /save, /sessions, /resume, /new, /auto-save
+  - Tab-completion: press Tab to auto-complete /resume, /mode, /profile, /skill, etc.
   - Storage: ~/.codeagent/sessions/
 
 Intervention:
@@ -495,10 +661,15 @@ async function main() {
 	}
 
 	// ---- Interactive REPL (event-driven, allows /btw during agent execution) ----
-	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+	const rl = readline.createInterface({
+		input: process.stdin,
+		output: process.stdout,
+		completer: createCompleter(sessionManager, skillsLoader),
+	});
 	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, exit${C.reset}`);
 	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save${C.reset}`);
-	console.log(`${C.dim}Tip: use /btw <hint> any time — even while agent is running${C.reset}\n`);
+	console.log(`${C.dim}Tip: use /btw <hint> any time — even while agent is running${C.reset}`);
+	console.log(`${C.dim}Tip: press Tab to auto-complete commands like /resume, /mode, /profile, /skill${C.reset}\n`);
 
 	let agentIsRunning = false;
 	const bufferedLines: string[] = [];
