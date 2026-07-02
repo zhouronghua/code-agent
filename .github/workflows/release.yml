@@ -14,11 +14,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Debug - list files
+        run: |
+          echo "=== git ref ==="
+          echo "GITHUB_REF: $GITHUB_REF"
+          echo "GITHUB_SHA: $GITHUB_SHA"
+          echo "=== files ==="
+          ls -la
+          echo "=== package-lock.json ==="
+          ls -la package-lock.json || echo "MISSING!"
+          echo "=== node version ==="
+          node -v && npm -v
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - run: npm ci
+      - run: npm ci --verbose
 
       - run: npm run build:release
 
