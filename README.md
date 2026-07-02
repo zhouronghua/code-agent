@@ -10,13 +10,13 @@ AI coding agent CLI, built on VS Code architecture with multi-provider LLM suppo
 - **Cursor-compatible Skills**: Load SKILL.md and .mdc rules to extend agent capabilities
 - **Streaming output**: Real-time token display
 - **Parallel agents**: Run multiple tasks concurrently
-- **Single-file distribution**: 44 KB minified, zero runtime dependencies
+- **Single-file distribution**: 70 KB minified, zero runtime dependencies
 
 ## Quick Start
 
 ```bash
 # Install from GitHub Releases
-npm install -g https://github.com/zhouronghua/code-agent/releases/latest/download/code-agent-0.2.4.tgz
+npm install -g https://github.com/zhouronghua/code-agent/releases/latest/download/code-agent-0.3.10.tgz
 
 # Or install from npm (if published)
 npm install -g code-agent

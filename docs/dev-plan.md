@@ -53,7 +53,7 @@
 - base: Event, Lifecycle, URI, Buffer, CancellationToken
 - platform: DI, FileService, Config, Workspace
 - Node.js 运行时: NodeFileService, NodeSearchService, NodeTerminalService
-- esbuild 打包: 52KB 单文件输出
+- esbuild 打包: ~70KB 单文件输出
 
 ## M6: Plan/Stream/Parallel
 
