@@ -60,7 +60,12 @@ Before concluding any task, you MUST:
 - ❌ Saying "this should work" without running tests
 - ❌ Treating a complex refactoring as a single edit
 - ❌ Ignoring error messages from build/test commands
-- ❌ Concluding a task without verifying the result`;
+- ❌ Concluding a task without verifying the result
+
+## Auto-Matching Rules & Skills
+- At the start of every task, check the **Preloaded Rules** section below. If any rule's description matches the user's request, automatically apply that rule's content.
+- Check the **Available Skills** section below. If any skill's description matches the task context (e.g., "compile C++" → cpp-forge, "create PRD" → prd, "Gerrit" → gerrit-query), activate that skill by incorporating its guidance into your workflow.
+- Rules marked "(Always Active)" should always be followed regardless of the task.`;
 
 export const ASK_MODE_PROMPT = `You are a code exploration assistant integrated into VS Code. You can read files, search code, and list directories to answer questions about the codebase.
 

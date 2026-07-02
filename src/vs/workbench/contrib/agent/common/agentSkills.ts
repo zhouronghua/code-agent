@@ -123,6 +123,43 @@ export class SkillsLoader {
 		return lines.join('\n');
 	}
 
+	/**
+	 * Preload ALL global rules content into the system prompt at task startup.
+	 * Each rule includes its description so the agent can auto-match when a
+	 * user's prompt aligns with a rule's purpose. Unlike buildRulesPromptSection()
+	 * which only includes alwaysApply rules, this method loads EVERY rule so
+	 * the agent can dynamically activate the right one.
+	 */
+	buildPreloadRulesPromptSection(excludePatterns?: string[]): string {
+		let rules = [...this._rules];
+
+		if (excludePatterns && excludePatterns.length > 0) {
+			rules = rules.filter(r => {
+				const lowerDesc = r.description.toLowerCase();
+				const lowerContent = r.content.toLowerCase();
+				return !excludePatterns.some(p =>
+					lowerDesc.includes(p.toLowerCase()) || lowerContent.includes(p.toLowerCase())
+				);
+			});
+		}
+
+		if (rules.length === 0) return '';
+
+		const lines = ['\n## Preloaded Rules\n'];
+		lines.push('The following rules are preloaded for auto-matching. When the user\'s request matches a rule\'s description, automatically apply that rule\'s instructions:\n');
+
+		for (const rule of rules) {
+			lines.push(`### Rule: ${rule.description}`);
+			if (rule.alwaysApply) {
+				lines.push('(Always Active)');
+			}
+			lines.push(rule.content);
+			lines.push('');
+		}
+
+		return lines.join('\n');
+	}
+
 	getSkillContent(skillName: string): string | undefined {
 		const skill = this.getSkillByName(skillName);
 		return skill?.content;
@@ -131,9 +168,11 @@ export class SkillsLoader {
 	buildFullContextPrompt(excludeRulePatterns?: string[]): string {
 		let prompt = '';
 
-		const rulesSection = this.buildRulesPromptSection(excludeRulePatterns);
+		// Preload ALL rules content (not just alwaysApply) for auto-matching
+		const rulesSection = this.buildPreloadRulesPromptSection(excludeRulePatterns);
 		if (rulesSection) prompt += rulesSection;
 
+		// Preload skills titles for auto-matching
 		const skillsSection = this.buildSkillsPromptSection();
 		if (skillsSection) prompt += skillsSection;
 

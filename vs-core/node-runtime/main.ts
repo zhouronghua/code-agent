@@ -956,7 +956,9 @@ const CLI_EXCLUDED_RULE_PATTERNS = ['askquestion', 'durable-request', 'durable r
 function buildSkillsContext(loader: SkillsLoader, activeSkill?: string): string {
 	let prompt = '';
 
-	prompt += loader.buildRulesPromptSection(CLI_EXCLUDED_RULE_PATTERNS);
+	// Preload ALL rules content (not just alwaysApply) for auto-matching
+	prompt += loader.buildPreloadRulesPromptSection(CLI_EXCLUDED_RULE_PATTERNS);
+	// Preload skills titles for auto-matching
 	prompt += loader.buildSkillsPromptSection();
 
 	if (activeSkill) {
