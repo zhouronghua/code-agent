@@ -223,6 +223,8 @@ export class AgentLoop {
 
 			if (this._modeManager.shouldPlanFirst) {
 				await this._runPlanMode(userMessage);
+				// Auto-execute the generated plan without requiring manual mode switch
+				await this._executePlanCore(this._cancellation.token);
 			} else {
 				await this._runAgentLoop(this._cancellation.token);
 			}
@@ -300,25 +302,7 @@ export class AgentLoop {
 		this._cancellation = new CancellationTokenSource();
 
 		try {
-			const existingPlan = plan || this._planner.currentPlan;
-			if (!existingPlan) {
-				throw new Error('No plan to execute. Run Plan mode first.');
-			}
-
-			this._modeManager.switchMode(AgentMode.Agent);
-			this._context.setSystemPrompt(getSystemPrompt(AgentMode.Agent, this._workingDirectory) + this._extraSystemPrompt);
-
-			const planSteps = existingPlan.steps
-				.map((s, i) => `${i + 1}. ${s.description}`)
-				.join('\n');
-
-			const userMsg = createMessage(MessageRole.User,
-				`Execute this plan step by step:\n${planSteps}`
-			);
-			this._context.addMessage(userMsg);
-			this._onDidReceiveMessage.fire(userMsg);
-
-			await this._runAgentLoop(this._cancellation.token);
+			await this._executePlanCore(this._cancellation.token, plan);
 			this._onDidComplete.fire();
 		} catch (err) {
 			if (!(err instanceof Error && err.message === 'Cancelled')) {
@@ -331,6 +315,32 @@ export class AgentLoop {
 		}
 	}
 
+	/**
+	 * Core plan execution logic. Assumes _isRunning and _cancellation are already set up.
+	 * Used both by the public executePlan() method and by run() in Plan mode (auto-execution).
+	 */
+	private async _executePlanCore(token: CancellationToken, plan?: IAgentPlan): Promise<void> {
+		const existingPlan = plan || this._planner.currentPlan;
+		if (!existingPlan) {
+			throw new Error('No plan to execute. Run Plan mode first.');
+		}
+
+		this._modeManager.switchMode(AgentMode.Agent);
+		this._context.setSystemPrompt(getSystemPrompt(AgentMode.Agent, this._workingDirectory) + this._extraSystemPrompt);
+
+		const planSteps = existingPlan.steps
+			.map((s, i) => `${i + 1}. ${s.description}`)
+			.join('\n');
+
+		const userMsg = createMessage(MessageRole.User,
+			`Execute this plan step by step:\n${planSteps}`
+		);
+		this._context.addMessage(userMsg);
+		this._onDidReceiveMessage.fire(userMsg);
+
+		await this._runAgentLoop(token);
+	}
+
 	private async _runPlanMode(task: string): Promise<void> {
 		const plan = await this._planner.createPlan(task);
 
@@ -340,7 +350,7 @@ export class AgentLoop {
 
 		const planMsg = createMessage(
 			MessageRole.Assistant,
-			`## Implementation Plan\n\n${planSummary}\n\nSwitch to Agent mode and say "execute plan" to run this plan.`,
+			`## Implementation Plan\n\n${planSummary}\n\nExecuting plan automatically...`,
 		);
 
 		this._context.addMessage(planMsg);

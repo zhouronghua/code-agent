@@ -644,19 +644,7 @@ async function main() {
 		autoSaveSession(task.substring(0, 80));
 		console.log(`${C.dim}[Session saved: ${currentSessionId}]${C.reset}`);
 
-		if (opts.mode === AgentMode.Plan) {
-			const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-			rl.question(`\n${C.bold}Execute this plan? (y/n): ${C.reset}`, async (answer) => {
-				if (answer.trim().toLowerCase() === 'y') {
-					await agentLoop.executePlan();
-					autoSaveSession();
-				}
-				rl.close();
-				agentLoop.dispose();
-			});
-		} else {
-			agentLoop.dispose();
-		}
+		agentLoop.dispose();
 		return;
 	}
 
