@@ -35,6 +35,7 @@ import { ListDirectoryTool } from 'vs/workbench/contrib/agent/common/tools/listD
 import { SearchTextTool } from 'vs/workbench/contrib/agent/common/tools/searchText';
 import { SearchFilesTool } from 'vs/workbench/contrib/agent/common/tools/searchFiles';
 import { RunTerminalTool } from 'vs/workbench/contrib/agent/common/tools/runTerminal';
+import { PollTool } from 'vs/workbench/contrib/agent/common/tools/poll';
 
 // Ensure provider implementations are loaded
 import './llmOpenai';
@@ -236,6 +237,7 @@ export class AgentService extends Disposable implements IAgentService {
 		this._toolRegistry.register(new SearchTextTool(this._searchService, workspaceRoot));
 		this._toolRegistry.register(new SearchFilesTool(this._searchService, workspaceRoot));
 		this._toolRegistry.register(new RunTerminalTool(this._terminalService, workspaceRoot.fsPath));
+		this._toolRegistry.register(new PollTool(this._terminalService, workspaceRoot.fsPath));
 	}
 
 	private _setupModeForwarding(): void {

@@ -540,7 +540,8 @@ export class AgentLoop {
 						`[System verification round ${verificationRounds}/${MAX_VERIFICATION_ROUNDS}]\n` +
 						`Before concluding, please verify: (1) Have you run tests or build to confirm correctness? ` +
 						`(2) Are there any errors or warnings? (3) Is every subtask fully completed? ` +
-						`If anything is incomplete or unverified, continue working. ` +
+						`(4) If you triggered any async task (CI, pipeline, deploy, container), have you used the poll tool to verify it completed? ` +
+						`If anything is incomplete, still running, or unverified, continue working (use poll if waiting). ` +
 						`Otherwise, provide your final summary.`
 					);
 					this._context.addMessage(verifyMsg);
