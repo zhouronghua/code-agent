@@ -98,6 +98,57 @@ export interface IAgentConfig {
 	taskTimeout: number;
 }
 
+/** Per-step tool execution record for task log tracing. */
+export interface IToolExecutionRecord {
+	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly arguments: Record<string, unknown>;
+	readonly result: string;
+	readonly success: boolean;
+	readonly error?: string;
+	readonly durationMs: number;
+	readonly timestamp: number;
+}
+
+/** Per-step LLM interaction record for task log tracing. */
+export interface IStepRecord {
+	readonly stepIndex: number;
+	readonly llmRequest: {
+		messageCount: number;
+		estimatedTokens: number;
+	};
+	readonly llmResponse: {
+		content: string;
+		toolCalls?: IToolCall[];
+		reasoningContent?: string;
+	};
+	readonly toolExecutions: IToolExecutionRecord[];
+	readonly durationMs: number;
+	readonly timestamp: number;
+}
+
+/** Complete execution log for a single task, persisted for troubleshooting. */
+export interface IAgentTaskLog {
+	readonly id: string;
+	readonly task: string;
+	readonly mode: AgentMode;
+	readonly workingDirectory: string;
+	readonly config: {
+		provider: string;
+		model: string;
+	};
+	readonly systemPrompt: string;
+	readonly extraSystemPrompt?: string;
+	readonly steps: IStepRecord[];
+	readonly totalSteps: number;
+	readonly totalToolCalls: number;
+	readonly status: 'completed' | 'failed' | 'cancelled';
+	readonly error?: string;
+	readonly startedAt: number;
+	readonly finishedAt: number;
+	readonly durationMs: number;
+}
+
 export const DEFAULT_AGENT_CONFIG: IAgentConfig = {
 	provider: 'openai',
 	model: 'gpt-4o',

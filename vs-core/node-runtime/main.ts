@@ -40,6 +40,7 @@ import { loadConfig, loadConfigForProfile, listProfiles, ResolvedConfig } from '
 import { SkillsLoader } from '../../src/vs/workbench/contrib/agent/common/agentSkills';
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
 import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common/agentSessions';
+import { TaskLogManager } from '../../src/vs/workbench/contrib/agent/common/agentTaskLog';
 import { NodeFileService } from './nodeFileService';
 import { NodeSearchService } from './nodeSearchService';
 import { NodeTerminalService } from './nodeTerminalService';
@@ -71,6 +72,7 @@ function log(color: string, prefix: string, msg: string) {
 function createCompleter(
 	sessionManager: AgentSessionManager,
 	_skillsLoader: SkillsLoader,
+	taskLogManager?: TaskLogManager,
 ) {
 	// All known slash commands (for prefix matching)
 	const knownCommands = [
@@ -78,6 +80,7 @@ function createCompleter(
 		'/save', '/sessions', '/new', '/auto-save', '/btw',
 		'/stream', '/profiles', '/skills', '/parallel',
 		'/continue', '/session', '/delete-session', '/help',
+		'/tasks', '/task', '/delete-task',
 	];
 
 	return (line: string): [string[], string] => {
@@ -135,6 +138,30 @@ function createCompleter(
 			);
 			if (matches.length > 0) {
 				return [matches.map(s => `/delete-session ${s.id}`), line];
+			}
+			return [[], line];
+		}
+
+		// ---- /task <partial task log id> ----
+		const taskMatch = trimmed.match(/^\/task(\s+(\S*))?$/);
+		if (taskMatch && taskLogManager) {
+			const partial = (taskMatch[2] || '').toLowerCase();
+			const logs = taskLogManager.listTaskLogs();
+			const matches = logs.filter(t => t.id.toLowerCase().startsWith(partial));
+			if (matches.length > 0) {
+				return [matches.map(t => `/task ${t.id}`), line];
+			}
+			return [[], line];
+		}
+
+		// ---- /delete-task <partial task log id> ----
+		const deleteTaskMatch = trimmed.match(/^\/delete-task(\s+(\S*))?$/);
+		if (deleteTaskMatch && taskLogManager) {
+			const partial = (deleteTaskMatch[2] || '').toLowerCase();
+			const logs = taskLogManager.listTaskLogs();
+			const matches = logs.filter(t => t.id.toLowerCase().startsWith(partial));
+			if (matches.length > 0) {
+				return [matches.map(t => `/delete-task ${t.id}`), line];
 			}
 			return [[], line];
 		}
@@ -233,6 +260,9 @@ interface CLIOptions {
 	listSessions: boolean;
 	sessionId?: string;
 	deleteSessionId?: string;
+	listTaskLogs: boolean;
+	taskLogId?: string;
+	deleteTaskLogId?: string;
 }
 
 function parseArgs(): CLIOptions {
@@ -246,6 +276,7 @@ function parseArgs(): CLIOptions {
 		showSkills: false,
 		resumeLatest: false,
 		listSessions: false,
+		listTaskLogs: false,
 	};
 
 	let i = 0;
@@ -291,6 +322,17 @@ function parseArgs(): CLIOptions {
 				i++;
 				opts.deleteSessionId = args[i];
 				break;
+			case '--tasks':
+				opts.listTaskLogs = true;
+				break;
+			case '--task':
+				i++;
+				opts.taskLogId = args[i];
+				break;
+			case '--delete-task':
+				i++;
+				opts.deleteTaskLogId = args[i];
+				break;
 			case '--help':
 				printHelp();
 				process.exit(0);
@@ -333,6 +375,9 @@ Options:
   --resume                    Resume the most recent session
   --sessions                  List saved sessions
   --delete-session <id>       Delete a session
+  --tasks                     List saved task logs
+  --task <id>                 View a specific task log
+  --delete-task <id>          Delete a task log
   --help                      Show this help
 
 Session Management:
@@ -341,6 +386,12 @@ Session Management:
   - REPL commands: /save, /sessions, /resume, /new, /auto-save
   - Tab-completion: press Tab to auto-complete /resume, /mode, /profile, /skill, etc.
   - Storage: ~/.codeagent/sessions/
+
+Task Logs (for troubleshooting):
+  - Auto-save: after each task, a detailed execution log is saved automatically.
+  - Includes: LLM requests/responses, tool calls with arguments and results, timings.
+  - REPL commands: /tasks, /task <id>, /delete-task <id>
+  - Storage: ~/.codeagent/tasks/
 
 Intervention:
   /btw <hint>    Inject a hint into the agent's reasoning for subsequent
@@ -425,6 +476,7 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
 	console.log(`\n${C.bold}${C.magenta}=== Parallel Agent Mode ===${C.reset}`);
 	console.log(`${C.dim}Running ${tasks.length} tasks concurrently (max 4)${C.reset}\n`);
 
+	const taskLogManager = new TaskLogManager();
 	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4);
 
 	manager.onDidTaskStart(task => {
@@ -451,6 +503,11 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
 			const lastMsg = agentMessages[agentMessages.length - 1];
 			console.log(`    ${C.dim}${lastMsg.content.substring(0, 100)}${C.reset}`);
 		}
+		// Save task log for each parallel task
+		if (result.taskLog) {
+			taskLogManager.saveTaskLog(result.taskLog);
+			console.log(`    ${C.dim}[Task log: ${result.taskLog.id}]${C.reset}`);
+		}
 	}
 
 	manager.dispose();
@@ -459,6 +516,7 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
 async function main() {
 	const opts = parseArgs();
 	const sessionManager = new AgentSessionManager(process.cwd());
+	const taskLogManager = new TaskLogManager();
 
 	// Handle info-only commands
 	if (opts.showProfiles) {
@@ -501,6 +559,48 @@ async function main() {
 			console.log(`${C.green}Session "${opts.deleteSessionId}" deleted.${C.reset}`);
 		} else {
 			console.log(`${C.yellow}Session "${opts.deleteSessionId}" not found.${C.reset}`);
+		}
+		return;
+	}
+
+	if (opts.listTaskLogs) {
+		const taskLogs = taskLogManager.listTaskLogs();
+		if (taskLogs.length === 0) {
+			console.log(`${C.dim}No saved task logs.${C.reset}`);
+		} else {
+			console.log(`\n${C.bold}Task logs (${taskLogs.length}):${C.reset}\n`);
+			for (const t of taskLogs) {
+				const date = new Date(t.startedAt).toLocaleString();
+				const dur = (t.durationMs / 1000).toFixed(1);
+				const statusIcon = t.status === 'completed' ? `${C.green}✓` : t.status === 'failed' ? `${C.red}✗` : `${C.yellow}⊘`;
+				console.log(`  ${C.cyan}${t.id}${C.reset} ${statusIcon}${C.reset}`);
+				console.log(`    ${C.bold}Task:${C.reset} ${t.task.substring(0, 120)}`);
+				console.log(`    ${C.bold}Mode:${C.reset} ${t.mode}  ${C.bold}Steps:${C.reset} ${t.totalSteps}  ${C.bold}Tools:${C.reset} ${t.totalToolCalls}  ${C.bold}Duration:${C.reset} ${dur}s`);
+				console.log(`    ${C.bold}Started:${C.reset} ${date}`);
+				console.log(`    ${C.dim}${t.summary.substring(0, 150)}${C.reset}`);
+				console.log('');
+			}
+		}
+		return;
+	}
+
+	if (opts.taskLogId) {
+		const log = taskLogManager.loadTaskLog(opts.taskLogId);
+		if (!log) {
+			console.log(`${C.yellow}Task log "${opts.taskLogId}" not found.${C.reset}`);
+		} else {
+			console.log(`\n${C.bold}=== Task Log: ${log.id} ===${C.reset}\n`);
+			console.log(taskLogManager.formatTaskLog(log));
+		}
+		return;
+	}
+
+	if (opts.deleteTaskLogId) {
+		const deleted = taskLogManager.deleteTaskLog(opts.deleteTaskLogId);
+		if (deleted) {
+			console.log(`${C.green}Task log "${opts.deleteTaskLogId}" deleted.${C.reset}`);
+		} else {
+			console.log(`${C.yellow}Task log "${opts.deleteTaskLogId}" not found.${C.reset}`);
 		}
 		return;
 	}
@@ -640,9 +740,15 @@ async function main() {
 		const task = opts.tasks.join(' ');
 		await agentLoop.run(task);
 
-		// Auto-save after task completion
+		// Auto-save session
 		autoSaveSession(task.substring(0, 80));
 		console.log(`${C.dim}[Session saved: ${currentSessionId}]${C.reset}`);
+
+		// Auto-save task log
+		const status = agentLoop.lastTaskError ? 'failed' : 'completed';
+		const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
+		taskLogManager.saveTaskLog(taskLog);
+		console.log(`${C.dim}[Task log saved: ${taskLog.id}]${C.reset}`);
 
 		agentLoop.dispose();
 		return;
@@ -652,10 +758,11 @@ async function main() {
 	const rl = readline.createInterface({
 		input: process.stdin,
 		output: process.stdout,
-		completer: createCompleter(sessionManager, skillsLoader),
+		completer: createCompleter(sessionManager, skillsLoader, taskLogManager),
 	});
 	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, exit${C.reset}`);
 	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save${C.reset}`);
+	console.log(`${C.dim}Tasks:   /tasks, /task <id>, /delete-task <id>${C.reset}`);
 	console.log(`${C.dim}Tip: use /btw <hint> any time — even while agent is running${C.reset}`);
 	console.log(`${C.dim}Tip: press Tab to auto-complete commands like /resume, /mode, /profile, /skill${C.reset}\n`);
 
@@ -676,6 +783,10 @@ async function main() {
 		try {
 			await agentLoop.run(task);
 			autoSaveSession(task.substring(0, 80));
+			// Auto-save task log
+			const status = agentLoop.lastTaskError ? 'failed' : 'completed';
+			const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
+			taskLogManager.saveTaskLog(taskLog);
 		} catch (err: any) {
 			log(C.red, 'ERROR', err.message);
 		}
@@ -814,6 +925,48 @@ async function main() {
 				processingLock = false; displayPrompt(); return;
 			}
 
+			// ---- Task log commands ----
+			if (trimmed === '/tasks') {
+				const taskLogs = taskLogManager.listTaskLogs();
+				if (taskLogs.length === 0) {
+					console.log(`${C.dim}No saved task logs.${C.reset}`);
+				} else {
+					console.log(`\n${C.bold}Task logs (${taskLogs.length}):${C.reset}\n`);
+					for (const t of taskLogs) {
+						const date = new Date(t.startedAt).toLocaleString();
+						const dur = (t.durationMs / 1000).toFixed(1);
+						const statusIcon = t.status === 'completed' ? `${C.green}✓` : t.status === 'failed' ? `${C.red}✗` : `${C.yellow}⊘`;
+						console.log(`  ${C.cyan}${t.id}${C.reset} ${statusIcon}${C.reset}  ${C.dim}${dur}s${C.reset}`);
+						console.log(`    ${t.task.substring(0, 100)}`);
+						console.log(`    ${C.dim}${new Date(t.startedAt).toLocaleString()} | ${t.mode} | ${t.totalSteps} steps | ${t.totalToolCalls} tools${C.reset}`);
+						console.log('');
+					}
+				}
+				processingLock = false; displayPrompt(); return;
+			}
+
+			if (trimmed.startsWith('/task ')) {
+				const targetId = trimmed.slice(6).trim();
+				const log = taskLogManager.loadTaskLog(targetId);
+				if (!log) {
+					console.log(`${C.yellow}Task log "${targetId}" not found${C.reset}`);
+				} else {
+					console.log(`\n${C.bold}=== Task Log: ${log.id} ===${C.reset}\n`);
+					console.log(taskLogManager.formatTaskLog(log));
+				}
+				processingLock = false; displayPrompt(); return;
+			}
+
+			if (trimmed.startsWith('/delete-task ')) {
+				const targetId = trimmed.slice(13).trim();
+				if (taskLogManager.deleteTaskLog(targetId)) {
+					console.log(`${C.green}Task log "${targetId}" deleted${C.reset}`);
+				} else {
+					console.log(`${C.yellow}Task log "${targetId}" not found${C.reset}`);
+				}
+				processingLock = false; displayPrompt(); return;
+			}
+
 			// ---- Mode/profile commands ----
 			if (trimmed.startsWith('/mode ')) {
 				const newMode = trimmed.slice(6).trim();
@@ -888,6 +1041,9 @@ async function main() {
 				try {
 					await agentLoop.continueSession();
 					autoSaveSession();
+					const status = agentLoop.lastTaskError ? 'failed' : 'completed';
+					const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
+					taskLogManager.saveTaskLog(taskLog);
 				} catch (err: any) {
 					log(C.red, 'ERROR', err.message);
 				}

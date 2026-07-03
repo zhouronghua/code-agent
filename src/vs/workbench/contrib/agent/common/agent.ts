@@ -20,6 +20,10 @@ import {
 	createMessage,
 	createToolResultMessage,
 	IToolResult,
+	IToolCall,
+	IStepRecord,
+	IToolExecutionRecord,
+	IAgentTaskLog,
 	generateId,
 } from 'vs/workbench/services/agent/common/agentModels';
 import { ILLMProvider } from 'vs/workbench/services/agent/browser/llmProvider';
@@ -80,6 +84,12 @@ export class AgentLoop {
 
 	/** Pending /btw hints injected during agent execution — consumed each loop iteration. */
 	private _pendingBtwHints: string[] = [];
+
+	// ---- Per-task execution tracing ----
+	private _stepRecords: IStepRecord[] = [];
+	private _taskStartTime = 0;
+	private _taskDescription = '';
+	private _taskError: string | undefined;
 
 	constructor(
 		private _config: IAgentConfig,
@@ -190,6 +200,43 @@ export class AgentLoop {
 		this._contextHistoryForContinue = [...messages];
 	}
 
+	/**
+	 * Export a complete task execution log for troubleshooting.
+	 * Includes per-step LLM interactions, tool calls, timing, and errors.
+	 */
+	exportTaskLog(status: 'completed' | 'failed' | 'cancelled', error?: string): IAgentTaskLog {
+		const finishedAt = Date.now();
+		const totalToolCalls = this._stepRecords.reduce(
+			(sum, step) => sum + step.toolExecutions.length, 0
+		);
+
+		return {
+			id: `task_${this._taskStartTime}_${Math.random().toString(36).substring(2, 8)}`,
+			task: this._taskDescription,
+			mode: this._modeManager.currentMode,
+			workingDirectory: this._workingDirectory,
+			config: {
+				provider: this._config.provider,
+				model: this._config.model,
+			},
+			systemPrompt: this._context.systemPromptContent,
+			extraSystemPrompt: this._extraSystemPrompt || undefined,
+			steps: [...this._stepRecords],
+			totalSteps: this._stepRecords.length,
+			totalToolCalls,
+			status,
+			error,
+			startedAt: this._taskStartTime,
+			finishedAt,
+			durationMs: finishedAt - this._taskStartTime,
+		};
+	}
+
+	/** The error from the last task execution, if any. */
+	get lastTaskError(): string | undefined {
+		return this._taskError;
+	}
+
 	async run(userMessage: string): Promise<void> {
 		if (this._isRunning) {
 			throw new Error('Agent is already running');
@@ -197,6 +244,12 @@ export class AgentLoop {
 
 		this._isRunning = true;
 		this._cancellation = new CancellationTokenSource();
+
+		// Initialize per-task execution tracing
+		this._stepRecords = [];
+		this._taskStartTime = Date.now();
+		this._taskDescription = userMessage;
+		this._taskError = undefined;
 
 		try {
 			const mode = this._modeManager.currentMode;
@@ -232,7 +285,10 @@ export class AgentLoop {
 			this._onDidComplete.fire();
 		} catch (err) {
 			if (!(err instanceof Error && err.message === 'Cancelled')) {
+				this._taskError = (err as Error).message;
 				this._onDidError.fire(err instanceof Error ? err : new Error(String(err)));
+			} else {
+				this._taskError = 'Cancelled';
 			}
 		} finally {
 			this._isRunning = false;
@@ -260,6 +316,12 @@ export class AgentLoop {
 
 		this._isRunning = true;
 		this._cancellation = new CancellationTokenSource();
+
+		// Initialize per-task execution tracing
+		this._stepRecords = [];
+		this._taskStartTime = Date.now();
+		this._taskDescription = '(continue previous session)';
+		this._taskError = undefined;
 
 		try {
 			// Restore conversation context from the previous session
@@ -300,6 +362,12 @@ export class AgentLoop {
 		}
 		this._isRunning = true;
 		this._cancellation = new CancellationTokenSource();
+
+		// Initialize per-task execution tracing
+		this._stepRecords = [];
+		this._taskStartTime = Date.now();
+		this._taskDescription = plan?.task || '(execute plan)';
+		this._taskError = undefined;
 
 		try {
 			await this._executePlanCore(this._cancellation.token, plan);
@@ -407,6 +475,13 @@ export class AgentLoop {
 
 			let response: IAgentMessage;
 
+			// ---- Step tracing: record LLM request metadata ----
+			const stepStartTime = Date.now();
+			const llmRequestMeta = {
+				messageCount: messages.length,
+				estimatedTokens: messages.reduce((sum, m) => sum + this._llmProvider.countTokens(m.content), 0),
+			};
+
 			// Streaming is only safe when:
 			//   1. Streaming is explicitly enabled by user
 			//   2. No tools are available (streaming with tools doesn't work well)
@@ -442,6 +517,20 @@ export class AgentLoop {
 			this._context.addMessage(response);
 			this._onDidReceiveMessage.fire(response);
 
+			// ---- Step tracing: initialize step record ----
+			const stepRecord: IStepRecord = {
+				stepIndex: stepCount,
+				llmRequest: llmRequestMeta,
+				llmResponse: {
+					content: response.content,
+					toolCalls: response.toolCalls ? response.toolCalls.map(tc => ({ ...tc })) : undefined,
+					reasoningContent: response.reasoningContent,
+				},
+				toolExecutions: [],
+				durationMs: Date.now() - stepStartTime,
+				timestamp: stepStartTime,
+			};
+
 			if (!response.toolCalls || response.toolCalls.length === 0) {
 				// No tool calls — agent thinks it's done.
 				// Inject a verification round to make sure it has actually verified.
@@ -456,6 +545,7 @@ export class AgentLoop {
 					);
 					this._context.addMessage(verifyMsg);
 					this._onDidReceiveMessage.fire(verifyMsg);
+					this._stepRecords.push(stepRecord);
 					stepCount++;
 					continue;
 				}
@@ -463,6 +553,7 @@ export class AgentLoop {
 				this._contextHistoryForContinue = [...this._context.messages];
 				consecutiveToolOnlySteps = 0;
 				verificationRounds = 0;
+				this._stepRecords.push(stepRecord);
 				break;
 			}
 
@@ -481,7 +572,22 @@ export class AgentLoop {
 					throw new Error('Cancelled');
 				}
 
+				const toolExecStart = Date.now();
 				const result = await this._executeTool(toolCall.id, toolCall.name, toolCall.arguments);
+				const toolExecDuration = Date.now() - toolExecStart;
+
+				// ---- Step tracing: record tool execution ----
+				const execRecord: IToolExecutionRecord = {
+					toolCallId: toolCall.id,
+					toolName: toolCall.name,
+					arguments: { ...toolCall.arguments },
+					result: result.output || result.error || '',
+					success: result.success,
+					error: result.error,
+					durationMs: toolExecDuration,
+					timestamp: toolExecStart,
+				};
+				stepRecord.toolExecutions.push(execRecord);
 
 				// Truncate large tool results to prevent context overflow
 				const truncatedResult = this._truncateToolResult(result);
@@ -491,6 +597,7 @@ export class AgentLoop {
 				this._onDidReceiveMessage.fire(resultMsg);
 			}
 
+			this._stepRecords.push(stepRecord);
 			stepCount++;
 		}
 

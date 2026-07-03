@@ -5,7 +5,7 @@
 
 import { Emitter, Event } from 'vs/base/common/event';
 import { Disposable } from 'vs/base/common/lifecycle';
-import { IAgentConfig, IAgentMessage, AgentMode, generateId } from 'vs/workbench/services/agent/common/agentModels';
+import { IAgentConfig, IAgentMessage, AgentMode, IAgentTaskLog, generateId } from 'vs/workbench/services/agent/common/agentModels';
 import { ILLMProvider } from 'vs/workbench/services/agent/browser/llmProvider';
 import { ToolRegistry } from './agentTools';
 import { AgentModeManager } from './agentModes';
@@ -27,6 +27,7 @@ export interface IParallelResult {
 	readonly messages: readonly IAgentMessage[];
 	readonly error?: string;
 	readonly durationMs: number;
+	readonly taskLog?: IAgentTaskLog;
 }
 
 export class ParallelAgentManager extends Disposable {
@@ -87,6 +88,7 @@ export class ParallelAgentManager extends Disposable {
 						messages: [],
 						error: settled.reason?.message || 'Unknown error',
 						durationMs: Date.now() - task.startTime,
+						taskLog: undefined,
 					};
 					results.push(failResult);
 					this._onDidTaskComplete.fire(failResult);
@@ -129,11 +131,15 @@ export class ParallelAgentManager extends Disposable {
 			(task as any).status = 'done';
 			(task as any).endTime = Date.now();
 
+			const status = agentLoop.lastTaskError ? 'failed' : 'completed';
+			const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
+
 			const result: IParallelResult = {
 				taskId: task.id,
 				success: true,
 				messages,
 				durationMs: Date.now() - startTime,
+				taskLog,
 			};
 
 			this._results.set(task.id, result);
@@ -144,12 +150,15 @@ export class ParallelAgentManager extends Disposable {
 			(task as any).endTime = Date.now();
 			(task as any).error = (err as Error).message;
 
+			const taskLog = agentLoop.exportTaskLog('failed', (err as Error).message);
+
 			const result: IParallelResult = {
 				taskId: task.id,
 				success: false,
 				messages,
 				error: (err as Error).message,
 				durationMs: Date.now() - startTime,
+				taskLog,
 			};
 
 			this._results.set(task.id, result);
