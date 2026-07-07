@@ -48,7 +48,7 @@ const MAX_CONSECUTIVE_TOOL_ONLY_STEPS = 100;
 // When the agent produces a response with no tool calls, we inject a verification
 // prompt to ensure it has fully verified its work. After this many rounds, we
 // accept the conclusion to prevent infinite verify-loops.
-const MAX_VERIFICATION_ROUNDS = 2;
+const MAX_VERIFICATION_ROUNDS = 100;
 
 // Keywords that indicate a complex task — triggers deep thinking mode with
 // extra system prompt instructions.
