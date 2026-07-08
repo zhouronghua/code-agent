@@ -447,6 +447,9 @@ function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
 
 	agentLoop.onDidReceiveMessage(msg => {
 		if (msg.role === MessageRole.Assistant) {
+			if (msg.reasoningContent) {
+				log(C.dim, 'THINKING', msg.reasoningContent);
+			}
 			if (msg.toolCalls && msg.toolCalls.length > 0) {
 				for (const tc of msg.toolCalls) {
 					const argsStr = JSON.stringify(tc.arguments).substring(0, 120);

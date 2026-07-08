@@ -283,8 +283,9 @@ async function callOpenAI(messages, tools) {
 		temperature: CONFIG.temperature,
 	};
 
-	// Reasoning models need explicit max_tokens and may not support temperature
+	// Reasoning models need explicit max_tokens and thinking param
 	if (isReasoning(CONFIG.model)) {
+		body.thinking = { type: 'enabled' };
 		body.max_tokens = 8192;
 	}
 
@@ -468,6 +469,10 @@ async function agentLoop(userMessage) {
 		} catch (err) {
 			log(C.red, 'ERROR', `LLM call failed: ${err.message}`);
 			break;
+		}
+
+		if (response.reasoning_content) {
+			log(C.dim, 'THINKING', response.reasoning_content);
 		}
 
 		if (response.content) {
