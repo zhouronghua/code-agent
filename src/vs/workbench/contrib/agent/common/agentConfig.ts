@@ -1,12 +1,13 @@
 /*---------------------------------------------------------------------------------------------
- *  Agent Configuration - YAML-based config with profile support
+ *  Agent Configuration - YAML + JSON config with models.json support
  *  
  *  Resolution order:
  *    1. CLI flags (--profile, --model, etc.)
  *    2. Environment variables (OPENAI_API_KEY, LLM_MODEL, etc.)
- *    3. Project config.yaml (in CWD)
- *    4. Global ~/.codeagent/config.yaml
- *    5. Built-in defaults
+ *    3. Project config.yaml / config.json (in CWD)
+ *    4. Global ~/.codeagent/config.yaml / config.json
+ *    5. models.json (CodeBuddy-compatible, ~/.codeagent/models.json or ~/.codebuddy/models.json)
+ *    6. Built-in defaults
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs';
@@ -46,6 +47,27 @@ interface ConfigFile {
 	skills?: string[];
 	rules?: string[];
 	mcp_servers?: Record<string, McpServerConfig>;
+}
+
+// CodeBuddy-compatible models.json entry
+interface ModelEntry {
+	id: string;
+	name?: string;
+	vendor?: string;
+	apiKey: string;
+	url: string;
+	maxInputTokens: number;
+	maxOutputTokens: number;
+	supportsToolCall?: boolean;
+	supportsImages?: boolean;
+	supportsReasoning?: boolean;
+	thinking?: { type: string };
+	maxTokens?: number;
+}
+
+interface ModelsFile {
+	models: ModelEntry[];
+	availableModels?: string[];
 }
 
 function parseYaml(text: string): ConfigFile {
@@ -180,9 +202,52 @@ function parseYaml(text: string): ConfigFile {
 function findConfigFile(): string | undefined {
 	const candidates = [
 		path.join(process.cwd(), 'config.yaml'),
+		path.join(process.cwd(), 'config.json'),
 		path.join(os.homedir(), '.codeagent', 'config.yaml'),
+		path.join(os.homedir(), '.codeagent', 'config.json'),
 	];
 	return candidates.find(p => fs.existsSync(p));
+}
+
+function findModelsJson(): string | undefined {
+	const candidates = [
+		path.join(process.cwd(), 'models.json'),
+		path.join(os.homedir(), '.codeagent', 'models.json'),
+		path.join(os.homedir(), '.codebuddy', 'models.json'),  // shared compat
+	];
+	return candidates.find(p => fs.existsSync(p));
+}
+
+/** Convert a models.json ModelEntry to a ConfigProfile */
+function modelEntryToProfile(entry: ModelEntry): ConfigProfile {
+	// Strip /chat/completions suffix if present, to get base URL
+	const apiBase = entry.url.replace(/\/chat\/completions\/?$/, '');
+	return {
+		provider: 'openai',
+		model: entry.id,
+		api_key: entry.apiKey,
+		api_base: apiBase,
+		max_input_tokens: entry.maxInputTokens,
+		max_output_tokens: entry.maxOutputTokens || entry.maxTokens,
+	};
+}
+
+/** Load models from a CodeBuddy-compatible models.json file */
+function loadModelsJson(): Record<string, ConfigProfile> | undefined {
+	const modelsPath = findModelsJson();
+	if (!modelsPath) return undefined;
+
+	try {
+		const raw = fs.readFileSync(modelsPath, 'utf-8');
+		const data: ModelsFile = JSON.parse(raw);
+		const profiles: Record<string, ConfigProfile> = {};
+		for (const entry of data.models) {
+			profiles[entry.id] = modelEntryToProfile(entry);
+		}
+		return profiles;
+	} catch {
+		return undefined;
+	}
 }
 
 function resolveHomePath(p: string): string {
@@ -218,10 +283,19 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 	if (configPath) {
 		try {
 			const raw = fs.readFileSync(configPath, 'utf-8');
-			fileConfig = parseYaml(raw);
+			fileConfig = configPath.endsWith('.json')
+				? JSON.parse(raw) as ConfigFile
+				: parseYaml(raw);
 		} catch {
 			// ignore parse errors, fall through to env/defaults
 		}
+	}
+
+	// Load models from models.json (CodeBuddy-compatible format)
+	const modelsProfiles = loadModelsJson();
+	if (modelsProfiles) {
+		// Merge: models.json provides model definitions, config.yaml profiles take precedence
+		fileConfig.profiles = { ...modelsProfiles, ...fileConfig.profiles };
 	}
 
 	const profileName = cliProfile
@@ -264,6 +338,17 @@ export function loadConfigForProfile(profileName: string): ResolvedConfig {
 }
 
 export function listProfiles(): Array<{ name: string; provider: string; model: string }> {
+	// First check models.json
+	const modelsProfiles = loadModelsJson();
+	if (modelsProfiles) {
+		return Object.entries(modelsProfiles).map(([name, p]) => ({
+			name,
+			provider: p.provider,
+			model: p.model,
+		}));
+	}
+
+	// Fall back to config.yaml
 	const configPath = findConfigFile();
 	if (!configPath) return [];
 

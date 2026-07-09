@@ -1,0 +1,47 @@
+{
+  "models": [
+    {
+      "id": "deepseek-v4-pro",
+      "name": "custom",
+      "vendor": "enflameapi",
+      "apiKey": "your-api-key-here",
+      "url": "https://api.enflame.cn/v1/chat/completions",
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 393216,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "thinking": {"type": "enabled"},
+      "maxTokens": 393216
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "custom",
+      "vendor": "enflameapi",
+      "apiKey": "your-api-key-here",
+      "url": "https://api.enflame.cn/v1/chat/completions",
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 393216,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "supportsReasoning": false
+    },
+    {
+      "id": "gpt-4o",
+      "name": "custom",
+      "vendor": "openai",
+      "apiKey": "sk-your-openai-key-here",
+      "url": "https://api.openai.com/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 16384,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "supportsReasoning": false
+    }
+  ],
+  "availableModels": [
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "gpt-4o"
+  ]
+}

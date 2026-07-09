@@ -3,60 +3,20 @@
 #   - ./config.yaml              (project-level, highest priority)
 #   - ~/.codeagent/config.yaml   (global, shared across projects)
 #
-# Then fill in your API keys and adjust settings as needed.
+# Model definitions are in models.json (CodeBuddy-compatible format).
+#   - ~/.codeagent/models.json   (global)
+#   - ./models.json              (project-level)
+#
+# You can override specific model params in the profiles section below.
+# profile values take precedence over models.json entries.
 
-# Active profile (switch with --profile flag or AGENT_PROFILE env var)
+# Active profile — must match an "id" in models.json
 active_profile: openai
 
-# LLM Provider profiles
-# Each profile defines a provider, model, API key, and optional base URL.
-# You can define as many profiles as you need and switch between them.
-profiles:
-  openai:
-    provider: openai
-    model: gpt-4o
-    api_key: "sk-your-openai-key-here"
-    api_base: https://api.openai.com/v1
-
-  anthropic:
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-    api_key: "sk-ant-your-anthropic-key-here"
-    api_base: https://api.anthropic.com
-
-  ollama:
-    provider: ollama
-    model: llama3
-    api_base: http://localhost:11434
-
-  # Example: custom OpenAI-compatible provider
-  deepseek-v4-flash:
-    provider: openai
-    model: deepseek-v4-flash
-    api_key: "your-key"
-    api_base: https://api.enflame.cn/v1
-
-  deepseek-v4-pro:
-    provider: openai
-    model: deepseek-v4-pro
-    api_key: "your-key"
-    api_base: https://api.enflame.cn/v1
-    # Features:
-    #   - reasoning_content (thinking mode) auto-detected
-    #   - parallel_tool_calls enabled by default
-    #   - max_tokens: configurable via max_output_tokens (default 65536)
-    #   - Input context limit: configurable via max_input_tokens (default 200000)
-    #   - Streaming works but disabled in thinking mode
-    # Model limits (override as needed):
-    max_input_tokens: 1000000
-    max_output_tokens: 393216
-
-  deepseek-v4-reasoner:
-    provider: openai
-    model: deepseek-v4-reasoner
-    api_key: "your-key"
-    api_base: https://api.enflame.cn/v1
-    # Reasoning model: uses reasoning_content for chain-of-thought
+# Override model params here (optional, takes precedence over models.json)
+# profiles:
+#   deepseek-v4-pro:
+#     temperature: 0.5
 
 # Agent settings
 agent:
