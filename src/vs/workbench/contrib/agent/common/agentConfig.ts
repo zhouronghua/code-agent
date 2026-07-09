@@ -311,10 +311,14 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		profileName = 'default';
 	}
 
-	const profile = fileConfig.profiles?.[profileName];
+	let profile = fileConfig.profiles?.[profileName];
 	if (fileConfig.profiles && !profile && profileName !== 'default') {
 		const available = Object.keys(fileConfig.profiles).join(', ');
 		console.warn(`Warning: profile "${profileName}" not found in config. Available: ${available}`);
+		// Auto-fallback to first available model
+		profileName = Object.keys(fileConfig.profiles)[0];
+		profile = fileConfig.profiles?.[profileName];
+		console.warn(`         Falling back to: "${profileName}"`);
 	}
 
 	const agentConfig: IAgentConfig = {
