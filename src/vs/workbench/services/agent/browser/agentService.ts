@@ -209,7 +209,7 @@ export class AgentService extends Disposable implements IAgentService {
 			...DEFAULT_AGENT_CONFIG,
 			provider: (configSection.provider as IAgentConfig['provider']) || DEFAULT_AGENT_CONFIG.provider,
 			model: (configSection.model as string) || DEFAULT_AGENT_CONFIG.model,
-			apiKey: (configSection.apiKey as string) || DEFAULT_AGENT_CONFIG.apiKey,
+			apiKey: (configSection.apiKey as string) || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || DEFAULT_AGENT_CONFIG.apiKey,
 			apiBase: (configSection.apiBase as string) || DEFAULT_AGENT_CONFIG.apiBase,
 			maxSteps: (configSection.maxSteps as number) || DEFAULT_AGENT_CONFIG.maxSteps,
 			temperature: (configSection.temperature as number) ?? DEFAULT_AGENT_CONFIG.temperature,

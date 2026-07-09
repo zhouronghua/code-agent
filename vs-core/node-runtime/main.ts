@@ -414,7 +414,7 @@ function createServices(resolved: ResolvedConfig) {
 	const config = resolved.agentConfig;
 
 	if (!config.apiKey) {
-		console.error(`${C.red}No API key found. Set OPENAI_API_KEY, or configure api_key in config.yaml.${C.reset}`);
+		console.error(`${C.red}No API key found. Set OPENAI_API_KEY, or configure apiKey in ~/.codeagent/models.json or config.yaml.${C.reset}`);
 		process.exit(1);
 	}
 
@@ -525,7 +525,7 @@ async function main() {
 	if (opts.showProfiles) {
 		const profiles = listProfiles();
 		if (profiles.length === 0) {
-			console.log(`${C.dim}No config.yaml found. Run from project root or create ~/.codeagent/config.yaml${C.reset}`);
+			console.log(`${C.dim}No models.json or config.yaml found. Create ~/.codeagent/models.json or ~/.codeagent/config.yaml${C.reset}`);
 		} else {
 			console.log(`\n${C.bold}Available profiles:${C.reset}`);
 			for (const p of profiles) {

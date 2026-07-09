@@ -151,7 +151,7 @@ export interface IAgentTaskLog {
 
 export const DEFAULT_AGENT_CONFIG: IAgentConfig = {
 	provider: 'openai',
-	model: 'gpt-4o',
+	model: 'deepseek-v4-pro',
 	apiKey: '',
 	maxSteps: 999999,  // Effectively unlimited
 	maxContextTokens: 200000,

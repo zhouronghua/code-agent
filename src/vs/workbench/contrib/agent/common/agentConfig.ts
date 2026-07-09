@@ -298,10 +298,18 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		fileConfig.profiles = { ...modelsProfiles, ...fileConfig.profiles };
 	}
 
-	const profileName = cliProfile
+	// Resolve profile name with smart default: if only models.json is available
+	// and no active_profile is set, auto-select the first model
+	let profileName = cliProfile
 		|| process.env.AGENT_PROFILE
 		|| fileConfig.active_profile
-		|| 'default';
+		|| undefined;
+
+	if (!profileName && fileConfig.profiles && Object.keys(fileConfig.profiles).length > 0) {
+		profileName = Object.keys(fileConfig.profiles)[0];
+	} else if (!profileName) {
+		profileName = 'default';
+	}
 
 	const profile = fileConfig.profiles?.[profileName];
 	if (fileConfig.profiles && !profile && profileName !== 'default') {
