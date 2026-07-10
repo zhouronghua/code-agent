@@ -397,6 +397,8 @@ Intervention:
   /btw <hint>    Inject a hint into the agent's reasoning for subsequent
                  turns. Accumulates across multiple /btw calls.
                  Useful for course-correcting or adding context mid-session.
+  /btw cancel    Cancel the currently running tool (e.g., a long build or
+                 poll). The agent will continue with the next step.
 
 Modes:
   agent   Full autonomy: read, write, edit files, run commands
@@ -766,7 +768,7 @@ async function main() {
 	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, exit${C.reset}`);
 	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save${C.reset}`);
 	console.log(`${C.dim}Tasks:   /tasks, /task <id>, /delete-task <id>${C.reset}`);
-	console.log(`${C.dim}Tip: use /btw <hint> any time — even while agent is running${C.reset}`);
+	console.log(`${C.dim}Tip: use /btw <hint> any time — even while agent is running; /btw cancel to abort current tool${C.reset}`);
 	console.log(`${C.dim}Tip: press Tab to auto-complete commands like /resume, /mode, /profile, /skill${C.reset}\n`);
 
 	let agentIsRunning = false;
@@ -829,10 +831,20 @@ async function main() {
 			if (trimmed.startsWith('/btw ')) {
 				const hint = trimmed.slice(5).trim();
 				if (hint) {
-					agentLoop.injectBtwHint(hint);
-					log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+					// Check for cancel/abort command
+					if (hint === 'cancel' || hint === 'abort') {
+						const cancelled = agentLoop.cancelCurrentTool();
+						if (cancelled) {
+							log(C.magenta, 'BTW', 'Cancelling current tool execution...');
+						} else {
+							log(C.yellow, 'BTW', 'No tool currently running to cancel');
+						}
+					} else {
+						agentLoop.injectBtwHint(hint);
+						log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+					}
 				} else {
-					log(C.yellow, 'BTW', 'Usage: /btw <your hint>');
+					log(C.yellow, 'BTW', 'Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)');
 				}
 			} else if (trimmed) {
 				bufferedLines.push(trimmed);
@@ -1057,11 +1069,15 @@ async function main() {
 			if (trimmed.startsWith('/btw ')) {
 				const hint = trimmed.slice(5).trim();
 				if (hint) {
-					agentLoop.appendExtraSystemPrompt(hint);
-					log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
-					console.log(`${C.dim}(Will affect subsequent agent reasoning in this session)${C.reset}`);
+					if (hint === 'cancel' || hint === 'abort') {
+						log(C.yellow, 'BTW', 'No agent currently running. Use /btw cancel while agent is running to abort a tool.');
+					} else {
+						agentLoop.appendExtraSystemPrompt(hint);
+						log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+						console.log(`${C.dim}(Will affect subsequent agent reasoning in this session)${C.reset}`);
+					}
 				} else {
-					log(C.yellow, 'BTW', 'Usage: /btw <your hint>');
+					log(C.yellow, 'BTW', 'Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)');
 				}
 				processingLock = false; displayPrompt(); return;
 			}

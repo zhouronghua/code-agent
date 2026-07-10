@@ -9,7 +9,7 @@ export abstract class AgentTool {
 	abstract readonly description: string;
 	abstract readonly parameters: Record<string, unknown>;
 
-	abstract execute(args: Record<string, unknown>): Promise<IToolResult>;
+	abstract execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult>;
 
 	toSchema(): IToolSchema {
 		return {

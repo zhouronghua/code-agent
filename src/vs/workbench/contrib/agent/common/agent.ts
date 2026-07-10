@@ -85,6 +85,9 @@ export class AgentLoop {
 	/** Pending /btw hints injected during agent execution — consumed each loop iteration. */
 	private _pendingBtwHints: string[] = [];
 
+	/** AbortController for the currently executing tool, if any. Allows /btw cancel. */
+	private _currentToolController: AbortController | undefined;
+
 	// ---- Per-task execution tracing ----
 	private _stepRecords: IStepRecord[] = [];
 	private _taskStartTime = 0;
@@ -136,11 +139,39 @@ export class AgentLoop {
 	 * Inject a /btw hint while the agent is actively running.
 	 * The hint is queued and will be delivered as a User message at the
 	 * start of the next ReAct loop iteration, allowing mid-reasoning intervention.
+	 *
+	 * Special commands:
+	 *   "/btw cancel" or "/btw abort" — cancels the currently running tool immediately.
 	 */
 	injectBtwHint(hint: string): void {
-		this._pendingBtwHints.push(hint.trim());
+		const trimmed = hint.trim();
+		// Check for cancel/abort command
+		if (trimmed === 'cancel' || trimmed === 'abort') {
+			if (this._currentToolController) {
+				this._currentToolController.abort();
+				console.log('[BTW] Cancelling current tool execution...');
+				return;
+			}
+			// No tool running — treat as a regular hint to cancel the overall task
+			this._pendingBtwHints.push('[User requested cancellation of the current operation.]');
+			return;
+		}
+		this._pendingBtwHints.push(trimmed);
 		// Also append to extraSystemPrompt so the hint persists across runs
 		this.appendExtraSystemPrompt(hint);
+	}
+
+	/**
+	 * Cancel the currently executing tool (if any).
+	 * Returns true if a tool was cancelled, false if no tool was running.
+	 */
+	cancelCurrentTool(): boolean {
+		if (this._currentToolController) {
+			this._currentToolController.abort();
+			this._currentToolController = undefined;
+			return true;
+		}
+		return false;
 	}
 
 	get isRunning(): boolean {
@@ -656,21 +687,49 @@ export class AgentLoop {
 			await this._checkpointManager.snapshotFile(checkpointId, args.path as string);
 		}
 
+		// Create an AbortController for this tool execution so /btw cancel can interrupt it.
+		const controller = new AbortController();
+		this._currentToolController = controller;
+
 		try {
+			// If the cancellation token is already set, check it before starting
+			if (controller.signal.aborted) {
+				return {
+					toolCallId,
+					success: false,
+					output: '',
+					error: 'Tool execution cancelled by user (/btw cancel)',
+				};
+			}
+
 			// If tool specifies its own timeout, respect it; otherwise use stepTimeout
 			const effectiveTimeout = (args.timeout as number) || this._config.stepTimeout;
 			const result = await Promise.race([
-				tool.execute({ ...args, _toolCallId: toolCallId }),
+				tool.execute({ ...args, _toolCallId: toolCallId }, controller.signal),
 				this._timeout(effectiveTimeout, toolCallId),
 			]);
 			return result;
 		} catch (err) {
+			// Check if this was an abort (cancellation)
+			if (controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+				return {
+					toolCallId,
+					success: false,
+					output: '',
+					error: 'Tool execution cancelled by user (/btw cancel)',
+				};
+			}
 			return {
 				toolCallId,
 				success: false,
 				output: '',
 				error: `Tool execution error: ${(err as Error).message}`,
 			};
+		} finally {
+			// Clear the controller reference
+			if (this._currentToolController === controller) {
+				this._currentToolController = undefined;
+			}
 		}
 	}
 

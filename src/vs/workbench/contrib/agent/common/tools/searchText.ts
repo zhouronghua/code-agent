@@ -41,12 +41,16 @@ export class SearchTextTool extends AgentTool {
 		super();
 	}
 
-	async execute(args: Record<string, unknown>): Promise<IToolResult> {
+	async execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult> {
 		const toolCallId = args._toolCallId as string || '';
 		const pattern = args.pattern as string;
 		const searchPath = args.path as string | undefined;
 		const glob = args.glob as string | undefined;
 		const maxResults = (args.max_results as number) || 50;
+
+		if (signal?.aborted) {
+			return this.failure(toolCallId, 'Tool execution cancelled by user');
+		}
 
 		// Validate regex safety before passing to ripgrep
 		try {

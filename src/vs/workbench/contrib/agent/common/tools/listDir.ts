@@ -34,11 +34,15 @@ export class ListDirectoryTool extends AgentTool {
 		super();
 	}
 
-	async execute(args: Record<string, unknown>): Promise<IToolResult> {
+	async execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult> {
 		const toolCallId = args._toolCallId as string || '';
 		const path = args.path as string;
 		const recursive = args.recursive as boolean || false;
 		const maxDepth = (args.max_depth as number) || 3;
+
+		if (signal?.aborted) {
+			return this.failure(toolCallId, 'Tool execution cancelled by user');
+		}
 
 		try {
 			const uri = URI.file(path);

@@ -37,11 +37,15 @@ export class SearchFilesTool extends AgentTool {
 		super();
 	}
 
-	async execute(args: Record<string, unknown>): Promise<IToolResult> {
+	async execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult> {
 		const toolCallId = args._toolCallId as string || '';
 		const pattern = args.pattern as string;
 		const searchPath = args.path as string | undefined;
 		const maxResults = (args.max_results as number) || 100;
+
+		if (signal?.aborted) {
+			return this.failure(toolCallId, 'Tool execution cancelled by user');
+		}
 
 		try {
 			const folderUri = searchPath ? URI.file(searchPath) : this._workspaceRoot;

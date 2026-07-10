@@ -71,7 +71,7 @@ export class PollTool extends AgentTool {
 		super();
 	}
 
-	async execute(args: Record<string, unknown>): Promise<IToolResult> {
+	async execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult> {
 		const toolCallId = args._toolCallId as string || '';
 		const command = args.command as string;
 		const successPattern = args.success_pattern as string | undefined;
@@ -85,9 +85,20 @@ export class PollTool extends AgentTool {
 			return this.failure(toolCallId, 'max_attempts must be >= 1');
 		}
 
+		// Check if already aborted
+		if (signal?.aborted) {
+			return this.failure(toolCallId, 'Tool execution cancelled by user');
+		}
+
 		const allOutputs: string[] = [];
 
 		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			// Check for abort signal before each attempt
+			if (signal?.aborted) {
+				allOutputs.push('⏹️ Poll cancelled by user');
+				return this.failure(toolCallId, allOutputs.join('\n\n'));
+			}
+
 			// Run the check command
 			const output = await this._runCheck(command, cwd, commandTimeout);
 			const exitCode = output.exitCode;
@@ -116,6 +127,12 @@ export class PollTool extends AgentTool {
 
 			// Not yet succeeded — calculate backoff delay
 			if (attempt < maxAttempts - 1) {
+				// Check abort before sleeping
+				if (signal?.aborted) {
+					allOutputs.push('⏹️ Poll cancelled by user');
+					return this.failure(toolCallId, allOutputs.join('\n\n'));
+				}
+
 				// Exponential backoff: initialDelay * 2^attempt, capped at maxDelay
 				const delay = Math.min(initialDelay * Math.pow(2, attempt), maxDelay);
 				const delayMs = delay * 1000;
@@ -124,7 +141,7 @@ export class PollTool extends AgentTool {
 					`⏳ Waiting ${delay}s before next poll (attempt ${attempt + 2}/${maxAttempts})...`
 				);
 
-				await this._sleep(delayMs);
+				await this._sleep(delayMs, signal);
 			}
 		}
 
@@ -193,8 +210,22 @@ export class PollTool extends AgentTool {
 		});
 	}
 
-	private _sleep(ms: number): Promise<void> {
-		return new Promise(resolve => setTimeout(resolve, ms));
+	private _sleep(ms: number, signal?: AbortSignal): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(resolve, ms);
+			if (signal) {
+				const onAbort = () => {
+					clearTimeout(timer);
+					reject(new DOMException('Aborted', 'AbortError'));
+				};
+				if (signal.aborted) {
+					clearTimeout(timer);
+					reject(new DOMException('Aborted', 'AbortError'));
+					return;
+				}
+				signal.addEventListener('abort', onAbort, { once: true });
+			}
+		});
 	}
 
 	/**

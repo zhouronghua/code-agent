@@ -36,11 +36,16 @@ export class RunTerminalTool extends AgentTool {
 		super();
 	}
 
-	async execute(args: Record<string, unknown>): Promise<IToolResult> {
+	async execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult> {
 		const toolCallId = args._toolCallId as string || '';
 		const command = args.command as string;
 		const cwd = (args.cwd as string) || this._defaultCwd;
 		const timeout = (args.timeout as number) || 30000;
+
+		// Check if already aborted
+		if (signal?.aborted) {
+			return this.failure(toolCallId, 'Tool execution cancelled by user');
+		}
 
 		// Defence-in-depth: detect obviously dangerous commands before execution.
 		// The system prompt instructs the LLM to avoid these, but this acts as a
@@ -66,14 +71,17 @@ export class RunTerminalTool extends AgentTool {
 		}
 
 		try {
-			const output = await this._executeCommand(command, cwd, timeout);
+			const output = await this._executeCommand(command, cwd, timeout, signal);
 			return this.success(toolCallId, output);
 		} catch (err) {
+			if (signal?.aborted) {
+				return this.failure(toolCallId, 'Tool execution cancelled by user');
+			}
 			return this.failure(toolCallId, `Command failed: ${(err as Error).message}`);
 		}
 	}
 
-	private async _executeCommand(command: string, cwd: string, timeout: number): Promise<string> {
+	private async _executeCommand(command: string, cwd: string, timeout: number, signal?: AbortSignal): Promise<string> {
 		return new Promise<string>((resolve, reject) => {
 			const chunks: string[] = [];
 			let settled = false;
@@ -88,6 +96,7 @@ export class RunTerminalTool extends AgentTool {
 
 			const cleanup = () => {
 				clearTimeout(timer);
+				abortDisposable?.();
 				dataDisposable.dispose();
 				exitDisposable.dispose();
 				// Kill the underlying process to prevent zombie processes
@@ -102,6 +111,24 @@ export class RunTerminalTool extends AgentTool {
 					resolve(output + '\n[Command timed out after ' + timeout + 'ms]');
 				}
 			}, timeout);
+
+			// Listen for abort signal to kill the process
+			let abortDisposable: (() => void) | undefined;
+			if (signal) {
+				const onAbort = () => {
+					if (!settled) {
+						settled = true;
+						cleanup();
+						reject(new DOMException('Aborted', 'AbortError'));
+					}
+				};
+				if (signal.aborted) {
+					onAbort();
+					return;
+				}
+				signal.addEventListener('abort', onAbort, { once: true });
+				abortDisposable = () => signal.removeEventListener('abort', onAbort);
+			}
 
 			const dataDisposable = instance.onData(data => {
 				chunks.push(data);

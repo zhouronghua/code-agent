@@ -34,11 +34,15 @@ export class ReadFileTool extends AgentTool {
 		super();
 	}
 
-	async execute(args: Record<string, unknown>): Promise<IToolResult> {
+	async execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult> {
 		const toolCallId = args._toolCallId as string || '';
 		const path = args.path as string;
 		const offset = (args.offset as number) || 1;
 		const limit = args.limit as number | undefined;
+
+		if (signal?.aborted) {
+			return this.failure(toolCallId, 'Tool execution cancelled by user');
+		}
 
 		try {
 			const uri = URI.file(path);
