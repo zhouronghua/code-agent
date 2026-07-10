@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodeAgent 代码仓演进历史 — v0.3.17</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --fg: #c9d1d9;
+    --border: #30363d;
+    --accent: #58a6ff;
+    --accent2: #f78166;
+    --green: #3fb950;
+    --yellow: #d2991d;
+    --muted: #8b949e;
+    --code-bg: #161b22;
+    --card-bg: #161b22;
+    --tag-bg: #1c2433;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.6;
+    padding: 0 16px 80px;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+
+  /* Header */
+  header {
+    text-align: center;
+    padding: 48px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  header h1 {
+    font-size: 2.4em;
+    font-weight: 700;
+    color: #f0f6fc;
+    margin-bottom: 8px;
+  }
+  header .subtitle {
+    font-size: 1.2em;
+    color: var(--muted);
+  }
+  header .badges {
+    margin-top: 16px;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.85em;
+    font-weight: 600;
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+  }
+  .badge.ver { color: var(--accent); border-color: var(--accent); }
+  .badge.build { color: var(--green); border-color: var(--green); }
+  .badge.tools { color: var(--accent2); border-color: var(--accent2); }
+
+  /* TOC */
+  nav.toc {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 32px;
+  }
+  nav.toc h2 { font-size: 1.1em; margin-bottom: 12px; color: #f0f6fc; }
+  nav.toc ol { padding-left: 20px; }
+  nav.toc li { margin: 4px 0; }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+
+  /* Sections */
+  section { margin-bottom: 40px; }
+  section h2 {
+    font-size: 1.5em;
+    color: #f0f6fc;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+  }
+  section h3 {
+    font-size: 1.2em;
+    color: var(--accent);
+    margin: 16px 0 10px;
+  }
+
+  /* Phase header */
+  .phase-header {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .phase-header .meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 0.9em;
+    color: var(--muted);
+  }
+  .phase-header .meta strong { color: var(--fg); }
+  .phase-header h3 { margin-top: 8px; }
+
+  /* Features table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.95em;
+  }
+  th, td {
+    padding: 8px 12px;
+    text-align: left;
+    border: 1px solid var(--border);
+  }
+  th {
+    background: var(--card-bg);
+    font-weight: 600;
+    color: #f0f6fc;
+  }
+  tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+
+  /* Commit table */
+  .commit-table td:first-child {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.85em;
+    color: var(--accent2);
+  }
+  .commit-table td:nth-child(2) { color: var(--muted); font-size: 0.9em; }
+
+  /* Code blocks */
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    overflow-x: auto;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.85em;
+    line-height: 1.5;
+    margin: 12px 0;
+  }
+  code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  pre code { background: none; padding: 0; }
+
+  /* Highlights */
+  .highlight-box {
+    background: rgba(88, 166, 255, 0.08);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    margin: 12px 0;
+    border-radius: 0 6px 6px 0;
+  }
+
+  /* Stats grid */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+  }
+  .stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-card .num { font-size: 2em; font-weight: 700; color: var(--accent); }
+  .stat-card .label { color: var(--muted); font-size: 0.9em; margin-top: 4px; }
+
+  /* Architecture diagram */
+  .arch-box {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    font-family: monospace;
+    font-size: 0.85em;
+    line-height: 1.7;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  /* Footer */
+  footer {
+    text-align: center;
+    color: var(--muted);
+    padding: 32px 0;
+    border-top: 1px solid var(--border);
+    margin-top: 48px;
+    font-size: 0.9em;
+  }
+
+  ul, ol { padding-left: 24px; }
+  li { margin: 4px 0; }
+  strong { color: #f0f6fc; }
+
+  @media (max-width: 640px) {
+    header h1 { font-size: 1.8em; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>CodeAgent 代码仓演进历史</h1>
+  <p class="subtitle">从零到 v0.3.17：一个 VS Code 架构 AI 编码代理的完整构建历程</p>
+  <div class="badges">
+    <span class="badge ver">v0.3.17</span>
+    <span class="badge build">~3,900 行 TS 核心代码</span>
+    <span class="badge build">~70KB 构建产物</span>
+    <span class="badge tools">8 个工具</span>
+    <span class="badge tools">4 种 LLM Provider</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#overview">项目概览</a></li>
+    <li><a href="#phase1">阶段一：基础架构搭建</a></li>
+    <li><a href="#phase2">阶段二：配置与文档体系</a></li>
+    <li><a href="#phase3">阶段三：稳定性打磨 (v0.2.1~v0.2.4)</a></li>
+    <li><a href="#phase4">阶段四：正式发布与 CI/CD</a></li>
+    <li><a href="#phase5">阶段五：Thinking 模式支持 (v0.2.5~v0.2.16)</a></li>
+    <li><a href="#phase6">阶段六：会话系统与上下文增强</a></li>
+    <li><a href="#phase7">阶段七：智能推理增强 (v0.3.4)</a></li>
+    <li><a href="#phase8">阶段八：交互体验升级</a></li>
+    <li><a href="#phase9">阶段九：执行追踪与异步工具</a></li>
+    <li><a href="#phase10">阶段十：模型配置现代化 (v0.3.16~v0.3.17)</a></li>
+    <li><a href="#features">当前功能全景图</a></li>
+    <li><a href="#architecture">技术架构总览</a></li>
+    <li><a href="#stats">代码统计</a></li>
+  </ol>
+</nav>
+
+<!-- ===== OVERVIEW ===== -->
+<section id="overview">
+  <h2>1. 项目概览</h2>
+
+  <p><strong>CodeAgent</strong> 是一个基于 VS Code 架构的 AI 编码代理 CLI 工具，仿照 Cursor Agent 设计，支持多 LLM Provider、Cursor 兼容技能/规则系统、MCP 协议扩展，并可通过 npm / GitHub Releases / Docker 多种方式分发。</p>
+
+  <table style="margin-top:16px;">
+    <tr><th style="width:140px;">属性</th><th>说明</th></tr>
+    <tr><td><strong>语言</strong></td><td>TypeScript (ES2022)</td></tr>
+    <tr><td><strong>运行时</strong></td><td>Node.js &ge; 18</td></tr>
+    <tr><td><strong>打包工具</strong></td><td>esbuild (单文件打包)</td></tr>
+    <tr><td><strong>LLM 支持</strong></td><td>OpenAI、Anthropic (Claude)、Ollama、DeepSeek、任意 OpenAI 兼容 API</td></tr>
+    <tr><td><strong>分发方式</strong></td><td>npm、GitHub Releases (.tgz)、Docker、单文件直接运行</td></tr>
+    <tr><td><strong>构建产物</strong></td><td>~70KB minified，零运行时依赖</td></tr>
+  </table>
+
+  <div class="stats-grid" style="margin-top:16px;">
+    <div class="stat-card"><div class="num">70+</div><div class="label">提交数</div></div>
+    <div class="stat-card"><div class="num">20</div><div class="label">正式版本</div></div>
+    <div class="stat-card"><div class="num">31</div><div class="label">TS 源文件</div></div>
+    <div class="stat-card"><div class="num">3,863</div><div class="label">核心代码行</div></div>
+    <div class="stat-card"><div class="num">8</div><div class="label">内置工具</div></div>
+    <div class="stat-card"><div class="num">4</div><div class="label">LLM Provider</div></div>
+  </div>
+</section>
+
+<!-- ===== PHASE 1 ===== -->
+<section id="phase1">
+  <h2>2. 阶段一：基础架构搭建</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-04-24</strong></span><span>🔑 <strong>init</strong> → <strong>[Feature] CodeAgent</strong></span></div>
+    <h3>ReAct 引擎 · 三模式 · 7 工具 · 3 Provider</h3>
+  </div>
+
+  <h3>核心交付</h3>
+  <ul>
+    <li><strong>Agent Loop</strong>: 完整的 ReAct 循环：推理 → 工具调用 → 观察 → 循环</li>
+    <li><strong>三种模式</strong>: Agent (自主执行) / Ask (只读) / Plan (规划)</li>
+    <li><strong>流式输出</strong>: 实时逐 token 显示 LLM 推理过程</li>
+    <li><strong>并行 Agent</strong>: 多任务并发执行，独立上下文隔离</li>
+    <li><strong>7 个工具</strong>: <code>readFile</code>, <code>writeFile</code>, <code>editFile</code>, <code>list_directory</code>, <code>search_text</code>, <code>search_files</code>, <code>run_terminal</code></li>
+    <li><strong>LLM Provider 层</strong>: OpenAI (含 DeepSeek 兼容)、Anthropic (Claude)、Ollama</li>
+    <li><strong>Checkpoint 系统</strong>: 写文件前自动快照，支持回滚</li>
+    <li><strong>Context Management</strong>: 滑动窗口 + 自动摘要压缩</li>
+    <li><strong>vs-core 精简层</strong>: 事件系统、生命周期、URI、DI 容器等 VS Code API Shim</li>
+    <li><strong>Node.js 运行时</strong>: 文件服务 (fs)、搜索服务 (ripgrep)、终端服务 (child_process)</li>
+  </ul>
+
+  <h3>分层架构</h3>
+  <pre><code>User CLI / VS Code Panel
+        │
+        ▼
+  AgentCore (orchestrator)
+  ├── ModeManager  (Agent/Ask/Plan)
+  ├── Planner      (task decomposition)
+  ├── ParallelManager (concurrent agents)
+  ├── Context      (sliding window + summary)
+  ├── Checkpoint   (file snapshots)
+  ├── ToolRegistry (7 tools)
+  └── LLMProvider  (OpenAI/Anthropic/Ollama)</code></pre>
+</section>
+
+<!-- ===== PHASE 2 ===== -->
+<section id="phase2">
+  <h2>3. 阶段二：配置与文档体系</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-04-24</strong></span><span>🔑 <strong>697338c</strong> → <strong>afaf156</strong></span></div>
+    <h3>YAML 配置 · Skills/Rules · 分发打包 · 完整文档</h3>
+  </div>
+
+  <h3>核心交付</h3>
+  <ul>
+    <li><strong>配置系统</strong> (<code>agentConfig.ts</code>, 378 行): YAML 多 Profile 管理，四级优先级 (CLI &gt; 环境变量 &gt; 项目配置 &gt; 全局配置)</li>
+    <li><strong>Skills 系统</strong> (<code>agentSkills.ts</code>, 245 行): Cursor 兼容 SKILL.md 加载器，自动注入代理提示词</li>
+    <li><strong>Rules 系统</strong>: <code>.mdc</code> 规则文件加载，<code>alwaysApply: true</code> 规则自动注入</li>
+    <li><strong>分发打包</strong> (<code>build.mjs</code>): esbuild 单文件打包，支持 dev/release 构建</li>
+    <li><strong>包命名</strong>: 包名 <code>code-agent</code>，npm publish 元数据，files 白名单</li>
+    <li><strong>三大文档</strong>:
+      <ul>
+        <li><code>USAGE.md</code> (342 行): 安装、配置、使用完整指南</li>
+        <li><code>CODE_ARCHITECTURE.md</code> (461 行): 分层架构与模块详解</li>
+        <li><code>README.md</code> (76 行): 项目概览与快速上手</li>
+      </ul>
+    </li>
+    <li><strong>独立 Demo</strong> (<code>standalone-demo/agent.mjs</code>): 502 行单文件零依赖实现</li>
+  </ul>
+</section>
+
+<!-- ===== PHASE 3 ===== -->
+<section id="phase3">
+  <h2>4. 阶段三：稳定性打磨</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-04-24</strong></span><span>🏷️ <strong>v0.2.1 → v0.2.4</strong></span></div>
+    <h3>Temperature 兼容修复 · 配置诊断 · 版本管理</h3>
+  </div>
+
+  <table class="commit-table">
+    <tr><th>提交</th><th>内容</th></tr>
+    <tr><td><code>c6a8fe9</code></td><td>修复 temperature 兼容性，支持运行时 Profile 切换</td></tr>
+    <tr><td><code>258554c</code></td><td>按 Profile 独立配置 temperature + 400 错误自动重试</td></tr>
+    <tr><td><code>c712cbd</code></td><td>改进 YAML 注释解析，增强配置诊断能力</td></tr>
+    <tr><td><code>0ded280</code></td><td>添加 <code>--version</code> flag；修复空 tool result 导致 API 400</td></tr>
+    <tr><td><code>908e461</code></td><td>同步 AGENT_VERSION 常量到 0.2.4</td></tr>
+  </table>
+</section>
+
+<!-- ===== PHASE 4 ===== -->
+<section id="phase4">
+  <h2>5. 阶段四：正式发布与 CI/CD</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-04-24</strong></span><span>🏷️ <strong>v0.2.4</strong></span></div>
+    <h3>Initial Release · MCP 协议 · GitHub Actions · JFrog 分发</h3>
+  </div>
+
+  <h3>核心交付</h3>
+  <ul>
+    <li><strong>Initial Release 里程碑</strong>: 项目正式发布 (提交 <code>a6e6a88</code>)</li>
+    <li><strong>MCP 协议支持</strong>: stdio 和 HTTP 两种 MCP 服务器配置，Agent 可调用 MCP 提供的额外工具</li>
+    <li><strong>GitHub Actions CI/CD</strong>:
+      <ul>
+        <li><code>ci.yml</code>: 构建 + 类型检查自动化</li>
+        <li><code>release.yml</code>: Tag 触发 → 构建 → 打包 .tgz → GitHub Release → npm publish</li>
+      </ul>
+    </li>
+    <li><strong>JFrog Artifactory</strong>: 内部制品仓库分发指南</li>
+  </ul>
+</section>
+
+<!-- ===== PHASE 5 ===== -->
+<section id="phase5">
+  <h2>6. 阶段五：Thinking 模式支持</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-04-27~28</strong></span><span>🏷️ <strong>v0.2.5 → v0.2.16</strong></span><span>📊 <strong>20+ 次提交</strong></span></div>
+    <h3>DeepSeek reasoning 模型兼容 · 自动重试 · 上下文注入</h3>
+  </div>
+
+  <p>这是项目迭代<strong>最密集的阶段</strong>，核心解决 DeepSeek reasoning 模型的兼容性难题。</p>
+
+  <table class="commit-table">
+    <tr><th>提交</th><th>说明</th></tr>
+    <tr><td><code>a77a902</code></td><td>移除步数限制，修复 <code>reasoning_content</code> 处理</td></tr>
+    <tr><td><code>18ae838</code></td><td>通过 esbuild <code>define</code> 自动注入 package.json 版本号</td></tr>
+    <tr><td><code>dd8a10e</code></td><td>修复 reasoning_content 在 continue 时的错误</td></tr>
+    <tr><td><code>de60a48</code></td><td>修复工具超时，改进 reasoning_content 处理逻辑</td></tr>
+    <tr><td><code>169aa67</code></td><td><strong>🔑 关键</strong>: 修复 thinking 模式下的孤儿 tool messages</td></tr>
+    <tr><td><code>ec57db1</code></td><td>简化 thinking 模式过滤器：保留所有 tool messages</td></tr>
+    <tr><td><code>4bf4323</code></td><td><strong>🔑 关键</strong>: 确保 thinking 模式下消息序列完整性</td></tr>
+    <tr><td><code>4fb90ee</code></td><td><strong>🆕 新增</strong>: 自动重试临时 API 错误 (429/5xx)</td></tr>
+    <tr><td><code>29c3845</code></td><td>客户端错误 (4xx) 不重试；thinking 模型禁用 streaming</td></tr>
+    <tr><td><code>aa1a127</code></td><td>修复上下文压缩后的孤儿 tool messages</td></tr>
+    <tr><td><code>d259cf8</code></td><td>确保 thinking 模式下所有 assistant messages 均有 reasoning_content</td></tr>
+    <tr><td><code>0c87d9c</code></td><td>过滤 thinking 模式下无 reasoning_content 的 assistant messages</td></tr>
+    <tr><td><code>d6277e2</code></td><td><strong>🆕 新增</strong>: 将当前工作目录注入系统提示词</td></tr>
+    <tr><td><code>06fd30f</code></td><td>重构 llmOpenai.ts (242 行变更)，大幅改进 reasoning_content 处理</td></tr>
+  </table>
+
+  <div class="highlight-box">
+    <strong>核心技术难点</strong>：DeepSeek 等推理模型返回 <code>reasoning_content</code> 字段，与标准 OpenAI API 交互存在差异。
+    消息序列中 tool message 与 assistant message 的映射关系需严格保持；
+    Streaming 模式下 reasoning_content 的正确拼接与分发；
+    上下文压缩后消息序列完整性的恢复。
+  </div>
+</section>
+
+<!-- ===== PHASE 6 ===== -->
+<section id="phase6">
+  <h2>7. 阶段六：会话系统与上下文增强</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-06-03</strong></span></div>
+    <h3>会话持久化 · 上下文增强 · 测试框架</h3>
+  </div>
+
+  <h3>核心交付</h3>
+  <ul>
+    <li><strong>会话管理系统</strong> (<code>agentSessions.ts</code>, 233 行新文件):
+      <ul>
+        <li>会话持久化：保存/恢复完整对话历史</li>
+        <li>会话列表/删除：管理所有历史会话</li>
+        <li>自动保存模式：<code>/auto-save</code> 开关</li>
+        <li>会话恢复：<code>/resume [session-id]</code></li>
+        <li>多会话共存：同时维护多个独立会话</li>
+      </ul>
+    </li>
+    <li><strong>上下文增强</strong>: 改进滑动窗口算法，增强压缩策略，Checkpoint 文件比较</li>
+    <li><strong>runTerminal 增强</strong>: 超时控制、输出截断、exit code 检查</li>
+    <li><strong>searchText 增强</strong>: 支持 regex 搜索</li>
+    <li><strong>综合测试</strong> (<code>test_harness.mjs</code>, 213 行): 多场景自动化测试</li>
+  </ul>
+</section>
+
+<!-- ===== PHASE 7 ===== -->
+<section id="phase7">
+  <h2>8. 阶段七：智能推理增强</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-07-01</strong></span><span>🏷️ <strong>v0.3.4</strong></span></div>
+    <h3>自我验证 · 复杂任务检测 · 推理增强提示词</h3>
+  </div>
+
+  <h3>核心交付 (107 行新增)</h3>
+  <ul>
+    <li><strong>自我验证机制</strong>: Agent 完成回答后自动注入验证提示词，确保充分验证结果。最多 2 轮验证后接受结论</li>
+    <li><strong>复杂任务检测</strong>: 识别包含 "refactor"、"重构"、"migrate"、"architecture"、"性能" 等关键词的复杂任务，自动触发深度思考模式</li>
+    <li><strong>推理增强提示词</strong> (35 行新增): 针对复杂任务注入专门引导 Agent 深度分解与推理</li>
+    <li><strong>OpenAI o-series 兼容</strong>: 适配推理模型的 reasoning 参数</li>
+  </ul>
+</section>
+
+<!-- ===== PHASE 8 ===== -->
+<section id="phase8">
+  <h2>9. 阶段八：交互体验升级</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-07-01~02</strong></span></div>
+    <h3>/btw 中途干预 · 优雅退出 · Tab 补全</h3>
+  </div>
+
+  <h3>核心交付</h3>
+  <ul>
+    <li><strong><code>/btw</code> 中途干预命令</strong> (194 行新增 CLI 逻辑): 任务执行中输入 <code>/btw</code> 插入额外指令；<code>/btw cancel</code> 取消当前操作</li>
+    <li><strong>优雅 Ctrl+C 退出</strong>: 信号处理改进，安全中断不丢数据</li>
+    <li><strong>Sleep 进度指示</strong>: 长任务等待时显示进度动画</li>
+    <li><strong>REPL Tab 自动补全</strong> (175 行新增): 斜杠命令 + 动态 ID/名称补全</li>
+    <li><strong>CI 修复</strong>: 修复 <code>package-lock.json</code> 问题确保 tag 触发构建成功</li>
+  </ul>
+</section>
+
+<!-- ===== PHASE 9 ===== -->
+<section id="phase9">
+  <h2>10. 阶段九：执行追踪与异步工具</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-07-02~03</strong></span></div>
+    <h3>全局规则预加载 · 任务日志 · Poll 工具 · Docker</h3>
+  </div>
+
+  <h3>核心交付</h3>
+  <ul>
+    <li><strong>全局规则预加载</strong>: 任务启动时预加载所有规则内容和 Skills 标题用于自动匹配</li>
+    <li><strong>Plan 模式自动执行</strong>: 移除交互式确认，Plan 生成后自动执行</li>
+    <li><strong>任务执行追踪</strong> (<code>agentTaskLog.ts</code>, 239 行):
+      <ul>
+        <li>每步完整记录：步骤号、时间戳、推理内容、工具调用、工具结果</li>
+        <li>任务日志持久化与查询</li>
+        <li>Docker 支持: <code>Dockerfile</code> (17 行), node:18-alpine</li>
+      </ul>
+    </li>
+    <li><strong>Poll 工具</strong> (<code>tools/poll.ts</code>, 210 行):
+      <ul>
+        <li>指数退避轮询机制</li>
+        <li><code>success_pattern</code> 正则匹配成功条件</li>
+        <li>可配置 <code>max_attempts</code>、<code>initial_delay</code>、<code>max_delay</code></li>
+        <li>用于等待 CI pipeline、容器启动、健康检查等异步任务</li>
+      </ul>
+    </li>
+  </ul>
+</section>
+
+<!-- ===== PHASE 10 ===== -->
+<section id="phase10">
+  <h2>11. 阶段十：模型配置现代化</h2>
+  <div class="phase-header">
+    <div class="meta"><span>📅 <strong>2026-07-07~10</strong></span><span>🏷️ <strong>v0.3.16 → v0.3.17</strong></span></div>
+    <h3>models.json · 异步工具执行 · /btw cancel</h3>
+  </div>
+
+  <table class="commit-table">
+    <tr><th>提交</th><th>说明</th></tr>
+    <tr><td><code>b6e57a1</code></td><td>尝试提升验证轮次到 100，发现 token 消耗过大后回滚</td></tr>
+    <tr><td><code>e5a24c6</code></td><td><strong>🆕</strong> 实时输出完整 <code>reasoning_content</code>；Standalone Demo 支持 thinking</td></tr>
+    <tr><td><code>717d859</code></td><td><strong>🆕 重大特性</strong>: models.json 支持 (149 行变更)，兼容 CodeBuddy 格式</td></tr>
+    <tr><td><code>f101a12</code></td><td>默认 deepseek-v4-pro；自动从 models.json 选取模型</td></tr>
+    <tr><td><code>742cb10</code></td><td>active_profile 未匹配时 fallback 到 models.json 第一个模型</td></tr>
+    <tr><td><code>d513dc5</code></td><td><strong>🆕 v0.3.17</strong>: 异步工具执行 + /btw cancel 支持异步取消</td></tr>
+  </table>
+
+  <h3>models.json 核心设计</h3>
+<pre><code>{
+  "models": [
+    {
+      "id": "deepseek-v4-pro",
+      "vendor": "enflameapi",
+      "url": "https://api.enflame.cn/v1/chat/completions",
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 393216,
+      "supportsToolCall": true,
+      "supportsReasoning": true,
+      "thinking": {"type": "enabled"}
+    }
+  ]
+}</code></pre>
+
+  <p>模型能力声明 (<code>supportsReasoning</code>, <code>supportsToolCall</code>, <code>supportsImages</code>, <code>thinking</code>) 驱动 Agent 运行时行为；
+  全局 (<code>~/.codeagent/models.json</code>) 和项目级 (<code>./models.json</code>) 双层查找。</p>
+</section>
+
+<!-- ===== FEATURES ===== -->
+<section id="features">
+  <h2>当前功能全景图</h2>
+
+  <h3>核心 Agent 能力</h3>
+  <table>
+    <tr><th>功能</th><th>说明</th></tr>
+    <tr><td><strong>Agent 模式</strong></td><td>全自主编码：读写文件、执行命令、搜索代码、精确编辑</td></tr>
+    <tr><td><strong>Ask 模式</strong></td><td>只读模式：仅探索代码库、回答问题</td></tr>
+    <tr><td><strong>Plan 模式</strong></td><td>生成实施计划后自动执行</td></tr>
+    <tr><td><strong>并行模式</strong></td><td>多任务并发执行，独立上下文隔离</td></tr>
+    <tr><td><strong>流式输出</strong></td><td>实时逐 token + reasoning_content 显示</td></tr>
+    <tr><td><strong>REPL 交互</strong></td><td>交互式命令行、Tab 补全、/btw 中途干预</td></tr>
+  </table>
+
+  <h3>工具系统 (8 个)</h3>
+  <table>
+    <tr><th>工具</th><th>功能</th></tr>
+    <tr><td><code>readFile</code></td><td>读取文件，支持偏移量和行数限制</td></tr>
+    <tr><td><code>writeFile</code></td><td>创建或覆盖文件</td></tr>
+    <tr><td><code>editFile</code></td><td>精确字符串替换编辑</td></tr>
+    <tr><td><code>list_directory</code></td><td>浏览目录结构</td></tr>
+    <tr><td><code>search_text</code></td><td>正则搜索代码</td></tr>
+    <tr><td><code>search_files</code></td><td>Glob 模式查找文件</td></tr>
+    <tr><td><code>run_terminal</code></td><td>执行 Shell 命令</td></tr>
+    <tr><td><code>poll</code></td><td>指数退避轮询，等待异步任务</td></tr>
+  </table>
+
+  <h3>智能增强</h3>
+  <table>
+    <tr><th>能力</th><th>说明</th></tr>
+    <tr><td><strong>自我验证</strong></td><td>完成回答后自动验证，确保结果正确</td></tr>
+    <tr><td><strong>复杂任务检测</strong></td><td>识别重构/迁移/优化等任务，自动深度思考</td></tr>
+    <tr><td><strong>推理展示</strong></td><td>完整展示 LLM 推理过程 (reasoning_content)</td></tr>
+    <tr><td><strong>自动重试</strong></td><td>429/5xx 智能重试，4xx 不重试</td></tr>
+  </table>
+
+  <h3>配置与扩展</h3>
+  <table>
+    <tr><th>能力</th><th>说明</th></tr>
+    <tr><td><strong>models.json</strong></td><td>CodeBuddy 兼容模型定义 + 能力声明</td></tr>
+    <tr><td><strong>config.yaml</strong></td><td>YAML 多 Profile 配置</td></tr>
+    <tr><td><strong>Skills</strong></td><td>Cursor 兼容 SKILL.md</td></tr>
+    <tr><td><strong>Rules</strong></td><td>.mdc 规则文件自动加载</td></tr>
+    <tr><td><strong>MCP 协议</strong></td><td>stdio / HTTP MCP 服务器扩展</td></tr>
+  </table>
+
+  <h3>分发与运维</h3>
+  <table>
+    <tr><th>方式</th><th>说明</th></tr>
+    <tr><td><strong>npm</strong></td><td>npm publish + GitHub Actions CI/CD</td></tr>
+    <tr><td><strong>GitHub Releases</strong></td><td>.tgz 自动构建发布</td></tr>
+    <tr><td><strong>Docker</strong></td><td>node:18-alpine 镜像</td></tr>
+    <tr><td><strong>单文件</strong></td><td>~70KB，零依赖，直接 node 运行</td></tr>
+    <tr><td><strong>JFrog</strong></td><td>内部分发</td></tr>
+  </table>
+</section>
+
+<!-- ===== ARCHITECTURE ===== -->
+<section id="architecture">
+  <h2>技术架构总览</h2>
+
+  <div class="arch-box">
+┌──────────────────────────────────────────────────────┐
+│                 CLI / VS Code Panel                   │
+├──────────────────────────────────────────────────────┤
+│               AgentLoop (ReAct 引擎)                  │
+│  ┌──────────┐ ┌──────────┐ ┌────────────────────┐   │
+│  │ModeManager│ │ Planner  │ │ ParallelManager    │   │
+│  └──────────┘ └──────────┘ └────────────────────┘   │
+│  ┌──────────┐ ┌──────────┐ ┌────────────────────┐   │
+│  │ Context  │ │Checkpoint│ │  ToolRegistry (8)  │   │
+│  └──────────┘ └──────────┘ └────────────────────┘   │
+│  ┌──────────┐ ┌──────────┐ ┌────────────────────┐   │
+│  │ Sessions │ │ TaskLog  │ │  Skills / Rules    │   │
+│  └──────────┘ └──────────┘ └────────────────────┘   │
+│  ┌──────────────────────────────────────────────┐    │
+│  │           LLMProvider 层                      │    │
+│  │   OpenAI / Anthropic / Ollama / DeepSeek      │    │
+│  └──────────────────────────────────────────────┘    │
+├──────────────────────────────────────────────────────┤
+│              vs-core (Node.js Runtime)                │
+│    FileService / SearchService / TerminalService      │
+└──────────────────────────────────────────────────────┘</div>
+
+  <h3 style="margin-top:20px;">源文件分布 (核心 3,863 行 TypeScript)</h3>
+  <table>
+    <tr><th>模块</th><th>文件</th><th>行数</th></tr>
+    <tr><td>Agent 主循环</td><td><code>agent.ts</code></td><td>759</td></tr>
+    <tr><td>CLI 入口</td><td><code>main.ts</code></td><td>1,137</td></tr>
+    <tr><td>配置管理</td><td><code>agentConfig.ts</code></td><td>378</td></tr>
+    <tr><td>Skills 加载</td><td><code>agentSkills.ts</code></td><td>245</td></tr>
+    <tr><td>任务日志</td><td><code>agentTaskLog.ts</code></td><td>239</td></tr>
+    <tr><td>会话管理</td><td><code>agentSessions.ts</code></td><td>233</td></tr>
+    <tr><td>并行管理</td><td><code>agentParallel.ts</code></td><td>192</td></tr>
+    <tr><td>上下文管理</td><td><code>agentContext.ts</code></td><td>181</td></tr>
+    <tr><td>Plan 模式</td><td><code>agentPlanner.ts</code></td><td>166</td></tr>
+    <tr><td>系统提示词</td><td><code>agentPrompts.ts</code></td><td>129</td></tr>
+    <tr><td>Checkpoint</td><td><code>agentCheckpoint.ts</code></td><td>100</td></tr>
+    <tr><td>工具注册</td><td><code>agentTools.ts</code></td><td>63</td></tr>
+    <tr><td>模式管理</td><td><code>agentModes.ts</code></td><td>41</td></tr>
+  </table>
+</section>
+
+<!-- ===== STATS ===== -->
+<section id="stats">
+  <h2>代码统计</h2>
+
+  <div class="stats-grid">
+    <div class="stat-card"><div class="num">70+</div><div class="label">总提交数</div></div>
+    <div class="stat-card"><div class="num">20</div><div class="label">正式版本</div></div>
+    <div class="stat-card"><div class="num">31</div><div class="label">TypeScript 源文件</div></div>
+    <div class="stat-card"><div class="num">3,863</div><div class="label">核心代码行</div></div>
+    <div class="stat-card"><div class="num">502</div><div class="label">独立 Demo 行</div></div>
+    <div class="stat-card"><div class="num">~70KB</div><div class="label">构建产物</div></div>
+    <div class="stat-card"><div class="num">8</div><div class="label">内置工具</div></div>
+    <div class="stat-card"><div class="num">4</div><div class="label">LLM Provider</div></div>
+    <div class="stat-card"><div class="num">5</div><div class="label">分发方式</div></div>
+    <div class="stat-card"><div class="num">3</div><div class="label">文档文件</div></div>
+  </div>
+
+  <table style="margin-top:20px;">
+    <tr><th style="width:200px;">里程碑</th><th>版本</th><th>日期</th></tr>
+    <tr><td>仓库初始化</td><td>—</td><td>2026-04-24</td></tr>
+    <tr><td>基础架构完成</td><td>—</td><td>2026-04-24</td></tr>
+    <tr><td>配置与文档体系</td><td>v0.2.0</td><td>2026-04-24</td></tr>
+    <tr><td>正式发布 + CI/CD</td><td>v0.2.4</td><td>2026-04-24</td></tr>
+    <tr><td>Thinking 模式完成</td><td>v0.2.16</td><td>2026-04-28</td></tr>
+    <tr><td>会话系统</td><td>v0.3.0</td><td>2026-06-03</td></tr>
+    <tr><td>智能推理增强</td><td>v0.3.4</td><td>2026-07-01</td></tr>
+    <tr><td>交互体验升级</td><td>v0.3.9</td><td>2026-07-02</td></tr>
+    <tr><td>执行追踪 + Poll</td><td>v0.3.10</td><td>2026-07-03</td></tr>
+    <tr><td>models.json + 异步执行</td><td>v0.3.17</td><td>2026-07-10</td></tr>
+  </table>
+</section>
+
+<footer>
+  <p>📅 最后更新: 2026-07-10 &nbsp;|&nbsp; 🏷️ v0.3.17 &nbsp;|&nbsp; 📦 <a href="https://github.com/zhouronghua/code-agent" style="color:var(--accent);">github.com/zhouronghua/code-agent</a></p>
+</footer>
+
+</div>
+</body>
+</html>
