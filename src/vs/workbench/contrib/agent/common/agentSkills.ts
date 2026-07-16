@@ -93,6 +93,8 @@ export class SkillsLoader {
 			if (skill.description) {
 				lines.push(skill.description);
 			}
+			// Expose the skill file path so the agent can read full content on demand
+			lines.push(`Path: ${skill.filePath}`);
 			lines.push('');
 		}
 

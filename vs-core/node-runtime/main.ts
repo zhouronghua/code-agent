@@ -740,25 +740,6 @@ async function main() {
 		currentSessionName = saved.name;
 	};
 
-	// ---- Single task (non-interactive) ----
-	if (opts.tasks.length > 0) {
-		const task = opts.tasks.join(' ');
-		await agentLoop.run(task);
-
-		// Auto-save session
-		autoSaveSession(task.substring(0, 80));
-		console.log(`${C.dim}[Session saved: ${currentSessionId}]${C.reset}`);
-
-		// Auto-save task log
-		const status = agentLoop.lastTaskError ? 'failed' : 'completed';
-		const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
-		taskLogManager.saveTaskLog(taskLog);
-		console.log(`${C.dim}[Task log saved: ${taskLog.id}]${C.reset}`);
-
-		agentLoop.dispose();
-		return;
-	}
-
 	// ---- Interactive REPL (event-driven, allows /btw during agent execution) ----
 	const rl = readline.createInterface({
 		input: process.stdin,
@@ -1112,6 +1093,12 @@ async function main() {
 	});
 
 	displayPrompt();
+
+	// If a task was passed on CLI, inject it into the REPL so /btw works during execution
+	if (opts.tasks.length > 0) {
+		const task = opts.tasks.join(' ');
+		rl.write(task + '\n');
+	}
 }
 
 const CLI_EXCLUDED_RULE_PATTERNS = ['askquestion', 'durable-request', 'durable request'];
