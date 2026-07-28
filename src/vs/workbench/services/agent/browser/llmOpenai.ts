@@ -479,11 +479,13 @@ export class OpenAIProvider implements ILLMProvider {
 		let filtered = messages.filter(isValidAssistant);
 
 		// In thinking mode: additional filtering — all remaining assistant messages
-		// must have reasoning_content for API consistency
+		// must have reasoning_content for API consistency.
+		// BUT: messages with tool_calls MUST be preserved even without reasoning_content,
+		// otherwise their tool result messages become orphaned and cause 400 errors.
 		if (hasThinking) {
 			filtered = filtered.filter(m => {
 				if (m.role === MessageRole.Assistant) {
-					return !!m.reasoningContent;
+					return !!m.reasoningContent || (!!m.toolCalls && m.toolCalls.length > 0);
 				}
 				return true;
 			});
