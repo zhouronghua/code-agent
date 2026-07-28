@@ -12,6 +12,8 @@ export interface ISkill {
 	readonly description: string;
 	readonly filePath: string;
 	readonly content: string;
+	/** Trigger keywords from frontmatter for auto-matching (e.g. ["commit", "jira", "push"]) */
+	readonly triggers: string[];
 }
 
 export interface IRule {
@@ -34,7 +36,14 @@ function parseFrontmatter(text: string): { meta: Record<string, string>; body: s
 			let currentKey = '';
 			for (const line of frontmatter.split('\n')) {
 				const trimmed = line.trim();
-				if (trimmed.includes(':') && !trimmed.startsWith('-')) {
+				// Handle list items: "- value" under a key like "trigger:"
+				if (trimmed.startsWith('- ') && currentKey) {
+					const itemVal = trimmed.slice(2).trim();
+					if (itemVal) {
+						const existing = meta[currentKey] || '';
+						meta[currentKey] = existing ? existing + '\n' + itemVal : itemVal;
+					}
+				} else if (trimmed.includes(':') && !trimmed.startsWith('-')) {
 					const colonIdx = trimmed.indexOf(':');
 					currentKey = trimmed.substring(0, colonIdx).trim();
 					let val = trimmed.substring(colonIdx + 1).trim();
@@ -82,19 +91,30 @@ export class SkillsLoader {
 		return this._rules.filter(r => r.alwaysApply);
 	}
 
-	buildSkillsPromptSection(): string {
+	buildSkillsPromptSection(preActivatedSkillNames?: Set<string>): string {
 		if (this._skills.length === 0) return '';
 
 		const lines = ['\n## Available Skills\n'];
 		lines.push('You can leverage the following specialized skills when relevant:\n');
 
 		for (const skill of this._skills) {
+			const isPreActivated = preActivatedSkillNames?.has(skill.name);
 			lines.push(`### ${skill.name}`);
 			if (skill.description) {
 				lines.push(skill.description);
 			}
-			// Expose the skill file path so the agent can read full content on demand
 			lines.push(`Path: ${skill.filePath}`);
+
+			// If this skill was auto-matched, include its FULL content so the
+			// agent can follow its instructions without needing explicit /skill activation.
+			if (isPreActivated) {
+				lines.push('');
+				lines.push('> **This skill has been auto-activated based on your task.**');
+				lines.push('> Follow the instructions below as mandatory guidance.');
+				lines.push('');
+				lines.push(skill.content);
+			}
+
 			lines.push('');
 		}
 
@@ -167,6 +187,81 @@ export class SkillsLoader {
 		return skill?.content;
 	}
 
+	/**
+	 * Auto-match skills against the user's task description using keyword matching.
+	 *
+	 * Matching strategy (in priority order):
+	 * 1. Exact trigger keyword match in the task (strongest signal)
+	 * 2. Description keyword overlap with the task
+	 * 3. Skill name mentioned in the task
+	 *
+	 * Returns a Set of skill names that should be pre-activated.
+	 *
+	 * @param taskDescription - The user's task/query to match against
+	 * @param maxSkills - Maximum number of skills to auto-activate (default: 5, to avoid context bloat)
+	 */
+	getAutoMatchedSkills(taskDescription: string, maxSkills: number = 5): Set<string> {
+		if (!taskDescription || this._skills.length === 0) return new Set();
+
+		const lowerTask = taskDescription.toLowerCase();
+		const scored: { name: string; score: number }[] = [];
+
+		for (const skill of this._skills) {
+			let score = 0;
+
+			// 1. Trigger keyword exact match (highest weight: 10 per match)
+			for (const trigger of skill.triggers) {
+				const lowerTrigger = trigger.toLowerCase();
+				if (lowerTask.includes(lowerTrigger)) {
+					score += 10;
+				}
+			}
+
+			// 2. Skill name mentioned in task (weight: 15)
+			if (lowerTask.includes(skill.name.toLowerCase())) {
+				score += 15;
+			}
+
+			// 3. Description word overlap with task (weight: 2 per common significant word)
+			if (skill.description) {
+				const descWords = new Set(
+					skill.description.toLowerCase()
+						.split(/[\s,，、;；:：\n\t]+/)
+						.filter(w => w.length >= 2)
+				);
+				const taskWords = new Set(
+					lowerTask.split(/[\s,，、;；:：\n\t]+/).filter(w => w.length >= 2)
+				);
+				for (const w of descWords) {
+					if (taskWords.has(w)) score += 2;
+				}
+				// Bonus for partial matches (e.g. "提交" in description, "提交代码" in task)
+				for (const dw of descWords) {
+					if (dw.length >= 2) {
+						for (const tw of taskWords) {
+							if (tw.length >= 2 && (tw.includes(dw) || dw.includes(tw))) {
+								score += 1;
+								break; // one bonus per desc word
+							}
+						}
+					}
+				}
+			}
+
+			if (score > 0) {
+				scored.push({ name: skill.name, score });
+			}
+		}
+
+		// Sort by score descending, take top N
+		scored.sort((a, b) => b.score - a.score);
+		const result = new Set<string>();
+		for (const s of scored.slice(0, maxSkills)) {
+			result.add(s.name);
+		}
+		return result;
+	}
+
 	buildFullContextPrompt(excludeRulePatterns?: string[]): string {
 		let prompt = '';
 
@@ -205,11 +300,17 @@ export class SkillsLoader {
 			const raw = fs.readFileSync(filePath, 'utf-8');
 			const { meta, body } = parseFrontmatter(raw);
 
+			// Parse trigger keywords (newline-separated list)
+			const triggers = meta.trigger
+				? meta.trigger.split('\n').map(t => t.trim()).filter(t => t.length > 0)
+				: [];
+
 			this._skills.push({
 				name: meta.name || fallbackName,
 				description: meta.description || '',
 				filePath,
 				content: body,
+				triggers,
 			});
 		} catch {
 			// skip unreadable files

@@ -74,7 +74,8 @@ When you need to wait for an external async task to complete (CI pipeline, backg
 
 ## Auto-Matching Rules & Skills
 - At the start of every task, check the **Preloaded Rules** section below. If any rule's description matches the user's request, automatically apply that rule's content.
-- Check the **Available Skills** section below. If any skill's description matches the task context (e.g., "compile C++" → cpp-forge, "create PRD" → prd, "Gerrit" → gerrit-query), activate that skill by incorporating its guidance into your workflow.
+- Check the **Available Skills** section below. Skills whose description or trigger keywords match the task have their **full instructions preloaded** (marked "auto-activated"). You MUST follow these instructions as mandatory guidance — they are not suggestions.
+- For skills listed without auto-activated content, if their description matches the task, use the provided Path to read_file the full SKILL.md content and incorporate its guidance.
 - Rules marked "(Always Active)" should always be followed regardless of the task.`;
 
 export const ASK_MODE_PROMPT = `You are a code exploration assistant integrated into VS Code. You can read files, search code, and list directories to answer questions about the codebase.

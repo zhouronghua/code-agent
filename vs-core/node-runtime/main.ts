@@ -675,7 +675,9 @@ async function main() {
 	}
 
 	// Inject skills + rules into agent's system prompt
-	const extraPrompt = buildSkillsContext(skillsLoader, opts.useSkill);
+	// Pass task description for auto-matching skills
+	const taskDescription = opts.tasks.length > 0 ? opts.tasks.join(' ') : undefined;
+	const extraPrompt = buildSkillsContext(skillsLoader, opts.useSkill, taskDescription);
 	if (extraPrompt) {
 		agentLoop.setExtraSystemPrompt(extraPrompt);
 	}
@@ -767,6 +769,10 @@ async function main() {
 	const processTask = async (task: string) => {
 		agentIsRunning = true;
 		try {
+			// Rebuild skills context with the actual task for auto-matching
+			const taskExtra = buildSkillsContext(skillsLoader, undefined, task);
+			agentLoop.setExtraSystemPrompt(taskExtra);
+
 			await agentLoop.run(task);
 			autoSaveSession(task.substring(0, 80));
 			// Auto-save task log
@@ -1017,7 +1023,9 @@ async function main() {
 
 			if (trimmed.startsWith('/skill ')) {
 				const skillName = trimmed.slice(7).trim();
-				const newExtra = buildSkillsContext(skillsLoader, skillName);
+				// In REPL mode, no task description yet — but pass empty so the
+				// explicitly activated skill still gets its full content via buildSkillsContext.
+				const newExtra = buildSkillsContext(skillsLoader, skillName, undefined);
 				agentLoop.setExtraSystemPrompt(newExtra);
 				log(C.magenta, 'SKILL', skillName ? `Activated skill: ${skillName}` : 'Cleared active skill');
 				processingLock = false; displayPrompt(); return;
@@ -1103,17 +1111,34 @@ async function main() {
 
 const CLI_EXCLUDED_RULE_PATTERNS = ['askquestion', 'durable-request', 'durable request'];
 
-function buildSkillsContext(loader: SkillsLoader, activeSkill?: string): string {
+function buildSkillsContext(loader: SkillsLoader, activeSkill?: string, taskDescription?: string): string {
 	let prompt = '';
 
 	// Preload ALL rules content (not just alwaysApply) for auto-matching
 	prompt += loader.buildPreloadRulesPromptSection(CLI_EXCLUDED_RULE_PATTERNS);
-	// Preload skills titles for auto-matching
-	prompt += loader.buildSkillsPromptSection();
 
+	// Auto-match skills based on the user's task description
+	let preActivatedSkills: Set<string> | undefined;
+	if (taskDescription) {
+		preActivatedSkills = loader.getAutoMatchedSkills(taskDescription);
+	}
+
+	// If user explicitly activated a skill, always include it
+	if (activeSkill) {
+		if (!preActivatedSkills) preActivatedSkills = new Set();
+		preActivatedSkills.add(activeSkill);
+	}
+
+	// Build skills section — pre-activated skills get their FULL content included
+	prompt += loader.buildSkillsPromptSection(preActivatedSkills);
+
+	// If user explicitly activated a skill not in the auto-matched set,
+	// append its full content separately (redundancy for safety)
 	if (activeSkill) {
 		const content = loader.getSkillContent(activeSkill);
-		if (content) {
+		if (content && preActivatedSkills?.has(activeSkill)) {
+			// Content already included via buildSkillsPromptSection — skip duplicate
+		} else if (content) {
 			prompt += `\n## Active Skill: ${activeSkill}\n\n${content}\n`;
 		}
 	}

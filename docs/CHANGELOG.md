@@ -1,8 +1,8 @@
 # CodeAgent 代码仓演进历史
 
-> **当前版本**: v0.3.17 | **代码规模**: ~3,900 行 TypeScript 核心代码 + ~500 行独立 Demo | **构建产物**: ~70KB 单文件
+> **当前版本**: v0.3.19 | **代码规模**: ~3,900 行 TypeScript 核心代码 + ~500 行独立 Demo | **构建产物**: ~84KB minified 单文件
 >
-> 从 2026-04-24 首次提交到 2026-07-10 最新版本，共 **70+ 次提交**，涵盖 **10 个阶段**的持续迭代。
+> 从 2026-04-24 首次提交至今，涵盖 **11 个阶段**的持续迭代。
 
 ---
 
@@ -19,9 +19,10 @@
 9. [阶段八：交互体验升级 (2026-07-01~02)](#9-阶段八交互体验升级)
 10. [阶段九：执行追踪与异步工具 (2026-07-02~03)](#10-阶段九执行追踪与异步工具)
 11. [阶段十：模型配置现代化 (2026-07-07~10)](#11-阶段十模型配置现代化)
-12. [当前功能全景图](#当前功能全景图)
-13. [技术架构总览](#技术架构总览)
-14. [代码统计](#代码统计)
+12. [阶段十一：Skill 自动匹配与 Commit 增强 v0.3.19](#12-阶段十一skill-自动匹配与-commit-增强-v0319)
+13. [当前功能全景图](#当前功能全景图)
+14. [技术架构总览](#技术架构总览)
+15. [代码统计](#代码统计)
 
 ---
 
@@ -270,6 +271,70 @@ DeepSeek 等推理模型返回 `reasoning_content` 字段，与标准 OpenAI API
   - `/btw cancel` 支持异步任务取消
   - Poll 工具异步增强 (支持取消轮询)
   - 所有工具适配异步执行模式
+
+---
+
+## 12. 阶段十一：Skill 自动匹配与 Commit 增强 v0.3.19
+
+> **时间**: 2026-07-11 | **版本**: v0.3.19
+
+### 核心问题分析
+
+通过分析多个会话日志，发现两个高频重复性问题：
+
+1. **Skills 无法自动激活**：系统提示词虽有 Auto-Matching 指令，但 `buildSkillsPromptSection()` 只列出了 skill 的 **名称+描述+路径**，并未注入完整内容。LLM 无法看到实际指令，必须依赖用户显式 `/skill` 或 `--use-skill` 激活。
+
+2. **Commit 中 Jira ID 频繁填错**：即使 commit skill 被激活，LLM 也常跳过 MCP `search_jira_issues` 查询，直接编造 Jira ID（格式也不对）。
+
+3. **SKILL.md 的 `trigger` 字段未被解析**：如 `dolphin-mcp` 的 frontmatter 中有 `trigger:` 关键词列表，但 `parseFrontmatter()` 不处理列表格式，无法用于匹配。
+
+### 解决方案
+
+#### 1. Client-side 自动匹配（agentSkills.ts）
+
+新增 `getAutoMatchedSkills(taskDescription, maxSkills=5)` 方法，根据用户任务自动匹配技能：
+
+- **Trigger 关键词精确匹配**（权重 10 分）：skill frontmatter 中 `trigger:` 列表的关键词命中
+- **Skill 名称命中**（权重 15 分）：任务中直接提及 skill 名  
+- **描述词重叠**（权重 2-3 分）：description 与 task 的共同关键词
+
+取分数最高的前 5 个 skill，将其 **完整内容** 注入系统提示词（标记 "auto-activated"），LLM 无需显式激活即可看到全部指令。
+
+#### 2. `buildSkillsPromptSection` 增强
+
+新增 `preActivatedSkillNames?: Set<string>` 参数。被自动匹配的 skill 不再只列描述，而是注入完整内容 + "auto-activated" 提示，要求 LLM 作为强制指南遵循。
+
+#### 3. `parseFrontmatter` 增强
+
+支持解析 YAML list 格式（`trigger:\n  - keyword`），将 `trigger` 关键词存入 `ISkill.triggers: string[]`。
+
+#### 4. `buildSkillsContext` 改进（main.ts）
+
+- 接收 `taskDescription` 参数
+- CLI 模式：从 `opts.tasks` 提取任务描述进行匹配
+- REPL 模式：`processTask()` 在每次执行前重建 skills context，匹配当前任务
+
+#### 5. Commit Skill 增强
+
+- 新增 `trigger:` 关键词列表（commit、提交、push、gerrit、jira、topsop 等）
+- 强化 Jira ID 查询：将 MCP `search_jira_issues` 标记为 **REQUIRED**
+- 新增 Jira ID 格式验证：`TR-\d+` 或 `TOPSOP-\d+` 模式校验
+- 增加兜底策略：MCP 不可用时显式要求用户提供 Jira ID
+
+#### 6. 系统提示词更新
+
+Auto-Matching 规则改为：
+- "auto-activated" 技能的内容是**强制指南**而非建议
+- 未自动激活的技能可通过 Path 读取 SKILL.md 获取完整内容
+
+### 影响范围
+
+| 文件 | 变更 |
+|------|------|
+| `agentSkills.ts` | +120 行（trigger 解析、auto-matching、preActivatedSkills） |
+| `agentPrompts.ts` | ~3 行（Auto-Matching 规则更新） |
+| `main.ts` | ~8 行（buildSkillsContext 签名变更、processTask 重建） |
+| `commit/SKILL.md` | +18 行（trigger keywords、Jira ID 强制要求） |
 
 ---
 

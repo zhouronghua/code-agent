@@ -466,13 +466,24 @@ export class OpenAIProvider implements ILLMProvider {
 			m.role === MessageRole.Assistant && m.reasoningContent
 		);
 
-		// In thinking mode, filter assistant messages that have neither reasoning_content
-		// nor tool_calls, to maintain API consistency.
-		let filtered = messages;
+		// OpenAI API requires every assistant message to have EITHER non-null content
+		// OR non-empty tool_calls. Messages with only reasoning_content (thinking-only)
+		// violate this constraint and must be filtered out.
+		// This IS an assistant message validity helper.
+		const isValidAssistant = (m: IAgentMessage): boolean => {
+			if (m.role !== MessageRole.Assistant) return true; // non-assistant: always valid
+			// Must have content or tool_calls (reasoning_content alone is not enough!)
+			return !!m.content || (!!m.toolCalls && m.toolCalls.length > 0);
+		};
+
+		let filtered = messages.filter(isValidAssistant);
+
+		// In thinking mode: additional filtering — all remaining assistant messages
+		// must have reasoning_content for API consistency
 		if (hasThinking) {
-			filtered = messages.filter(m => {
+			filtered = filtered.filter(m => {
 				if (m.role === MessageRole.Assistant) {
-					return !!m.reasoningContent || (m.toolCalls && m.toolCalls.length > 0);
+					return !!m.reasoningContent;
 				}
 				return true;
 			});
