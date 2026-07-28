@@ -700,10 +700,13 @@ async function main() {
 		// Restore session context
 		const restoreMode = sessionToResume.mode;
 		modeManager.switchMode(restoreMode);
+		// Rebuild extraSystemPrompt with current version's skills/rules logic
+		// (ignore the stored old version's extraSystemPrompt to pick up fixes)
+		const rebuiltExtra = buildSkillsContext(skillsLoader, opts.useSkill, undefined);
 		agentLoop.restoreFromSession(
 			sessionToResume.messages,
 			sessionToResume.systemPrompt || '',
-			sessionToResume.extraSystemPrompt || '',
+			rebuiltExtra || '',
 		);
 		currentSessionId = sessionToResume.id;
 		currentSessionName = sessionToResume.name;
@@ -899,10 +902,12 @@ async function main() {
 
 				autoSaveSession();
 				modeManager.switchMode(session.mode);
+				// Rebuild extraSystemPrompt with current version — ignore stored old version
+				const rebuiltExtra = buildSkillsContext(skillsLoader, undefined, undefined);
 				agentLoop.restoreFromSession(
 					session.messages,
 					session.systemPrompt || '',
-					session.extraSystemPrompt || '',
+					rebuiltExtra || '',
 				);
 				currentSessionId = session.id;
 				currentSessionName = session.name;
