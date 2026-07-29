@@ -1,29 +1,49 @@
 #!/usr/bin/env node
 /**
- * Code-Agent Benchmark System
+ * Code-Agent Benchmark System v2
  * 
- * Extracts performance metrics from task execution logs, manages baselines,
- * and validates that new changes don't regress agent quality.
+ * Runs a fixed test suite against the LATEST built agent,
+ * collects fresh metrics, and compares against baseline.
+ * 
+ * This fixes the fundamental flaw of v1: old logs from previous
+ * versions don't reflect new code changes.
  * 
  * Usage:
- *   node scripts/benchmark.mjs                    # Show current benchmark data
- *   node scripts/benchmark.mjs --save [version]   # Save current state as baseline
- *   node scripts/benchmark.mjs --check            # Compare against baseline (exit 1 if worse)
- *   node scripts/benchmark.mjs --summary          # Print summary only
- *   node scripts/benchmark.mjs --json             # Output as JSON
+ *   node scripts/benchmark.mjs                    # Show current benchmark
+ *   node scripts/benchmark.mjs --run              # Run test suite + show results
+ *   node scripts/benchmark.mjs --save [version]   # Run + save as baseline
+ *   node scripts/benchmark.mjs --check            # Run + compare against baseline (exit 1 if regressed)
+ *   node scripts/benchmark.mjs --json             # Output last run as JSON
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { spawn, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+const SUITE_DIR = path.join(PROJECT_ROOT, 'benchmarks', 'suite');
+const BASELINE_FILE = path.join(PROJECT_ROOT, 'benchmarks', 'baseline.json');
+const RESULTS_FILE = path.join(PROJECT_ROOT, 'benchmarks', 'last_run.json');
 const TASKS_DIR = path.join(os.homedir(), '.codeagent', 'tasks');
-const BENCHMARK_FILE = path.join(PROJECT_ROOT, 'benchmark_baseline.json');
+const AGENT_CLI = path.join(PROJECT_ROOT, 'build', 'agent-cli.js');
+const TASK_TIMEOUT_MS = 120_000; // 2 min per task
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+function round(v, d) {
+  return Math.round(v * Math.pow(10, d)) / Math.pow(10, d);
+}
+
+function percentile(sorted, p) {
+  if (sorted.length === 0) return 0;
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
+}
+
+// ─── Task Log Access ──────────────────────────────────────────────────
 
 function loadIndex() {
   const indexPath = path.join(TASKS_DIR, '_index.json');
@@ -39,155 +59,323 @@ function loadTaskLog(id) {
   catch { return null; }
 }
 
-function percentile(sorted, p) {
-  if (sorted.length === 0) return 0;
-  const idx = Math.ceil((p / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, Math.min(idx, sorted.length - 1))];
+// ─── Test Suite ───────────────────────────────────────────────────────
+
+function loadSuite() {
+  const tasks = [];
+  if (!fs.existsSync(SUITE_DIR)) {
+    console.error(`Suite directory not found: ${SUITE_DIR}`);
+    return tasks;
+  }
+  const files = fs.readdirSync(SUITE_DIR).filter(f => f.endsWith('.json')).sort();
+  for (const file of files) {
+    try {
+      const task = JSON.parse(fs.readFileSync(path.join(SUITE_DIR, file), 'utf-8'));
+      tasks.push(task);
+    } catch (err) {
+      console.error(`Failed to load ${file}: ${err.message}`);
+    }
+  }
+  return tasks;
 }
 
-// ─── Metrics Extraction ───────────────────────────────────────────────
+// ─── Workspace Setup ──────────────────────────────────────────────────
 
-function computeMetrics() {
-  const index = loadIndex();
-  const entries = Object.values(index);
-  if (entries.length === 0) {
-    console.error('No task logs found in ~/.codeagent/tasks/');
+function setupWorkspace(task) {
+  const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), `bench-${task.id}-`));
+  if (task.setup?.files) {
+    for (const [filePath, content] of Object.entries(task.setup.files)) {
+      const fullPath = path.join(wsDir, filePath);
+      const dir = path.dirname(fullPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(fullPath, content, 'utf-8');
+    }
+  }
+  return wsDir;
+}
+
+function cleanupWorkspace(wsDir) {
+  try { fs.rmSync(wsDir, { recursive: true, force: true }); }
+  catch { /* ignore */ }
+}
+
+// ─── Agent Runner ─────────────────────────────────────────────────────
+
+/**
+ * Run one benchmark task by spawning the agent CLI.
+ * Returns metrics extracted from the generated task log.
+ */
+function runAgentTask(task, wsDir) {
+  return new Promise((resolve) => {
+    // Record existing task logs before running
+    const indexBefore = loadIndex();
+    const idsBefore = new Set(Object.keys(indexBefore));
+
+    const child = spawn('node', [AGENT_CLI, task.task], {
+      cwd: wsDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+      timeout: TASK_TIMEOUT_MS,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let completed = false;
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      // Force kill after 5s
+      setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); }, 5000);
+    }, TASK_TIMEOUT_MS);
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+      // Detect task completion
+      if (stdout.includes('--- Task completed ---') && !completed) {
+        completed = true;
+        // Give agent a moment to save task log, then exit
+        setTimeout(() => {
+          if (!child.killed) {
+            child.stdin.write('exit\n');
+          }
+        }, 500);
+      }
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+
+      // Find the new task log
+      const indexAfter = loadIndex();
+      const newIds = Object.keys(indexAfter).filter(id => !idsBefore.has(id));
+
+      if (newIds.length === 0) {
+        resolve({
+          taskId: task.id,
+          taskName: task.name,
+          success: false,
+          error: timedOut ? 'timeout' : `no task log generated (exit ${code})`,
+          durationMs: TASK_TIMEOUT_MS,
+          totalSteps: 0,
+          totalToolCalls: 0,
+          toolExecSuccessRate: 0,
+        });
+        return;
+      }
+
+      // Read the last new log (most recent)
+      const logId = newIds[newIds.length - 1];
+      const log = loadTaskLog(logId);
+
+      if (!log) {
+        resolve({
+          taskId: task.id,
+          taskName: task.name,
+          success: false,
+          error: `task log ${logId} not readable`,
+          durationMs: 0,
+          totalSteps: 0,
+          totalToolCalls: 0,
+          toolExecSuccessRate: 0,
+        });
+        return;
+      }
+
+      // Verify expected outputs
+      let verifySuccess = true;
+      const verifyErrors = [];
+      if (task.verify) {
+        if (task.verify.fileExists) {
+          const f = path.join(wsDir, task.verify.fileExists);
+          if (!fs.existsSync(f)) {
+            verifySuccess = false;
+            verifyErrors.push(`expected file not found: ${task.verify.fileExists}`);
+          }
+        }
+        if (task.verify.fileContains) {
+          const [file, expected] = task.verify.fileContains;
+          const f = path.join(wsDir, file);
+          if (fs.existsSync(f)) {
+            const content = fs.readFileSync(f, 'utf-8');
+            if (!content.includes(expected)) {
+              verifySuccess = false;
+              verifyErrors.push(`file ${file} does not contain "${expected}"`);
+            }
+          } else {
+            verifySuccess = false;
+            verifyErrors.push(`file ${file} not found for content check`);
+          }
+        }
+        if (task.verify.fileNotContains) {
+          const [file, notExpected] = task.verify.fileNotContains;
+          const f = path.join(wsDir, file);
+          if (fs.existsSync(f)) {
+            const content = fs.readFileSync(f, 'utf-8');
+            if (content.includes(notExpected)) {
+              verifySuccess = false;
+              verifyErrors.push(`file ${file} still contains "${notExpected}"`);
+            }
+          }
+        }
+      }
+
+      // Compute tool execution success rate
+      let toolExecs = 0;
+      let toolFails = 0;
+      for (const step of (log.steps || [])) {
+        for (const exec of (step.toolExecutions || [])) {
+          toolExecs++;
+          if (!exec.success) toolFails++;
+        }
+      }
+      const toolExecSuccessRate = toolExecs > 0 ? (toolExecs - toolFails) / toolExecs : 1;
+
+      resolve({
+        taskId: task.id,
+        taskName: task.name,
+        success: log.status === 'completed' && verifySuccess,
+        status: log.status,
+        verifySuccess,
+        verifyErrors,
+        durationMs: log.durationMs,
+        totalSteps: log.totalSteps,
+        totalToolCalls: log.totalToolCalls,
+        toolExecSuccessRate: round(toolExecSuccessRate, 4),
+        timedOut,
+      });
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({
+        taskId: task.id,
+        taskName: task.name,
+        success: false,
+        error: `spawn failed: ${err.message}`,
+        durationMs: 0,
+        totalSteps: 0,
+        totalToolCalls: 0,
+        toolExecSuccessRate: 0,
+      });
+    });
+  });
+}
+
+// ─── Run Suite ────────────────────────────────────────────────────────
+
+async function runSuite(tasks) {
+  if (!fs.existsSync(AGENT_CLI)) {
+    console.error('Build output not found. Run: npm run build');
     return null;
   }
 
-  const completed = entries.filter(e => e.status === 'completed');
-  const failed = entries.filter(e => e.status === 'failed');
+  console.log(`\n🧪 Running benchmark suite (${tasks.length} tasks)...\n`);
 
-  // Basic stats
-  const totalTasks = entries.length;
-  const completedCount = completed.length;
-  const failedCount = failed.length;
-  const successRate = completedCount / totalTasks;
+  const results = [];
+  const workspaces = [];
 
-  // Duration stats (only completed tasks, exclude outliers < 5s as likely aborted)
-  const validCompleted = completed.filter(e => e.durationMs >= 5000);
-  const durations = validCompleted.map(e => e.durationMs).sort((a, b) => a - b);
-  const avgDuration = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+  for (const task of tasks) {
+    process.stdout.write(`  [${task.id}] ${task.name}... `);
+    const wsDir = setupWorkspace(task);
+    workspaces.push(wsDir);
 
-  // Steps stats
-  const steps = completed.map(e => e.totalSteps).sort((a, b) => a - b);
-  const avgSteps = steps.length > 0 ? steps.reduce((a, b) => a + b, 0) / steps.length : 0;
+    const startTime = Date.now();
+    const result = await runAgentTask(task, wsDir);
+    const elapsed = Date.now() - startTime;
 
-  // Tool calls stats
-  const toolCalls = completed.map(e => e.totalToolCalls).sort((a, b) => a - b);
-  const avgToolCalls = toolCalls.length > 0 ? toolCalls.reduce((a, b) => a + b, 0) / toolCalls.length : 0;
-
-  // ─── Deep metrics from full task logs ───
-  let totalLLMSteps = 0;
-  let totalToolExecutions = 0;
-  let totalToolFailures = 0;
-  let totalStepDuration = 0;
-  let stepCount = 0;
-  let toolExecSuccessRate = 1.0;
-  let avgStepDuration = 0;
-  let maxStepsInTask = 0;
-  
-  // Tool usage distribution
-  const toolUsage = {};
-  
-  // Sample a subset of full logs for deep analysis (to avoid parsing huge files)
-  const sampleSize = Math.min(30, completed.length);
-  const sampled = completed.slice(-sampleSize); // Most recent
-
-  for (const entry of sampled) {
-    const log = loadTaskLog(entry.id);
-    if (!log || !log.steps) continue;
-    
-    totalLLMSteps += log.steps.length;
-    maxStepsInTask = Math.max(maxStepsInTask, log.steps.length);
-    
-    for (const step of log.steps) {
-      stepCount++;
-      totalStepDuration += step.durationMs || 0;
-      
-      if (step.toolExecutions) {
-        for (const exec of step.toolExecutions) {
-          totalToolExecutions++;
-          if (!exec.success) totalToolFailures++;
-          
-          // Track tool usage
-          const toolName = exec.toolName || 'unknown';
-          toolUsage[toolName] = (toolUsage[toolName] || 0) + 1;
-        }
+    const icon = result.success ? '✅' : '❌';
+    console.log(`${icon} (${(elapsed / 1000).toFixed(1)}s)`);
+    if (result.error) {
+      console.log(`       Error: ${result.error}`);
+    }
+    if (result.verifyErrors?.length > 0) {
+      for (const e of result.verifyErrors) {
+        console.log(`       Verify: ${e}`);
       }
     }
+    results.push(result);
   }
 
-  if (totalToolExecutions > 0) {
-    toolExecSuccessRate = (totalToolExecutions - totalToolFailures) / totalToolExecutions;
-  }
-  if (stepCount > 0) {
-    avgStepDuration = totalStepDuration / stepCount;
+  // Cleanup workspaces
+  for (const ws of workspaces) {
+    cleanupWorkspace(ws);
   }
 
-  // Efficiency: tool calls per step (for completed tasks)
-  const efficiency = steps.length > 0 
-    ? toolCalls.map((tc, i) => tc / Math.max(1, steps[i] || 1))
-    : [];
-  const avgEfficiency = efficiency.length > 0 
-    ? efficiency.reduce((a, b) => a + b, 0) / efficiency.length 
-    : 0;
+  return results;
+}
 
-  // Distribution metrics (more stable than averages)
+// ─── Metrics Computation ──────────────────────────────────────────────
+
+function computeMetrics(results) {
+  if (!results || results.length === 0) return null;
+
+  const completed = results.filter(r => r.success);
+  const failed = results.filter(r => !r.success);
+
+  const durations = completed.map(r => r.durationMs).sort((a, b) => a - b);
+  const steps = completed.map(r => r.totalSteps).sort((a, b) => a - b);
+  const toolCalls = completed.map(r => r.totalToolCalls).sort((a, b) => a - b);
+
+  const toolExecRates = completed.map(r => r.toolExecSuccessRate);
+
+  // Efficiency: tool calls per step
+  const efficiency = completed
+    .filter(r => r.totalSteps > 0)
+    .map(r => r.totalToolCalls / r.totalSteps);
+
   const metrics = {
-    // ─── Core KPIs ───
-    totalTasks,
-    completedCount,
-    failedCount,
-    successRate: round(successRate, 4),
-    
-    // ─── Duration (seconds) ───
-    avgDurationSec: round(avgDuration / 1000, 1),
+    totalTasks: results.length,
+    completedCount: completed.length,
+    failedCount: failed.length,
+    successRate: round(completed.length / results.length, 4),
+
+    avgDurationSec: round((durations.reduce((a, b) => a + b, 0) / Math.max(1, durations.length)) / 1000, 1),
     p50DurationSec: round(percentile(durations, 50) / 1000, 1),
     p90DurationSec: round(percentile(durations, 90) / 1000, 1),
-    p95DurationSec: round(percentile(durations, 95) / 1000, 1),
     maxDurationSec: round((durations.length > 0 ? durations[durations.length - 1] : 0) / 1000, 1),
-    
-    // ─── Steps ───
-    avgSteps: round(avgSteps, 1),
+
+    avgSteps: round(steps.reduce((a, b) => a + b, 0) / Math.max(1, steps.length), 1),
     p50Steps: round(percentile(steps, 50), 0),
     p90Steps: round(percentile(steps, 90), 0),
     maxSteps: steps.length > 0 ? steps[steps.length - 1] : 0,
-    
-    // ─── Tool Calls ───
-    avgToolCalls: round(avgToolCalls, 1),
+
+    avgToolCalls: round(toolCalls.reduce((a, b) => a + b, 0) / Math.max(1, toolCalls.length), 1),
     p50ToolCalls: round(percentile(toolCalls, 50), 0),
     p90ToolCalls: round(percentile(toolCalls, 90), 0),
     maxToolCalls: toolCalls.length > 0 ? toolCalls[toolCalls.length - 1] : 0,
-    
-    // ─── Efficiency ───
-    avgToolCallsPerStep: round(avgEfficiency, 2),
-    toolExecSuccessRate: round(toolExecSuccessRate, 4),
-    
-    // ─── Deep metrics (from sampled logs) ───
-    sampledTaskCount: sampled.length,
-    avgStepDurationMs: round(avgStepDuration, 0),
-    maxStepsInSingleTask: maxStepsInTask,
-    toolUsageDistribution: toolUsage,
-    
-    // ─── Metadata ───
+
+    avgToolCallsPerStep: round(efficiency.reduce((a, b) => a + b, 0) / Math.max(1, efficiency.length), 2),
+    toolExecSuccessRate: round(toolExecRates.reduce((a, b) => a + b, 0) / Math.max(1, toolExecRates.length), 4),
+
+    perTask: results.map(r => ({
+      id: r.taskId,
+      name: r.taskName,
+      success: r.success,
+      durationMs: r.durationMs,
+      steps: r.totalSteps,
+      toolCalls: r.totalToolCalls,
+      toolExecSuccessRate: r.toolExecSuccessRate,
+      error: r.error || '',
+    })),
+
     generatedAt: new Date().toISOString(),
-    tasksDir: TASKS_DIR,
-    allMode: entries[0]?.mode || 'unknown',
+    suite: 'benchmarks/suite/',
   };
 
   return metrics;
 }
 
-function round(v, d) {
-  return Math.round(v * Math.pow(10, d)) / Math.pow(10, d);
-}
-
 // ─── Baseline Management ──────────────────────────────────────────────
 
 function loadBaseline() {
-  if (!fs.existsSync(BENCHMARK_FILE)) return null;
-  try { return JSON.parse(fs.readFileSync(BENCHMARK_FILE, 'utf-8')); }
+  if (!fs.existsSync(BASELINE_FILE)) return null;
+  try { return JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf-8')); }
   catch { return null; }
 }
 
@@ -197,25 +385,30 @@ function saveBaseline(metrics, version) {
     version: version || `v${Date.now()}`,
     savedAt: new Date().toISOString(),
   };
-  fs.writeFileSync(BENCHMARK_FILE, JSON.stringify(baseline, null, 2), 'utf-8');
-  console.log(`✅ Baseline saved to ${BENCHMARK_FILE}`);
+  const dir = path.dirname(BASELINE_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(BASELINE_FILE, JSON.stringify(baseline, null, 2), 'utf-8');
+  console.log(`✅ Baseline saved to ${BASELINE_FILE}`);
   return baseline;
+}
+
+function saveResults(metrics) {
+  fs.writeFileSync(RESULTS_FILE, JSON.stringify(metrics, null, 2), 'utf-8');
 }
 
 // ─── Comparison Engine ────────────────────────────────────────────────
 
 const THRESHOLDS = {
-  successRate: { direction: 'higher', tolerance: -0.02 },     // Allow 2% drop
-  avgDurationSec: { direction: 'lower', tolerance: 1.20 },    // Allow 20% increase
-  avgSteps: { direction: 'lower', tolerance: 1.15 },          // Allow 15% increase
-  avgToolCalls: { direction: 'lower', tolerance: 1.15 },      // Allow 15% increase
-  toolExecSuccessRate: { direction: 'higher', tolerance: -0.03 }, // Allow 3% drop
-  avgToolCallsPerStep: { direction: 'lower', tolerance: 1.10 },  // Allow 10% increase
+  successRate: { direction: 'higher', tolerance: -0.02 },
+  avgDurationSec: { direction: 'lower', tolerance: 1.20 },
+  avgSteps: { direction: 'lower', tolerance: 1.15 },
+  avgToolCalls: { direction: 'lower', tolerance: 1.15 },
+  toolExecSuccessRate: { direction: 'higher', tolerance: -0.03 },
+  avgToolCallsPerStep: { direction: 'lower', tolerance: 1.10 },
 };
 
 function compareMetrics(current, baseline) {
   if (!baseline) {
-    console.log('⚠️  No baseline found. Run --save first.');
     return { passed: true, isNew: true, checks: [] };
   }
 
@@ -225,17 +418,15 @@ function compareMetrics(current, baseline) {
   for (const [key, rule] of Object.entries(THRESHOLDS)) {
     const curVal = current[key];
     const baseVal = baseline[key];
-    
+
     if (curVal === undefined || baseVal === undefined || baseVal === 0) continue;
 
     let passed;
     let changePct = ((curVal - baseVal) / baseVal) * 100;
-    
+
     if (rule.direction === 'higher') {
-      // Higher is better; tolerance is a negative floor (e.g. -0.02 = allow 2% drop)
       passed = changePct >= (rule.tolerance * 100);
     } else {
-      // Lower is better; tolerance is a positive ceiling (e.g. 1.20 = allow 20% increase)
       passed = changePct <= (rule.tolerance * 100 - 100);
     }
 
@@ -259,16 +450,31 @@ function compareMetrics(current, baseline) {
 
 // ─── Display ──────────────────────────────────────────────────────────
 
+function displayResults(results) {
+  console.log('\n┌──────────────────────────────────────────────────────┐');
+  console.log('│            Benchmark Task Results                    │');
+  console.log('├────┬──────────────────────────┬────────┬─────────────┤');
+  console.log('│ ID │ Task                     │ Result │ Duration    │');
+  console.log('├────┼──────────────────────────┼────────┼─────────────┤');
+  for (const r of results) {
+    const name = r.taskName.padEnd(24).substring(0, 24);
+    const status = r.success ? '✅ OK ' : '❌ FAIL';
+    const dur = `${(r.durationMs / 1000).toFixed(1)}s`.padStart(7);
+    console.log(`│ ${r.taskId} │ ${name} │ ${status}  │   ${dur} │`);
+  }
+  console.log('└────┴──────────────────────────┴────────┴─────────────┘');
+}
+
 function displayMetrics(metrics) {
   console.log('\n╔══════════════════════════════════════════════════════╗');
-  console.log('║         Code-Agent Benchmark Report                  ║');
+  console.log('║         Code-Agent Benchmark Report v2              ║');
   console.log('╠══════════════════════════════════════════════════════╣');
-  console.log(`║  Tasks: ${String(metrics.totalTasks).padStart(5)} total (${metrics.completedCount} completed, ${metrics.failedCount} failed)`);
+  console.log(`║  Tasks: ${String(metrics.totalTasks).padStart(5)} total (${metrics.completedCount} passed, ${metrics.failedCount} failed)`);
   console.log(`║  Success Rate: ${(metrics.successRate * 100).toFixed(1)}%`);
   console.log('╠══════════════════════════════════════════════════════╣');
   console.log('║  ── Duration ──');
   console.log(`║  Avg: ${String(metrics.avgDurationSec).padStart(7)}s | P50: ${String(metrics.p50DurationSec).padStart(7)}s | P90: ${String(metrics.p90DurationSec).padStart(7)}s`);
-  console.log(`║  P95: ${String(metrics.p95DurationSec).padStart(7)}s | Max: ${String(metrics.maxDurationSec).padStart(7)}s`);
+  console.log(`║  Max: ${String(metrics.maxDurationSec).padStart(7)}s`);
   console.log('║  ── Steps ──');
   console.log(`║  Avg: ${String(metrics.avgSteps).padStart(7)}   | P50: ${String(metrics.p50Steps).padStart(7)}   | P90: ${String(metrics.p90Steps).padStart(7)}`);
   console.log(`║  Max: ${String(metrics.maxSteps).padStart(7)}`);
@@ -277,21 +483,13 @@ function displayMetrics(metrics) {
   console.log(`║  Max: ${String(metrics.maxToolCalls).padStart(7)}`);
   console.log('║  ── Efficiency ──');
   console.log(`║  Tool exec success: ${(metrics.toolExecSuccessRate * 100).toFixed(1)}% | Avg calls/step: ${metrics.avgToolCallsPerStep}`);
-  console.log(`║  Avg step duration: ${metrics.avgStepDurationMs}ms (sampled ${metrics.sampledTaskCount} tasks)`);
-  console.log('║  ── Tool Usage (sampled) ──');
-  const tools = Object.entries(metrics.toolUsageDistribution || {})
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 7);
-  for (const [name, count] of tools) {
-    console.log(`║  ${name.padEnd(20)} ${String(count).padStart(6)} calls`);
-  }
   console.log('╚══════════════════════════════════════════════════════╝\n');
 }
 
 function displayComparison(result) {
   if (result.isNew) return;
-  
-  console.log('\n╔══════════════════════════════════════════════════════╗');
+
+  console.log('╔══════════════════════════════════════════════════════╗');
   console.log('║       Benchmark Comparison vs Baseline              ║');
   console.log('╠══════════════════════════════════════════════════════╣');
   for (const check of result.checks) {
@@ -306,31 +504,71 @@ function displayComparison(result) {
   console.log('╚══════════════════════════════════════════════════════╝\n');
 }
 
+function displayResultSummary(results, metrics) {
+  displayResults(results);
+  displayMetrics(metrics);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
 const mode = args[0] || '';
 
 async function main() {
-  const metrics = computeMetrics();
-  if (!metrics) process.exit(1);
-
+  // Read-only modes: don't need suite or build
   if (mode === '--json') {
-    console.log(JSON.stringify(metrics, null, 2));
+    if (fs.existsSync(RESULTS_FILE)) {
+      console.log(fs.readFileSync(RESULTS_FILE, 'utf-8'));
+    } else {
+      console.log(JSON.stringify({ error: 'No results. Run --run first.' }));
+    }
     return;
   }
+
+  if (mode === '--summary') {
+    if (fs.existsSync(RESULTS_FILE)) {
+      const m = JSON.parse(fs.readFileSync(RESULTS_FILE, 'utf-8'));
+      console.log(`Tasks: ${m.totalTasks} | Success: ${(m.successRate*100).toFixed(1)}% | ` +
+                  `Avg: ${m.avgSteps} steps, ${m.avgToolCalls} tools, ${m.avgDurationSec}s`);
+    } else {
+      console.log('No results. Run --run first.');
+    }
+    return;
+  }
+
+  // All other modes require the test suite
+  const tasks = loadSuite();
+  if (tasks.length === 0) {
+    console.error('No benchmark tasks found in benchmarks/suite/');
+    process.exit(1);
+  }
+
+  // Build the latest agent
+  console.log('🔨 Building agent...');
+  try {
+    execSync('node build.mjs', { cwd: PROJECT_ROOT, stdio: 'inherit', timeout: 60000 });
+  } catch (err) {
+    console.error('Build failed:', err.message);
+    process.exit(1);
+  }
+
+  const results = await runSuite(tasks);
+  if (!results) process.exit(1);
+
+  const metrics = computeMetrics(results);
+  if (!metrics) process.exit(1);
+
+  saveResults(metrics);
+  displayResultSummary(results, metrics);
 
   if (mode === '--save') {
     const version = args[1];
     saveBaseline(metrics, version);
-    displayMetrics(metrics);
     return;
   }
 
   if (mode === '--check') {
     const baseline = loadBaseline();
-    displayMetrics(metrics);
-    
     if (!baseline) {
       console.log('⚠️  No baseline found. Run "node scripts/benchmark.mjs --save" first.');
       process.exit(0);
@@ -338,31 +576,25 @@ async function main() {
 
     const result = compareMetrics(metrics, baseline);
     displayComparison(result);
-    
+
     if (!result.passed) {
       console.error('❌ Benchmark regression detected!');
       console.error('   Review the metrics above. If the regression is intentional,');
       console.error('   update the baseline: node scripts/benchmark.mjs --save');
       process.exit(1);
     }
-    
+
     console.log('✅ Benchmark checks passed.');
     process.exit(0);
   }
 
-  if (mode === '--summary') {
-    console.log(`Tasks: ${metrics.totalTasks} | Success: ${(metrics.successRate*100).toFixed(1)}% | ` +
-                `Avg: ${metrics.avgSteps} steps, ${metrics.avgToolCalls} tools, ${metrics.avgDurationSec}s`);
-    return;
-  }
-
-  // Default: display
-  displayMetrics(metrics);
-  
+  // Default: just display (already done above)
   const baseline = loadBaseline();
   if (baseline) {
     const result = compareMetrics(metrics, baseline);
     displayComparison(result);
+  } else {
+    console.log('💡 No baseline yet. Run --save to create one.');
   }
 }
 

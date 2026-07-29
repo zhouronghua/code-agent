@@ -1,6 +1,6 @@
 {
   "name": "code-agent",
-  "version": "0.3.22",
+  "version": "0.3.23",
   "description": "AI coding agent CLI with multi-provider LLM support, Cursor-compatible skills, and VS Code architecture",
   "main": "build/agent-cli.js",
   "bin": {
@@ -38,6 +38,7 @@
     "link": "npm run build && npm link",
     "prepublishOnly": "npm run build:release",
     "benchmark": "node scripts/benchmark.mjs",
+    "benchmark:run": "node scripts/benchmark.mjs --run",
     "benchmark:save": "node scripts/benchmark.mjs --save",
     "benchmark:check": "node scripts/benchmark.mjs --check",
     "benchmark:summary": "node scripts/benchmark.mjs --summary",

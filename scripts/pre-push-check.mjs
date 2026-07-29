@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Code-Agent Pre-Push Guard
+ * Code-Agent Pre-Push Guard v2
  * 
  * Runs benchmark comparison before allowing git push.
  * Ensures agent quality metrics haven't regressed.
@@ -21,11 +21,12 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const GIT_HOOK_PATH = path.join(PROJECT_ROOT, '.git', 'hooks', 'pre-push');
 
 const PRE_PUSH_HOOK = `#!/bin/bash
-# Code-Agent Pre-Push Hook
-# Automatically checks benchmark metrics before pushing.
+# Code-Agent Pre-Push Hook v2
+# Builds latest agent, runs test suite, and checks benchmark metrics before pushing.
 
 echo ""
 echo "🔍 Running Code-Agent benchmark check..."
+echo "   (build → run test suite → compare against baseline)"
 echo ""
 
 node "$(git rev-parse --show-toplevel)/scripts/benchmark.mjs" --check
@@ -50,11 +51,10 @@ function installHook() {
     fs.mkdirSync(hooksDir, { recursive: true });
   }
   
-  // If hook already exists, back it up
   if (fs.existsSync(GIT_HOOK_PATH)) {
     const existing = fs.readFileSync(GIT_HOOK_PATH, 'utf-8');
-    if (existing.includes('Code-Agent Benchmark')) {
-      console.log('✅ Pre-push hook already installed.');
+    if (existing.includes('Code-Agent Benchmark') && existing.includes('v2')) {
+      console.log('✅ Pre-push hook already installed (v2).');
       return;
     }
     const backup = GIT_HOOK_PATH + '.backup';
@@ -63,8 +63,8 @@ function installHook() {
   }
   
   fs.writeFileSync(GIT_HOOK_PATH, PRE_PUSH_HOOK, { mode: 0o755 });
-  console.log('✅ Pre-push hook installed at .git/hooks/pre-push');
-  console.log('   Benchmark checks will run before every git push.');
+  console.log('✅ Pre-push hook v2 installed at .git/hooks/pre-push');
+  console.log('   Benchmark will build agent, run test suite, and check metrics before push.');
 }
 
 function runCheck(force) {
@@ -79,7 +79,7 @@ function runCheck(force) {
     execSync(`node "${benchScript}" --check`, {
       cwd: PROJECT_ROOT,
       stdio: 'inherit',
-      timeout: 30000,
+      timeout: 600000, // 10 min for full suite
     });
     process.exit(0);
   } catch (err) {

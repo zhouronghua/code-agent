@@ -1,0 +1,16 @@
+{
+  "id": "003",
+  "name": "编辑文件",
+  "task": "读取 config.yaml 文件，将其中的 'debug: false' 修改为 'debug: true'，不要修改其他任何内容。不要执行其他多余操作。",
+  "maxDurationSec": 60,
+  "setup": {
+    "files": {
+      "config.yaml": "app:\n  name: test-app\n  version: 1.0.0\ndebug: false\nlogging:\n  level: info"
+    }
+  },
+  "verify": {
+    "fileExists": "config.yaml",
+    "fileContains": ["config.yaml", "debug: true"],
+    "fileNotContains": ["config.yaml", "debug: false"]
+  }
+}

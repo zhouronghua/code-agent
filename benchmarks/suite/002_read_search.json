@@ -1,0 +1,17 @@
+{
+  "id": "002",
+  "name": "读取并搜索文件",
+  "task": "读取 README.md 的内容，然后在项目根目录搜索包含 'TODO' 关键字的文件，把找到的文件名列表写入 todo_files.txt（每行一个文件名）。不要执行其他多余操作。",
+  "maxDurationSec": 60,
+  "setup": {
+    "files": {
+      "README.md": "# Test Project\n\nTODO: Add more tests",
+      "src/main.ts": "// TODO: implement feature",
+      "src/utils.ts": "// Utility functions",
+      "docs/design.md": "# Design Document\n\nTODO: Add architecture diagram"
+    }
+  },
+  "verify": {
+    "fileExists": "todo_files.txt"
+  }
+}

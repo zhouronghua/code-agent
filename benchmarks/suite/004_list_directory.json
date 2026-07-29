@@ -1,0 +1,19 @@
+{
+  "id": "004",
+  "name": "列出目录结构",
+  "task": "列出 src 目录的完整结构（包含子目录），把输出结果写入 directory_structure.txt。不要执行其他多余操作。",
+  "maxDurationSec": 60,
+  "setup": {
+    "files": {
+      "src/main.ts": "// Main entry point",
+      "src/utils/helpers.ts": "// Helper functions",
+      "src/utils/format.ts": "// Format utilities",
+      "src/components/Button.tsx": "// Button component",
+      "src/components/Modal.tsx": "// Modal component",
+      "tests/main.test.ts": "// Main tests"
+    }
+  },
+  "verify": {
+    "fileExists": "directory_structure.txt"
+  }
+}

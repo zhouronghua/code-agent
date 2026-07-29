@@ -1,0 +1,17 @@
+{
+  "id": "005",
+  "name": "执行终端命令",
+  "task": "执行命令统计 src 目录下所有 .ts 文件的总行数（用 wc -l），把输出写入 ts_line_count.txt。不要执行其他多余操作。",
+  "maxDurationSec": 60,
+  "setup": {
+    "files": {
+      "src/main.ts": "// Main entry point\nimport { App } from './app';\n\nconst app = new App();\napp.run();\n",
+      "src/utils/helpers.ts": "// Helper functions\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n",
+      "src/utils/format.ts": "// Format utilities\nexport function formatDate(date: Date): string {\n  return date.toISOString();\n}\n",
+      "src/components/Button.tsx": "// Button component\nexport function Button() {\n  return '<button>Click</button>';\n}\n"
+    }
+  },
+  "verify": {
+    "fileExists": "ts_line_count.txt"
+  }
+}
