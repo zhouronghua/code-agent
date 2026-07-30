@@ -433,6 +433,7 @@ function createServices(resolved: ResolvedConfig) {
 	toolRegistry.register(new ListDirectoryTool(fileService));
 	toolRegistry.register(new SearchTextTool(searchService, workspaceRoot));
 	toolRegistry.register(new SearchFilesTool(searchService, workspaceRoot));
+	toolRegistry.registerAlias('search_content', 'search_text');
 	toolRegistry.register(new RunTerminalTool(terminalService, process.cwd()));
 
 	const checkpointManager = new AgentCheckpointManager(fileService);

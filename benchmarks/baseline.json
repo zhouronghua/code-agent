@@ -1,0 +1,76 @@
+{
+  "totalTasks": 5,
+  "completedCount": 5,
+  "failedCount": 0,
+  "successRate": 1,
+  "avgDurationSec": 15.5,
+  "p50DurationSec": 16.3,
+  "p90DurationSec": 17,
+  "maxDurationSec": 17,
+  "avgSteps": 6.4,
+  "p50Steps": 7,
+  "p90Steps": 8,
+  "maxSteps": 8,
+  "avgToolCalls": 3.2,
+  "p50ToolCalls": 3,
+  "p90ToolCalls": 5,
+  "maxToolCalls": 5,
+  "avgToolCallsPerStep": 0.49,
+  "toolExecSuccessRate": 1,
+  "perTask": [
+    {
+      "id": "001",
+      "name": "创建并验证文件",
+      "success": true,
+      "durationMs": 15618,
+      "steps": 5,
+      "toolCalls": 2,
+      "toolExecSuccessRate": 1,
+      "error": ""
+    },
+    {
+      "id": "002",
+      "name": "读取并搜索文件",
+      "success": true,
+      "durationMs": 16878,
+      "steps": 7,
+      "toolCalls": 4,
+      "toolExecSuccessRate": 1,
+      "error": ""
+    },
+    {
+      "id": "003",
+      "name": "编辑文件",
+      "success": true,
+      "durationMs": 16986,
+      "steps": 8,
+      "toolCalls": 5,
+      "toolExecSuccessRate": 1,
+      "error": ""
+    },
+    {
+      "id": "004",
+      "name": "列出目录结构",
+      "success": true,
+      "durationMs": 16285,
+      "steps": 7,
+      "toolCalls": 3,
+      "toolExecSuccessRate": 1,
+      "error": ""
+    },
+    {
+      "id": "005",
+      "name": "执行终端命令",
+      "success": true,
+      "durationMs": 11706,
+      "steps": 5,
+      "toolCalls": 2,
+      "toolExecSuccessRate": 1,
+      "error": ""
+    }
+  ],
+  "generatedAt": "2026-07-31T10:17:27.027Z",
+  "suite": "benchmarks/suite/",
+  "version": "v1785493047029",
+  "savedAt": "2026-07-31T10:17:27.029Z"
+}

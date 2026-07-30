@@ -236,6 +236,7 @@ export class AgentService extends Disposable implements IAgentService {
 		this._toolRegistry.register(new ListDirectoryTool(this._fileService));
 		this._toolRegistry.register(new SearchTextTool(this._searchService, workspaceRoot));
 		this._toolRegistry.register(new SearchFilesTool(this._searchService, workspaceRoot));
+		this._toolRegistry.registerAlias('search_content', 'search_text');
 		this._toolRegistry.register(new RunTerminalTool(this._terminalService, workspaceRoot.fsPath));
 		this._toolRegistry.register(new PollTool(this._terminalService, workspaceRoot.fsPath));
 	}

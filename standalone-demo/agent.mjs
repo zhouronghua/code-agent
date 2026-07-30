@@ -190,6 +190,32 @@ const TOOLS = {
 		},
 	},
 
+	// Alias for search_text — many LLMs are trained to use "search_content" instead
+	search_content: {
+		description: 'Search for text pattern in files (alias for search_text, uses grep)',
+		parameters: {
+			type: 'object',
+			properties: {
+				pattern: { type: 'string', description: 'Search pattern' },
+				path: { type: 'string', description: 'Search directory' },
+				glob: { type: 'string', description: 'File glob filter' },
+			},
+			required: ['pattern'],
+		},
+		execute(args) {
+			const searchPath = args.path || '.';
+			try {
+				let cmd = `rg --no-heading -n "${args.pattern.replace(/"/g, '\\"')}" "${searchPath}"`;
+				if (args.glob) { cmd += ` --glob "${args.glob}"`; }
+				cmd += ' --max-count 50 2>/dev/null || grep -rn "${args.pattern}" "${searchPath}" --include="${args.glob || "*"}" 2>/dev/null | head -50';
+				const output = execSync(cmd, { encoding: 'utf-8', timeout: 10000 }).trim();
+				return { success: true, output: output || 'No matches found' };
+			} catch {
+				return { success: true, output: 'No matches found' };
+			}
+		},
+	},
+
 	search_files: {
 		description: 'Find files matching a glob pattern',
 		parameters: {
