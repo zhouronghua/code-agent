@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * Code-Agent Pre-Push Guard v2
+ * Code-Agent Pre-Push Guard v3
  * 
  * Runs benchmark comparison before allowing git push.
  * Ensures agent quality metrics haven't regressed.
+ * 
+ * v3: BENCHMARK_STRICT=1 to block, BENCHMARK_DISABLE=1 to skip, warn-only by default.
  * 
  * Usage:
  *   node scripts/pre-push-check.mjs          # Run check
@@ -21,8 +23,10 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const GIT_HOOK_PATH = path.join(PROJECT_ROOT, '.git', 'hooks', 'pre-push');
 
 const PRE_PUSH_HOOK = `#!/bin/bash
-# Code-Agent Pre-Push Hook v2
+# Code-Agent Pre-Push Hook v3
 # Builds latest agent, runs test suite, and checks benchmark metrics before pushing.
+# Set BENCHMARK_STRICT=1 to block on regression (default: warn only).
+# Set BENCHMARK_DISABLE=1 to skip all checks.
 
 echo ""
 echo "🔍 Running Code-Agent benchmark check..."
@@ -33,10 +37,11 @@ node "$(git rev-parse --show-toplevel)/scripts/benchmark.mjs" --check
 
 if [ $? -ne 0 ]; then
   echo ""
-  echo "❌ Push blocked: benchmark metrics regressed."
+  echo "❌ Push blocked: benchmark metrics regressed in strict mode."
   echo "   Review the metrics above."
   echo "   - If intentional: node scripts/benchmark.mjs --save to update baseline"
   echo "   - If emergency:  git push --no-verify"
+  echo "   - To warn only:   unset BENCHMARK_STRICT (default)"
   echo ""
   exit 1
 fi

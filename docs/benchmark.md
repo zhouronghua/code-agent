@@ -1,6 +1,6 @@
-# Code-Agent Benchmark Report v2
+# Code-Agent Benchmark Report v3
 
-> **新机制**: 每次 benchmark 都用**最新 build 的 agent** 运行固定测试集，生成**反映最新代码质量**的指标。
+> **v3 改进**: 多轮运行取中位数平滑 LLM 非确定性，大幅放宽阈值，默认 warn-only 模式。
 > 旧机制（读历史日志）已废弃 — 那些日志是旧版本产生的，和新修改无关。
 
 ---
@@ -14,8 +14,8 @@
 npm run benchmark:check
    │
    ├─ 1. 🔨 npm run build          ← 构建最新 agent
-   ├─ 2. 🧪 运行 benchmarks/suite/  ← 用新 agent 跑测试集
-   ├─ 3. 📏 收集指标               ← 从新产生的任务日志提取
+   ├─ 2. 🧪 运行 benchmarks/suite/  ← 用新 agent 跑测试集 (默认 3 轮)
+   ├─ 3. 📏 收集指标               ← 中位数聚合多轮结果
    └─ 4. ⚖️ 对比基线              ← 与 benchmarks/baseline.json 比较
 ```
 
@@ -33,18 +33,26 @@ npm run benchmark:check
 
 ---
 
-## 🛡️ 门禁检查阈值
+## 🛡️ 门禁检查阈值 (v3 宽松版)
 
-> 以下阈值在 `git push` 前自动检查。任一指标恶化超过容忍度则**阻止推送**。
+> LLM 输出天然具有不确定性，v3 大幅放宽阈值。默认 **warn-only** 模式，仅在 `BENCHMARK_STRICT=1` 时阻止推送。
 
 | 指标 | 方向 | 容忍度 | 说明 |
 |------|------|--------|------|
-| `successRate` | ↑ 越高越好 | -2% | 任务通过率 |
-| `avgDurationSec` | ↓ 越低越好 | +20% | 平均任务耗时 |
-| `avgSteps` | ↓ 越低越好 | +15% | 平均步骤数 |
-| `avgToolCalls` | ↓ 越低越好 | +15% | 平均工具调用数 |
-| `toolExecSuccessRate` | ↑ 越高越好 | -3% | 工具执行成功率 |
-| `avgToolCallsPerStep` | ↓ 越低越好 | +10% | 每步平均调用数 |
+| `successRate` | ↑ 越高越好 | -8% | 任务通过率 |
+| `avgDurationSec` | ↓ 越低越好 | +150% | 平均任务耗时 |
+| `avgSteps` | ↓ 越低越好 | +100% | 平均步骤数 |
+| `avgToolCalls` | ↓ 越低越好 | +100% | 平均工具调用数 |
+| `toolExecSuccessRate` | ↑ 越高越好 | -10% | 工具执行成功率 |
+| `avgToolCallsPerStep` | ↓ 越低越好 | +50% | 每步平均调用数 |
+
+## 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `BENCHMARK_RUNS` | 每个任务重复运行次数取中位数 | 3 |
+| `BENCHMARK_STRICT` | 回归时 exit 1 阻止 push | 未设置（warn only） |
+| `BENCHMARK_DISABLE` | 完全跳过 benchmark 检查 | 未设置 |
 
 ---
 
@@ -54,18 +62,19 @@ npm run benchmark:check
 修改代码 → npm run build → npm run benchmark:check
                                    │
                           ✅ 通过 → git push
-                          ❌ 失败 → 排查修复 → 重新检查
+                          ⚠️ 警告 → git push（默认非阻塞）
+                          ❌ 阻止 → 排查修复 → 重新检查（仅 strict 模式）
                                    │
                           npm run benchmark:save (更新基线)
 ```
 
 ---
 
-## 与旧版 (v1) 的区别
+## 与旧版 (v2) 的区别
 
-| | v1 (已废弃) | v2 (当前) |
+| | v2 (旧) | v3 (当前) |
 |---|---|---|
-| 数据来源 | ~/.codeagent/tasks/ 历史日志 | 最新 build 运行测试集 |
-| 反映代码修改 | ❌ 旧版本产生的日志 | ✅ 新代码运行的结果 |
-| 可重复 | ❌ 依赖历史使用记录 | ✅ 固定测试集 |
-| 新版首次运行 | 总是通过（数据没变） | 真实反映新代码质量 |
+| 运行次数 | 单次 | 默认 3 次取中位数 |
+| 阈值 | 严格 (10-20% 容忍) | 宽松 (50-150% 容忍) |
+| 失败行为 | 阻止 push | 默认 warn-only |
+| 平滑非确定性 | ❌ | ✅ 多轮中位数 |

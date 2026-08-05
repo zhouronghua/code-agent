@@ -104,6 +104,10 @@ export class SkillsLoader {
 				lines.push(skill.description);
 			}
 			lines.push(`Path: ${skill.filePath}`);
+			// Show trigger keywords so the agent can self-match at runtime
+			if (skill.triggers.length > 0) {
+				lines.push(`Triggers: ${skill.triggers.join(', ')}`);
+			}
 
 			// If this skill was auto-matched, include its FULL content so the
 			// agent can follow its instructions without needing explicit /skill activation.
@@ -262,15 +266,25 @@ export class SkillsLoader {
 		return result;
 	}
 
-	buildFullContextPrompt(excludeRulePatterns?: string[]): string {
+	/**
+	 * Build full context prompt with all rules and skills.
+	 * Optionally accepts a task description for auto-matching skills.
+	 */
+	buildFullContextPrompt(taskDescription?: string, excludeRulePatterns?: string[]): string {
 		let prompt = '';
 
 		// Preload ALL rules content (not just alwaysApply) for auto-matching
 		const rulesSection = this.buildPreloadRulesPromptSection(excludeRulePatterns);
 		if (rulesSection) prompt += rulesSection;
 
-		// Preload skills titles for auto-matching
-		const skillsSection = this.buildSkillsPromptSection();
+		// Auto-match skills based on task description
+		let preActivatedSkills: Set<string> | undefined;
+		if (taskDescription) {
+			preActivatedSkills = this.getAutoMatchedSkills(taskDescription);
+		}
+
+		// Preload skills headers for auto-matching (with triggers shown)
+		const skillsSection = this.buildSkillsPromptSection(preActivatedSkills);
 		if (skillsSection) prompt += skillsSection;
 
 		return prompt;
