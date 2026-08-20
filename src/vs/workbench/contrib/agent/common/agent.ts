@@ -592,8 +592,14 @@ export class AgentLoop {
 			// Agent is taking action — reset verification counter
 			verificationRounds = 0;
 
-			// Track whether this step produced any text content (analysis/reasoning)
-			if (!response.content || response.content.trim().length === 0) {
+			// Track whether this step produced any analysis.
+			// Reasoning models (thinking mode) put their analysis in reasoningContent
+			// while content stays empty during tool-calling steps. Treat either as
+			// evidence of progress so we don't false-positive on loop detection.
+			const hasAnalysis =
+				(response.content && response.content.trim().length > 0) ||
+				(response.reasoningContent && response.reasoningContent.trim().length > 0);
+			if (!hasAnalysis) {
 				consecutiveToolOnlySteps++;
 			} else {
 				consecutiveToolOnlySteps = 0;
