@@ -123,8 +123,8 @@ export class AgentLoop {
 
 	/**
 	 * Append an additional instruction/hint to the extra system prompt.
-	 * Used by /btw when the agent is idle — hints accumulate for the next run().
-	 * Multiple /btw commands accumulate; each hint is separated clearly.
+	 * Used by in-flight /btw hints so they persist into subsequent run() calls.
+	 * Multiple hints accumulate; each hint is separated clearly.
 	 */
 	appendExtraSystemPrompt(hint: string): void {
 		const separator = '\n\n---\n## User Intervention (via /btw)\n';

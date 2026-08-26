@@ -394,9 +394,10 @@ Task Logs (for troubleshooting):
   - Storage: ~/.codeagent/tasks/
 
 Intervention:
-  /btw <hint>    Inject a hint into the agent's reasoning for subsequent
-                 turns. Accumulates across multiple /btw calls.
-                 Useful for course-correcting or adding context mid-session.
+  /btw <hint>    While the agent is running, inject a hint into its reasoning
+                 for subsequent turns. While idle, treat it as a direct prompt
+                 and respond immediately. Useful for course-correcting or adding
+                 context mid-session.
   /btw cancel    Cancel the currently running tool (e.g., a long build or
                  poll). The agent will continue with the next step.
 
@@ -789,6 +790,25 @@ async function main() {
 		agentIsRunning = false;
 	};
 
+	// Process any input buffered while the agent was running.
+	// With the idle /btw semantics (a hint is a direct prompt), a buffered
+	// /btw is also executed immediately as a task rather than silently accumulated.
+	const drainBufferedLines = async () => {
+		while (bufferedLines.length > 0) {
+			const next = bufferedLines.shift()!;
+			if (next.startsWith('/btw ')) {
+				const hint = next.slice(5).trim();
+				if (hint && hint !== 'cancel' && hint !== 'abort') {
+					log(C.magenta, 'BTW', `Buffered hint as prompt: "${hint.substring(0, 80)}${hint.length > 80 ? '...' : ''}"`);
+					await processTask(hint);
+				}
+				continue;
+			}
+			console.log(`\n${C.dim}--- Processing queued: "${next.substring(0, 80)}${next.length > 80 ? '...' : ''}" ---${C.reset}`);
+			await processTask(next);
+		}
+	};
+
 	// Shared graceful exit — saves session, disposes agent, and exits cleanly.
 	// Used by both the "exit" command and Ctrl+C (SIGINT).
 	const gracefulExit = () => {
@@ -1060,16 +1080,16 @@ async function main() {
 				processingLock = false; displayPrompt(); return;
 			}
 
-			// ---- /btw when agent is idle: accumulate for next run ----
+			// ---- /btw when agent is idle: treat as a direct prompt and respond immediately ----
 			if (trimmed.startsWith('/btw ')) {
 				const hint = trimmed.slice(5).trim();
 				if (hint) {
 					if (hint === 'cancel' || hint === 'abort') {
 						log(C.yellow, 'BTW', 'No agent currently running. Use /btw cancel while agent is running to abort a tool.');
 					} else {
-						agentLoop.appendExtraSystemPrompt(hint);
-						log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
-						console.log(`${C.dim}(Will affect subsequent agent reasoning in this session)${C.reset}`);
+						log(C.magenta, 'BTW', `Direct prompt: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+						await processTask(hint);
+						await drainBufferedLines();
 					}
 				} else {
 					log(C.yellow, 'BTW', 'Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)');
@@ -1081,20 +1101,7 @@ async function main() {
 			await processTask(trimmed);
 
 			// Process any buffered input (typed during agent execution)
-			while (bufferedLines.length > 0) {
-				const next = bufferedLines.shift()!;
-				if (next.startsWith('/btw ')) {
-					// Handle /btw that was buffered during execution
-					const hint = next.slice(5).trim();
-					if (hint) {
-						agentLoop.appendExtraSystemPrompt(hint);
-						log(C.magenta, 'BTW', `Buffered hint applied: "${hint.substring(0, 80)}${hint.length > 80 ? '...' : ''}"`);
-					}
-					continue;
-				}
-				console.log(`\n${C.dim}--- Processing queued: "${next.substring(0, 80)}${next.length > 80 ? '...' : ''}" ---${C.reset}`);
-				await processTask(next);
-			}
+			await drainBufferedLines();
 		} finally {
 			processingLock = false;
 			displayPrompt();
