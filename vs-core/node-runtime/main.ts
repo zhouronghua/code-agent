@@ -37,6 +37,7 @@ import { SearchTextTool } from '../../src/vs/workbench/contrib/agent/common/tool
 import { SearchFilesTool } from '../../src/vs/workbench/contrib/agent/common/tools/searchFiles';
 import { RunTerminalTool } from '../../src/vs/workbench/contrib/agent/common/tools/runTerminal';
 import { loadConfig, loadConfigForProfile, listProfiles, ResolvedConfig } from '../../src/vs/workbench/contrib/agent/common/agentConfig';
+import { ModelRouter } from '../../src/vs/workbench/contrib/agent/common/agentModelRouter';
 import { SkillsLoader } from '../../src/vs/workbench/contrib/agent/common/agentSkills';
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
 import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common/agentSessions';
@@ -483,8 +484,13 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
 	console.log(`\n${C.bold}${C.magenta}=== Parallel Agent Mode ===${C.reset}`);
 	console.log(`${C.dim}Running ${tasks.length} tasks concurrently (max 4)${C.reset}\n`);
 
+	const modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
+	if (modelRouter.enabled) {
+		console.log(`${C.dim}Model routing: ON (${Object.entries(modelRouter.scenarios).map(([s, m]) => `${s}→${m}`).join(', ')})${C.reset}\n`);
+	}
+
 	const taskLogManager = new TaskLogManager();
-	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4);
+	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4, modelRouter);
 
 	manager.onDidTaskStart(task => {
 		log(C.cyan, `TASK ${task.id.slice(-6)}`, `Started: ${task.description.substring(0, 80)}`);
@@ -676,6 +682,33 @@ async function main() {
 		agentLoop.setStreaming(true);
 	}
 
+	// ---- Model routing: auto-select & switch models per prompt within a session ----
+	let modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
+	let currentModel = config.model;
+
+	const applyModelRouting = (task: string): void => {
+		if (!modelRouter.enabled) return;
+		const selected = modelRouter.selectConfig(task);
+		if (selected.model === currentModel) return;
+
+		try {
+			const newProvider = LLMProviderFactory.create(selected);
+			agentLoop.swapProvider(selected, newProvider);
+			currentModel = selected.model;
+			const scenario = modelRouter.detectScenario(task);
+			log(C.magenta, 'ROUTE', `${scenario} → ${selected.provider}/${selected.model}`);
+		} catch (err: any) {
+			log(C.red, 'ROUTE', `Failed to switch model: ${err.message}`);
+		}
+	};
+
+	if (modelRouter.enabled) {
+		const scenarioEntries = Object.entries(modelRouter.scenarios)
+			.map(([s, m]) => `${s}→${m}`)
+			.join(', ');
+		console.log(`${C.dim}Model routing: ON${scenarioEntries ? ` (${scenarioEntries})` : ''}${C.reset}`);
+	}
+
 	// Inject skills + rules into agent's system prompt
 	// Pass task description for auto-matching skills
 	const taskDescription = opts.tasks.length > 0 ? opts.tasks.join(' ') : undefined;
@@ -777,6 +810,9 @@ async function main() {
 			// Rebuild skills context with the actual task for auto-matching
 			const taskExtra = buildSkillsContext(skillsLoader, undefined, task);
 			agentLoop.setExtraSystemPrompt(taskExtra);
+
+			// Auto-select/switch model based on the prompt scenario
+			applyModelRouting(task);
 
 			await agentLoop.run(task);
 			autoSaveSession(task.substring(0, 80));
@@ -1032,6 +1068,8 @@ async function main() {
 					const newProvider = LLMProviderFactory.create(newResolved.agentConfig);
 					agentLoop.swapProvider(newResolved.agentConfig, newProvider);
 					resolved = newResolved;
+					modelRouter = new ModelRouter(newResolved.modelRouting, newResolved.profiles, newResolved.agentConfig);
+					currentModel = newResolved.agentConfig.model;
 					const nc = newResolved.agentConfig;
 					log(C.magenta, 'PROFILE', `Switched to ${newProfileName} (${nc.provider}/${nc.model})`);
 				} catch (err: any) {

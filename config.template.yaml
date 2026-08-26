@@ -18,6 +18,18 @@ active_profile: openai
 #   deepseek-v4-pro:
 #     temperature: 0.5
 
+# Model routing — automatically select & switch models per prompt within a session.
+# Scenarios are detected from the prompt: 'vision' | 'reasoning' | 'fast'.
+# Each scenario maps to a model id (models.json) or a profile name (above).
+# When this section is present, routing is enabled by default (set enabled: false to disable).
+# model_routing:
+#   enabled: true
+#   default: deepseek-v4-flash          # fallback model for unmatched scenarios
+#   scenarios:
+#     reasoning: deepseek-v4-pro        # complex refactor/debug/architecture tasks
+#     vision: deepseek-v4-flash-vision-exp  # image/screenshot understanding
+#     fast: deepseek-v4-flash           # simple/quick tasks
+
 # Agent settings
 agent:
   max_steps: 999999

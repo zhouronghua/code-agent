@@ -25,6 +25,25 @@ interface ConfigProfile {
 	max_output_tokens?: number;
 }
 
+/**
+ * Model routing configuration — maps scenarios to specific models so the agent
+ * can automatically pick and switch models within a session based on the prompt.
+ *
+ * config.yaml:
+ *   model_routing:
+ *     enabled: true
+ *     default: deepseek-v4-flash
+ *     scenarios:
+ *       reasoning: deepseek-v4-pro
+ *       vision: deepseek-v4-flash-vision-exp
+ *       fast: deepseek-v4-flash
+ */
+export interface ModelRoutingConfig {
+	enabled: boolean;
+	defaultModel?: string;
+	scenarios?: Record<string, string>;
+}
+
 interface McpServerConfig {
 	command?: string;
 	args?: string[];
@@ -47,6 +66,11 @@ interface ConfigFile {
 	skills?: string[];
 	rules?: string[];
 	mcp_servers?: Record<string, McpServerConfig>;
+	model_routing?: {
+		enabled?: boolean;
+		default?: string;
+		scenarios?: Record<string, string>;
+	};
 }
 
 // CodeBuddy-compatible models.json entry
@@ -77,6 +101,7 @@ function parseYaml(text: string): ConfigFile {
 	let currentProfile = '';
 	let inList = false;
 	let listKey = '';
+	let inRoutingScenarios = false;
 
 	for (const line of lines) {
 		const trimmed = line.trimEnd();
@@ -90,6 +115,7 @@ function parseYaml(text: string): ConfigFile {
 			inList = false;
 			if (currentSection === 'profiles') result.profiles = result.profiles || {};
 			if (currentSection === 'agent') result.agent = result.agent || {};
+			if (currentSection === 'model_routing') result.model_routing = result.model_routing || {};
 			continue;
 		}
 
@@ -132,6 +158,32 @@ function parseYaml(text: string): ConfigFile {
 			else if (k === 'step_timeout') result.agent.step_timeout = parseInt(val, 10);
 			else if (k === 'task_timeout') result.agent.task_timeout = parseInt(val, 10);
 			continue;
+		}
+
+		if (currentSection === 'model_routing') {
+			if (!result.model_routing) result.model_routing = {};
+			if (indent === 2 && trimmed.endsWith(':')) {
+				const subKey = trimmed.slice(0, -1).trim();
+				inRoutingScenarios = subKey === 'scenarios';
+				if (inRoutingScenarios) result.model_routing.scenarios = result.model_routing.scenarios || {};
+				continue;
+			}
+			if (indent === 2) {
+				const [key, ...rest] = trimmed.split(':');
+				const val = rest.join(':').trim();
+				const k = key.trim();
+				if (k === 'enabled') result.model_routing.enabled = val === 'true' || val === '1' || val === 'yes';
+				else if (k === 'default') result.model_routing.default = val;
+				continue;
+			}
+			if (indent === 4 && inRoutingScenarios) {
+				const [key, ...rest] = trimmed.split(':');
+				const val = rest.join(':').trim();
+				if (result.model_routing.scenarios) {
+					result.model_routing.scenarios[key.trim()] = val;
+				}
+				continue;
+			}
 		}
 
 		if (currentSection === 'mcp_servers' && indent === 2 && trimmed.endsWith(':')) {
@@ -274,6 +326,27 @@ export interface ResolvedConfig {
 	profileName: string;
 	configFilePath?: string;
 	mcpServers: McpServerEntry[];
+	/** All available model configs keyed by model id / profile name — used for model routing. */
+	profiles: Record<string, IAgentConfig>;
+	/** Scenario → model routing configuration. */
+	modelRouting: ModelRoutingConfig;
+}
+
+/** Build a full IAgentConfig from a single profile (no env LLM_MODEL/provider override). */
+function profileToAgentConfig(profile: ConfigProfile, agent: ConfigFile['agent']): IAgentConfig {
+	return {
+		...DEFAULT_AGENT_CONFIG,
+		provider: (profile.provider || DEFAULT_AGENT_CONFIG.provider) as IAgentConfig['provider'],
+		model: profile.model || DEFAULT_AGENT_CONFIG.model,
+		apiKey: profile.api_key || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '',
+		apiBase: profile.api_base || undefined,
+		maxSteps: agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
+		maxContextTokens: profile.max_input_tokens || agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
+		maxOutputTokens: profile.max_output_tokens || DEFAULT_AGENT_CONFIG.maxOutputTokens,
+		temperature: profile.temperature ?? agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
+		stepTimeout: agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
+		taskTimeout: agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,
+	};
 }
 
 export function loadConfig(cliProfile?: string): ResolvedConfig {
@@ -342,7 +415,30 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		([name, srv]) => ({ name, ...srv })
 	);
 
-	return { agentConfig, skillsDirs, rulesDirs, profileName, configFilePath: configPath, mcpServers };
+	// Build all available model configs (models.json + config.yaml profiles) for routing.
+	const profiles: Record<string, IAgentConfig> = {};
+	for (const [name, p] of Object.entries(fileConfig.profiles || {})) {
+		profiles[name] = profileToAgentConfig(p, fileConfig.agent);
+	}
+
+	// Model routing: enabled when a model_routing section is present and not explicitly disabled.
+	const hasRouting = fileConfig.model_routing !== undefined;
+	const modelRouting: ModelRoutingConfig = {
+		enabled: hasRouting && fileConfig.model_routing?.enabled !== false,
+		defaultModel: fileConfig.model_routing?.default,
+		scenarios: fileConfig.model_routing?.scenarios || {},
+	};
+
+	return {
+		agentConfig,
+		skillsDirs,
+		rulesDirs,
+		profileName,
+		configFilePath: configPath,
+		mcpServers,
+		profiles,
+		modelRouting,
+	};
 }
 
 export function loadConfigForProfile(profileName: string): ResolvedConfig {

@@ -6,11 +6,12 @@
 import { Emitter, Event } from 'vs/base/common/event';
 import { Disposable } from 'vs/base/common/lifecycle';
 import { IAgentConfig, IAgentMessage, AgentMode, IAgentTaskLog, generateId } from 'vs/workbench/services/agent/common/agentModels';
-import { ILLMProvider } from 'vs/workbench/services/agent/browser/llmProvider';
+import { ILLMProvider, LLMProviderFactory } from 'vs/workbench/services/agent/browser/llmProvider';
 import { ToolRegistry } from './agentTools';
 import { AgentModeManager } from './agentModes';
 import { AgentCheckpointManager } from './agentCheckpoint';
 import { AgentLoop } from './agent';
+import { ModelRouter } from './agentModelRouter';
 
 export interface IParallelTask {
 	readonly id: string;
@@ -51,6 +52,7 @@ export class ParallelAgentManager extends Disposable {
 		private readonly _workingDirectory: string,
 		private readonly _checkpointManager: AgentCheckpointManager,
 		maxConcurrent = 4,
+		private readonly _modelRouter?: ModelRouter,
 	) {
 		super();
 		this._maxConcurrent = maxConcurrent;
@@ -104,13 +106,15 @@ export class ParallelAgentManager extends Disposable {
 		(task as any).status = 'running';
 		this._onDidTaskStart.fire(task);
 
+		const { config, llmProvider } = this._resolveModelForTask(task.description);
+
 		const modeManager = new AgentModeManager();
 		// Each parallel agent gets its own isolated checkpoint manager to avoid
 		// race conditions when multiple agents snapshot files concurrently.
 		const checkpointManager = this._checkpointManager.clone();
 		const agentLoop = new AgentLoop(
-			this._config,
-			this._llmProvider,
+			config,
+			llmProvider,
 			this._toolRegistry,
 			modeManager,
 			checkpointManager,
@@ -167,6 +171,30 @@ export class ParallelAgentManager extends Disposable {
 		} finally {
 			agentLoop.dispose();
 			modeManager.dispose();
+		}
+	}
+
+	/**
+	 * Resolve the model config + provider for a single parallel task.
+	 * When a model router is present and enabled, each task is routed to its
+	 * scenario model (vision/reasoning/fast) and gets its own provider instance.
+	 */
+	private _resolveModelForTask(description: string): { config: IAgentConfig; llmProvider: ILLMProvider } {
+		if (!this._modelRouter?.enabled) {
+			return { config: this._config, llmProvider: this._llmProvider };
+		}
+
+		const config = this._modelRouter.selectConfig(description);
+		if (config.model === this._config.model) {
+			return { config: this._config, llmProvider: this._llmProvider };
+		}
+
+		try {
+			const provider = LLMProviderFactory.create(config);
+			console.log(`[ROUTE] ${this._modelRouter.detectScenario(description)} → ${config.provider}/${config.model} (${description.substring(0, 40)})`);
+			return { config, llmProvider: provider };
+		} catch {
+			return { config: this._config, llmProvider: this._llmProvider };
 		}
 	}
 

@@ -127,6 +127,38 @@ agent-cli --profile openai "refactor this code"
 agent-cli --profile local "explain this function"
 ```
 
+### 模型路由（Model Routing）
+
+开启后，agent 会在同一个 session 内根据每条 prompt 自动选择并切换模型，
+支持第一个 prompt 的自动选择以及后续 prompt 的自动切换。场景由关键词识别：
+
+| 场景 | 触发 | 典型任务 |
+|------|------|---------|
+| `vision` | 图片/截图/OCR/视觉关键词 | 看图、分析截图 |
+| `reasoning` | 重构/调试/架构/性能等复杂关键词 | 重构、debug、架构设计 |
+| `fast` | 其余任务 | 简单、快速任务 |
+
+```yaml
+model_routing:
+  enabled: true
+  default: deepseek-v4-flash          # 未命中场景时的兜底模型
+  scenarios:
+    reasoning: deepseek-v4-pro        # 复杂任务
+    vision: deepseek-v4-flash-vision-exp  # 视觉任务
+    fast: deepseek-v4-flash           # 简单任务
+```
+
+`scenarios` 的取值可以是 `models.json` 里的模型 id，也可以是 `config.yaml` 里定义的
+profile 名。存在 `model_routing` 配置段即默认启用（`enabled: false` 可关闭）。
+模型切换会保留当前 session 的上下文历史。
+
+```bash
+# 无需任何额外参数，agent 会根据任务自动选择模型
+agent-cli "重构这个模块的认证逻辑"
+agent-cli "分析这张截图的布局问题"
+agent-cli "写一个 hello world 脚本"
+```
+
 ## 使用方法
 
 ### 基本用法
