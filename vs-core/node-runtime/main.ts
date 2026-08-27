@@ -485,9 +485,6 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
 	console.log(`${C.dim}Running ${tasks.length} tasks concurrently (max 4)${C.reset}\n`);
 
 	const modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
-	if (modelRouter.enabled) {
-		console.log(`${C.dim}Model routing: ON (${Object.entries(modelRouter.scenarios).map(([s, m]) => `${s}→${m}`).join(', ')})${C.reset}\n`);
-	}
 
 	const taskLogManager = new TaskLogManager();
 	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4, modelRouter);
@@ -653,6 +650,13 @@ async function main() {
 
 	const cfg = resolved.agentConfig;
 	console.log(`${C.dim}Profile: ${resolved.profileName} | Provider: ${cfg.provider} | Model: ${cfg.model}${C.reset}`);
+	if (resolved.modelRouting.enabled) {
+		const routingDefault = resolved.modelRouting.defaultModel || cfg.model;
+		const scenarioEntries = Object.entries(resolved.modelRouting.scenarios || {})
+			.map(([s, m]) => `${s}→${m}`)
+			.join(', ');
+		console.log(`${C.dim}Model routing: ON | startup: ${cfg.model} | default: ${routingDefault}${scenarioEntries ? ` | ${scenarioEntries}` : ''}${C.reset}`);
+	}
 	console.log(`${C.dim}API Base: ${cfg.apiBase || 'default'} | Mode: ${modeLabel}${opts.streaming ? ' | Streaming' : ''}${C.reset}`);
 	console.log(`${C.dim}Config: ${resolved.configFilePath || 'none (using defaults)'} | CWD: ${process.cwd()}${C.reset}`);
 
@@ -691,23 +695,17 @@ async function main() {
 		const selected = modelRouter.selectConfig(task);
 		if (selected.model === currentModel) return;
 
+		const previousModel = currentModel;
 		try {
 			const newProvider = LLMProviderFactory.create(selected);
 			agentLoop.swapProvider(selected, newProvider);
 			currentModel = selected.model;
 			const scenario = modelRouter.detectScenario(task);
-			log(C.magenta, 'ROUTE', `${scenario} → ${selected.provider}/${selected.model}`);
+			log(C.magenta, 'ROUTE', `${scenario}: ${previousModel} → ${selected.model}`);
 		} catch (err: any) {
-			log(C.red, 'ROUTE', `Failed to switch model: ${err.message}`);
+			log(C.red, 'ROUTE', `Failed to switch model from ${previousModel} to ${selected.model}: ${err.message}`);
 		}
 	};
-
-	if (modelRouter.enabled) {
-		const scenarioEntries = Object.entries(modelRouter.scenarios)
-			.map(([s, m]) => `${s}→${m}`)
-			.join(', ');
-		console.log(`${C.dim}Model routing: ON${scenarioEntries ? ` (${scenarioEntries})` : ''}${C.reset}`);
-	}
 
 	// Inject skills + rules into agent's system prompt
 	// Pass task description for auto-matching skills
@@ -1059,6 +1057,8 @@ async function main() {
 
 			if (trimmed.startsWith('/profile ')) {
 				const newProfileName = trimmed.slice(9).trim();
+				const previousProfile = resolved.profileName;
+				const previousModel = currentModel;
 				try {
 					const newResolved = loadConfigForProfile(newProfileName);
 					if (!newResolved.agentConfig.apiKey) {
@@ -1071,7 +1071,7 @@ async function main() {
 					modelRouter = new ModelRouter(newResolved.modelRouting, newResolved.profiles, newResolved.agentConfig);
 					currentModel = newResolved.agentConfig.model;
 					const nc = newResolved.agentConfig;
-					log(C.magenta, 'PROFILE', `Switched to ${newProfileName} (${nc.provider}/${nc.model})`);
+					log(C.magenta, 'PROFILE', `Switched ${previousProfile} (${previousModel}) → ${newProfileName} (${nc.provider}/${nc.model})`);
 				} catch (err: any) {
 					log(C.red, 'ERROR', `Failed to switch profile: ${err.message}`);
 				}
