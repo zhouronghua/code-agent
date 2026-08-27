@@ -36,16 +36,7 @@
     "clean": "rm -rf build",
     "pack": "npm run build:release && npm pack",
     "link": "npm run build && npm link",
-    "prepublishOnly": "npm run build:release",
-    "benchmark": "node scripts/benchmark.mjs",
-    "benchmark:run": "node scripts/benchmark.mjs --run",
-    "benchmark:save": "node scripts/benchmark.mjs --save",
-    "benchmark:check": "node scripts/benchmark.mjs --check",
-    "benchmark:strict": "BENCHMARK_STRICT=1 node scripts/benchmark.mjs --check",
-    "benchmark:summary": "node scripts/benchmark.mjs --summary",
-    "benchmark:json": "node scripts/benchmark.mjs --json",
-    "prepush": "node scripts/pre-push-check.mjs",
-    "hook:install": "node scripts/pre-push-check.mjs --install"
+    "prepublishOnly": "npm run build:release"
   },
   "files": [
     "build/agent-cli.js",

@@ -9,6 +9,3 @@ build/
 config.yaml
 code-agent-*.tgz
 .cursor
-
-# Deprecated v1 benchmark baseline (replaced by benchmarks/baseline.json)
-benchmark_baseline.json
