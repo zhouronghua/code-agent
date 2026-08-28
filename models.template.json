@@ -7,12 +7,12 @@
       "apiKey": "your-api-key-here",
       "url": "https://api.enflame.cn/v1/chat/completions",
       "maxInputTokens": 1000000,
-      "maxOutputTokens": 393216,
+      "maxOutputTokens": 65536,
       "supportsToolCall": true,
       "supportsImages": false,
       "supportsReasoning": true,
       "thinking": {"type": "enabled"},
-      "maxTokens": 393216
+      "maxTokens": 65536
     },
     {
       "id": "deepseek-v4-flash",
@@ -21,7 +21,7 @@
       "apiKey": "your-api-key-here",
       "url": "https://api.enflame.cn/v1/chat/completions",
       "maxInputTokens": 1000000,
-      "maxOutputTokens": 393216,
+      "maxOutputTokens": 32768,
       "supportsToolCall": true,
       "supportsImages": false,
       "supportsReasoning": false

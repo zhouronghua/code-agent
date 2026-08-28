@@ -21,11 +21,22 @@ export class AgentContext {
 
 	constructor(
 		private readonly _maxTokens: number,
+		private readonly _maxOutputTokens: number,
 		private _llmProvider: ILLMProvider,
 	) { }
 
 	swapTokenCounter(provider: ILLMProvider): void {
 		this._llmProvider = provider;
+	}
+
+	/**
+	 * Token budget reserved for input messages. The model's context window is
+	 * shared between input (messages) and output (max_tokens), so the sliding
+	 * window must reserve the completion budget — otherwise a near-full message
+	 * window plus a large max_tokens triggers "maximum context length" API errors.
+	 */
+	private get _inputBudget(): number {
+		return Math.max(1, this._maxTokens - this._maxOutputTokens);
 	}
 
 	get messages(): readonly IAgentMessage[] {
@@ -65,7 +76,7 @@ export class AgentContext {
 			const msg = this._messages[i];
 			const msgTokens = this._estimateTokens(msg);
 
-			if (tokenCount + msgTokens > this._maxTokens * 0.8) {
+			if (tokenCount + msgTokens > this._inputBudget * 0.8) {
 				break;
 			}
 
@@ -80,7 +91,7 @@ export class AgentContext {
 	async compactIfNeeded(): Promise<boolean> {
 		const totalTokens = this._estimateTotalTokens();
 
-		if (totalTokens < this._maxTokens * 0.8) {
+		if (totalTokens < this._inputBudget * 0.8) {
 			return false;
 		}
 

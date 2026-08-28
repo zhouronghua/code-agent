@@ -102,7 +102,7 @@ export class AgentLoop {
 		private readonly _checkpointManager: AgentCheckpointManager,
 		private readonly _workingDirectory: string = process.cwd(),
 	) {
-		this._context = new AgentContext(_config.maxContextTokens, _llmProvider);
+		this._context = new AgentContext(_config.maxContextTokens, _config.maxOutputTokens, _llmProvider);
 		this._planner = new AgentPlanner(_llmProvider);
 	}
 

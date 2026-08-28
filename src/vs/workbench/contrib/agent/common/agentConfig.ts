@@ -334,6 +334,10 @@ export interface ResolvedConfig {
 
 /** Build a full IAgentConfig from a single profile (no env LLM_MODEL/provider override). */
 function profileToAgentConfig(profile: ConfigProfile, agent: ConfigFile['agent']): IAgentConfig {
+	const budgets = normalizeTokenBudgets(
+		profile.max_input_tokens || agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
+		profile.max_output_tokens || DEFAULT_AGENT_CONFIG.maxOutputTokens,
+	);
 	return {
 		...DEFAULT_AGENT_CONFIG,
 		provider: (profile.provider || DEFAULT_AGENT_CONFIG.provider) as IAgentConfig['provider'],
@@ -341,11 +345,34 @@ function profileToAgentConfig(profile: ConfigProfile, agent: ConfigFile['agent']
 		apiKey: profile.api_key || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '',
 		apiBase: profile.api_base || undefined,
 		maxSteps: agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
-		maxContextTokens: profile.max_input_tokens || agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
-		maxOutputTokens: profile.max_output_tokens || DEFAULT_AGENT_CONFIG.maxOutputTokens,
+		maxContextTokens: budgets.maxContextTokens,
+		maxOutputTokens: budgets.maxOutputTokens,
 		temperature: profile.temperature ?? agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
 		stepTimeout: agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
 		taskTimeout: agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,
+	};
+}
+
+/** Minimum token budget that must remain available for input after reserving the completion budget. */
+const MIN_INPUT_BUDGET = 4096;
+
+/**
+ * Normalize context/output token budgets so the completion reservation can never
+ * consume the entire context window. Without this, maxOutputTokens >= maxInputTokens
+ * leaves zero room for messages and triggers "maximum context length" API errors.
+ *
+ * maxContextTokens is treated as the model's TOTAL context window (input + output
+ * share the same pool, e.g. deepseek-v4 = 1048576 tokens); maxOutputTokens is the
+ * completion reservation and is capped to leave at least MIN_INPUT_BUDGET tokens
+ * for input.
+ */
+function normalizeTokenBudgets(maxContextTokens: number, maxOutputTokens: number): { maxContextTokens: number; maxOutputTokens: number } {
+	const context = Math.max(1, maxContextTokens || 0);
+	const output = Math.max(1, maxOutputTokens || 0);
+	const maxAllowedOutput = Math.max(1, context - MIN_INPUT_BUDGET);
+	return {
+		maxContextTokens: context,
+		maxOutputTokens: Math.min(output, maxAllowedOutput),
 	};
 }
 
@@ -394,6 +421,11 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		console.warn(`         Falling back to: "${profileName}"`);
 	}
 
+	const budgets = normalizeTokenBudgets(
+		profile?.max_input_tokens || fileConfig.agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
+		profile?.max_output_tokens || DEFAULT_AGENT_CONFIG.maxOutputTokens,
+	);
+
 	const agentConfig: IAgentConfig = {
 		...DEFAULT_AGENT_CONFIG,
 		provider: (process.env.LLM_PROVIDER || profile?.provider || DEFAULT_AGENT_CONFIG.provider) as any,
@@ -401,8 +433,8 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		apiKey: process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || profile?.api_key || '',
 		apiBase: process.env.LLM_API_BASE || profile?.api_base || undefined,
 		maxSteps: fileConfig.agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
-		maxContextTokens: profile?.max_input_tokens || fileConfig.agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
-		maxOutputTokens: profile?.max_output_tokens || DEFAULT_AGENT_CONFIG.maxOutputTokens,
+		maxContextTokens: budgets.maxContextTokens,
+		maxOutputTokens: budgets.maxOutputTokens,
 		temperature: profile?.temperature ?? fileConfig.agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
 		stepTimeout: fileConfig.agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
 		taskTimeout: fileConfig.agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,

@@ -96,6 +96,7 @@ export class OpenAIProvider implements ILLMProvider {
 	private readonly _model: string;
 	private readonly _isReasoning: boolean;
 	private readonly _maxOutputTokens: number;
+	private readonly _maxContextTokens: number;
 
 	constructor(config: IAgentConfig) {
 		this._apiKey = config.apiKey;
@@ -103,6 +104,9 @@ export class OpenAIProvider implements ILLMProvider {
 		this._model = config.model;
 		this._isReasoning = isReasoningModel(config.model);
 		this._maxOutputTokens = config.maxOutputTokens || 65536;
+		// maxContextTokens is the model's TOTAL context window (input + output
+		// are drawn from the same pool, e.g. deepseek-v4 = 1048576 tokens).
+		this._maxContextTokens = config.maxContextTokens || this._maxOutputTokens * 4;
 	}
 
 	async complete(
@@ -125,11 +129,16 @@ export class OpenAIProvider implements ILLMProvider {
 			...this._temperatureParam(temperature),
 		};
 
-		// Reasoning models: enable deep thinking explicitly and set high max_tokens
-		// for long chain-of-thought outputs (configurable via max_output_tokens per profile)
+		// Always send an explicit, context-aware max_tokens so the request can
+		// never exceed the model's context window (input + completion <= context).
+		// Prevents "maximum context length" API errors when maxOutputTokens is
+		// larger than the remaining budget.
+		body.max_tokens = this._clampMaxTokens(messages, tools);
+
+		// Reasoning models: enable deep thinking explicitly and allow long
+		// chain-of-thought outputs (budget is clamped to remaining context above).
 		if (this._isReasoning) {
 			body.thinking = { type: 'enabled' };
-			body.max_tokens = this._maxOutputTokens;
 		}
 
 		if (tools && tools.length > 0) {
@@ -256,9 +265,12 @@ export class OpenAIProvider implements ILLMProvider {
 			stream: true,
 		};
 
+		// Same context-aware max_tokens clamp as complete(): input + max_tokens
+		// must never exceed the model's context window.
+		body.max_tokens = this._clampMaxTokens(messages, tools);
+
 		if (this._isReasoning) {
 			body.thinking = { type: 'enabled' };
-			body.max_tokens = this._maxOutputTokens;
 		}
 
 		if (tools && tools.length > 0) {
@@ -396,6 +408,41 @@ export class OpenAIProvider implements ILLMProvider {
 	countTokens(text: string): number {
 		// cl100k_base approximation: ~4 chars per token
 		return Math.ceil(text.length / 4);
+	}
+
+	/**
+	 * Estimate the number of input tokens that will be sent to the API.
+	 * Uses the same char-based heuristic as countTokens() plus a safety margin
+	 * for message framing, tool schemas, and CJK text (which char-count
+	 * heuristics tend to underestimate).
+	 */
+	private _estimateInputTokens(messages: IAgentMessage[], tools?: IToolSchema[]): number {
+		let total = 0;
+		for (const msg of messages) {
+			total += this.countTokens(msg.content);
+			if (msg.reasoningContent) {
+				total += this.countTokens(msg.reasoningContent);
+			}
+		}
+		if (tools) {
+			for (const tool of tools) {
+				total += this.countTokens(JSON.stringify(tool.function));
+			}
+		}
+		// ~20% estimation safety margin + fixed framing overhead
+		return Math.ceil(total * 1.2) + 512;
+	}
+
+	/**
+	 * Clamp the completion token budget so that input + max_tokens never exceeds
+	 * the model's total context window. Without this, a large maxOutputTokens
+	 * (e.g. deepseek-v4's 393216) combined with a near-full message window
+	 * produces "This model's maximum context length is X tokens..." API errors.
+	 */
+	private _clampMaxTokens(messages: IAgentMessage[], tools?: IToolSchema[]): number {
+		const inputTokens = this._estimateInputTokens(messages, tools);
+		const remaining = this._maxContextTokens - inputTokens;
+		return Math.max(1, Math.min(this._maxOutputTokens, remaining));
 	}
 
 	private _skipTemperature = false;
