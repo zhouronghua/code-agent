@@ -1,6 +1,6 @@
 {
   "name": "code-agent",
-  "version": "0.3.27",
+  "version": "0.3.28",
   "description": "AI coding agent CLI with multi-provider LLM support, Cursor-compatible skills, and VS Code architecture",
   "main": "build/agent-cli.js",
   "bin": {

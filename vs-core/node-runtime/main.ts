@@ -656,6 +656,10 @@ async function main() {
 			.map(([s, m]) => `${s}→${m}`)
 			.join(', ');
 		console.log(`${C.dim}Model routing: ON | startup: ${cfg.model} | default: ${routingDefault}${scenarioEntries ? ` | ${scenarioEntries}` : ''}${C.reset}`);
+	} else if (resolved.profileExplicit) {
+		// A profile was pinned via --profile / AGENT_PROFILE / active_profile:
+		// the model is fixed and must never be swapped at runtime.
+		console.log(`${C.dim}Model routing: OFF (profile "${resolved.profileName}" pinned — no runtime model switching)${C.reset}`);
 	}
 	console.log(`${C.dim}API Base: ${cfg.apiBase || 'default'} | Mode: ${modeLabel}${opts.streaming ? ' | Streaming' : ''}${C.reset}`);
 	console.log(`${C.dim}Config: ${resolved.configFilePath || 'none (using defaults)'} | CWD: ${process.cwd()}${C.reset}`);

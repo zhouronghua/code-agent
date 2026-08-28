@@ -330,6 +330,14 @@ export interface ResolvedConfig {
 	profiles: Record<string, IAgentConfig>;
 	/** Scenario → model routing configuration. */
 	modelRouting: ModelRoutingConfig;
+	/**
+	 * Whether the profile was explicitly configured by the user
+	 * (--profile flag, AGENT_PROFILE env, or active_profile in config).
+	 * When true, model routing is disabled so the agent never switches
+	 * to another model at runtime; auto model selection only applies when
+	 * no profile is configured.
+	 */
+	profileExplicit: boolean;
 }
 
 /** Build a full IAgentConfig from a single profile (no env LLM_MODEL/provider override). */
@@ -405,6 +413,12 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		|| fileConfig.active_profile
 		|| undefined;
 
+	// True when the user explicitly pinned a profile (--profile / AGENT_PROFILE /
+	// active_profile). In that case model routing must be disabled so the agent
+	// never switches to another model mid-run — auto model selection only applies
+	// when no profile is configured (profileName auto-selected from available models).
+	const profileExplicit = !!profileName;
+
 	if (!profileName && fileConfig.profiles && Object.keys(fileConfig.profiles).length > 0) {
 		profileName = Object.keys(fileConfig.profiles)[0];
 	} else if (!profileName) {
@@ -453,10 +467,13 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		profiles[name] = profileToAgentConfig(p, fileConfig.agent);
 	}
 
-	// Model routing: enabled when a model_routing section is present and not explicitly disabled.
+	// Model routing: enabled only when a model_routing section is present, not
+	// explicitly disabled, AND no profile was explicitly configured. When the
+	// user pins a profile (--profile / AGENT_PROFILE / active_profile) the model
+	// is fixed and must never be swapped at runtime.
 	const hasRouting = fileConfig.model_routing !== undefined;
 	const modelRouting: ModelRoutingConfig = {
-		enabled: hasRouting && fileConfig.model_routing?.enabled !== false,
+		enabled: hasRouting && fileConfig.model_routing?.enabled !== false && !profileExplicit,
 		defaultModel: fileConfig.model_routing?.default,
 		scenarios: fileConfig.model_routing?.scenarios || {},
 	};
@@ -470,6 +487,7 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		mcpServers,
 		profiles,
 		modelRouting,
+		profileExplicit,
 	};
 }
 
