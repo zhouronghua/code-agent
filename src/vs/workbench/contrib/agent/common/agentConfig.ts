@@ -331,11 +331,10 @@ export interface ResolvedConfig {
 	/** Scenario → model routing configuration. */
 	modelRouting: ModelRoutingConfig;
 	/**
-	 * Whether the profile was explicitly configured by the user
-	 * (--profile flag, AGENT_PROFILE env, or active_profile in config).
-	 * When true, model routing is disabled so the agent never switches
-	 * to another model at runtime; auto model selection only applies when
-	 * no profile is configured.
+	 * Whether the profile was explicitly pinned on the command line (--profile).
+	 * Only then is model routing disabled, so the agent never switches to another
+	 * model at runtime. Without a --profile flag, auto model selection stays
+	 * enabled even when config.yaml sets active_profile or AGENT_PROFILE is set.
 	 */
 	profileExplicit: boolean;
 }
@@ -413,11 +412,11 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		|| fileConfig.active_profile
 		|| undefined;
 
-	// True when the user explicitly pinned a profile (--profile / AGENT_PROFILE /
-	// active_profile). In that case model routing must be disabled so the agent
-	// never switches to another model mid-run — auto model selection only applies
-	// when no profile is configured (profileName auto-selected from available models).
-	const profileExplicit = !!profileName;
+	// True only when the user pinned a profile on the command line (--profile).
+	// In that case model routing must be disabled so the agent never switches to
+	// another model mid-run. AGENT_PROFILE / active_profile still select the
+	// initial model, but do not disable automatic routing.
+	const profileExplicit = !!cliProfile;
 
 	if (!profileName && fileConfig.profiles && Object.keys(fileConfig.profiles).length > 0) {
 		profileName = Object.keys(fileConfig.profiles)[0];
