@@ -207,10 +207,22 @@ export class OpenAIProvider implements ILLMProvider {
 					arguments: JSON.parse(tc.function.arguments),
 				}));
 
+				// Normalize provider token usage (OpenAI-compatible format).
+				// DeepSeek/OpenAI report: usage.prompt_tokens / completion_tokens /
+				// total_tokens, plus prompt_tokens_details.cached_tokens for cache hits.
+				const usage = data.usage && typeof data.usage === 'object'
+					? {
+						promptTokens: data.usage.prompt_tokens ?? 0,
+						completionTokens: data.usage.completion_tokens ?? 0,
+						totalTokens: data.usage.total_tokens ?? ((data.usage.prompt_tokens ?? 0) + (data.usage.completion_tokens ?? 0)),
+						cachedTokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0,
+					}
+					: undefined;
+
 				return createMessage(
 					MessageRole.Assistant,
 					msg.content || '',
-					{ toolCalls, reasoningContent: msg.reasoning_content },
+					{ toolCalls, reasoningContent: msg.reasoning_content, usage },
 				);
 			} catch (error) {
 				const err = error as Error;

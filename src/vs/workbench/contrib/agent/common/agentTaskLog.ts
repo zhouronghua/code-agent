@@ -192,6 +192,11 @@ export class TaskLogManager {
 		lines.push(`Status: ${statusIcon} ${log.status}`);
 		lines.push(`Mode: ${log.mode} | Model: ${log.config.provider}/${log.config.model}`);
 		lines.push(`Steps: ${log.totalSteps} | Tool calls: ${log.totalToolCalls}`);
+		if (log.tokenUsage) {
+			const u = log.tokenUsage;
+			const cached = u.cachedTokens ? ` | cache read: ${u.cachedTokens}${u.cacheCreationTokens ? ` + write: ${u.cacheCreationTokens}` : ''}` : '';
+			lines.push(`Tokens: ${u.promptTokens} in / ${u.completionTokens} out / ${u.totalTokens} total${cached}`);
+		}
 		lines.push(`Duration: ${(log.durationMs / 1000).toFixed(1)}s`);
 		lines.push(`Started: ${new Date(log.startedAt).toLocaleString()}`);
 		lines.push(`Finished: ${new Date(log.finishedAt).toLocaleString()}`);

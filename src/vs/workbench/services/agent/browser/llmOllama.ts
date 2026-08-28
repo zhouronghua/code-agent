@@ -6,6 +6,7 @@ import { ILLMProvider, LLMProviderFactory } from './llmProvider';
 import {
 	IAgentConfig,
 	IAgentMessage,
+	ILlmUsage,
 	IToolSchema,
 	MessageRole,
 	createMessage,
@@ -67,10 +68,19 @@ export class OllamaProvider implements ILLMProvider {
 			arguments: tc.function.arguments,
 		}));
 
+		// Normalize Ollama token usage: prompt_eval_count / eval_count.
+		const usage: ILlmUsage | undefined = (typeof data.prompt_eval_count === 'number' || typeof data.eval_count === 'number')
+			? {
+				promptTokens: data.prompt_eval_count ?? 0,
+				completionTokens: data.eval_count ?? 0,
+				totalTokens: (data.prompt_eval_count ?? 0) + (data.eval_count ?? 0),
+			}
+			: undefined;
+
 		return createMessage(
 			MessageRole.Assistant,
 			msg.content || '',
-			{ toolCalls },
+			{ toolCalls, usage },
 		);
 	}
 

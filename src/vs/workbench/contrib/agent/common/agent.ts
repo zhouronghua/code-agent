@@ -241,6 +241,19 @@ export class AgentLoop {
 			(sum, step) => sum + step.toolExecutions.length, 0
 		);
 
+		// Aggregate actual token usage across all steps (only steps whose LLM
+		// call reported usage are counted).
+		const usedSteps = this._stepRecords.filter(s => s.llmUsage);
+		const tokenUsage = usedSteps.length > 0
+			? {
+				promptTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage!.promptTokens || 0), 0),
+				completionTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage!.completionTokens || 0), 0),
+				totalTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage!.totalTokens || 0), 0),
+				cachedTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage!.cachedTokens || 0), 0),
+				cacheCreationTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage!.cacheCreationTokens || 0), 0),
+			}
+			: undefined;
+
 		return {
 			id: `task_${this._taskStartTime}_${Math.random().toString(36).substring(2, 8)}`,
 			task: this._taskDescription,
@@ -255,6 +268,7 @@ export class AgentLoop {
 			steps: [...this._stepRecords],
 			totalSteps: this._stepRecords.length,
 			totalToolCalls,
+			tokenUsage,
 			status,
 			error,
 			startedAt: this._taskStartTime,
@@ -557,6 +571,7 @@ export class AgentLoop {
 					toolCalls: response.toolCalls ? response.toolCalls.map(tc => ({ ...tc })) : undefined,
 					reasoningContent: response.reasoningContent,
 				},
+				llmUsage: response.usage,
 				toolExecutions: [],
 				durationMs: Date.now() - stepStartTime,
 				timestamp: stepStartTime,

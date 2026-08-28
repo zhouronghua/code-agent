@@ -6,6 +6,7 @@ import { ILLMProvider, LLMProviderFactory } from './llmProvider';
 import {
 	IAgentConfig,
 	IAgentMessage,
+	ILlmUsage,
 	IToolSchema,
 	MessageRole,
 	createMessage,
@@ -74,7 +75,21 @@ export class AnthropicProvider implements ILLMProvider {
 		}
 
 		const data = await response.json();
-		return this._parseResponse(data.content);
+
+		// Normalize Anthropic token usage:
+		//   input_tokens / output_tokens, plus cache_read_input_tokens (cache hit)
+		//   and cache_creation_input_tokens (cache write).
+		const usage = data.usage && typeof data.usage === 'object'
+			? {
+				promptTokens: data.usage.input_tokens ?? 0,
+				completionTokens: data.usage.output_tokens ?? 0,
+				totalTokens: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
+				cachedTokens: data.usage.cache_read_input_tokens ?? 0,
+				cacheCreationTokens: data.usage.cache_creation_input_tokens ?? 0,
+			}
+			: undefined;
+
+		return this._parseResponse(data.content, usage);
 	}
 
 	async *stream(
@@ -153,7 +168,7 @@ export class AnthropicProvider implements ILLMProvider {
 		return Math.ceil(text.length / 4);
 	}
 
-	private _parseResponse(content: AnthropicContentBlock[]): IAgentMessage {
+	private _parseResponse(content: AnthropicContentBlock[], usage?: ILlmUsage): IAgentMessage {
 		let textContent = '';
 		const toolCalls: IAgentMessage['toolCalls'] = [];
 
@@ -171,6 +186,7 @@ export class AnthropicProvider implements ILLMProvider {
 
 		return createMessage(MessageRole.Assistant, textContent, {
 			toolCalls: toolCalls!.length > 0 ? toolCalls : undefined,
+			usage,
 		});
 	}
 
