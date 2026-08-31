@@ -304,8 +304,12 @@ export class AgentLoop {
 			this._context.addMessage(userMsg);
 			this._onDidReceiveMessage.fire(userMsg);
 
-			// Complexity detection: inject deep thinking instructions for complex tasks
-			if (mode === 'agent' && this._isComplexTask(userMessage)) {
+			// Complexity detection: complex tasks get deep-thinking instructions
+			// AND self-verification rounds; simple tasks skip both to avoid
+			// burning extra LLM round-trips on trivial work (mirrors the
+			// latency-sensitive reasoning-effort approach in deepseek-harness).
+			const isComplex = mode === 'agent' && this._isComplexTask(userMessage);
+			if (isComplex) {
 				const deepThinkMsg = createMessage(MessageRole.User,
 					`[System note: Complex task detected — Deep Thinking Mode activated]\n` +
 					`This appears to be a non-trivial task. Before making any changes:\n` +
@@ -324,7 +328,7 @@ export class AgentLoop {
 				// Auto-execute the generated plan without requiring manual mode switch
 				await this._executePlanCore(this._cancellation.token);
 			} else {
-				await this._runAgentLoop(this._cancellation.token);
+				await this._runAgentLoop(this._cancellation.token, !isComplex);
 			}
 
 			this._onDidComplete.fire();
@@ -470,10 +474,14 @@ export class AgentLoop {
 		this._onDidReceiveMessage.fire(planMsg);
 	}
 
-	private async _runAgentLoop(token: CancellationToken): Promise<void> {
+	private async _runAgentLoop(token: CancellationToken, skipSelfVerification = false): Promise<void> {
 		let stepCount = 0;
 		let consecutiveToolOnlySteps = 0;
 		let verificationRounds = 0;
+		// Whether any tool has actually been executed this run. Used to keep the
+		// self-verification safety net for simple tasks that would otherwise
+		// declare "done" without doing any work at all.
+		let hasExecutedTool = false;
 
 		while (stepCount < this._config.maxSteps) {
 			if (token.isCancellationRequested) {
@@ -580,7 +588,12 @@ export class AgentLoop {
 			if (!response.toolCalls || response.toolCalls.length === 0) {
 				// No tool calls — agent thinks it's done.
 				// Inject a verification round to make sure it has actually verified.
-				if (verificationRounds < MAX_VERIFICATION_ROUNDS) {
+				// Simple tasks skip this once they have already performed work: the
+				// extra LLM round-trips add latency but rarely change the outcome
+				// for trivial file operations (mirrors deepseek-harness's
+				// latency-sensitive reasoning-effort approach).
+				const shouldVerify = !(skipSelfVerification && hasExecutedTool);
+				if (shouldVerify && verificationRounds < MAX_VERIFICATION_ROUNDS) {
 					verificationRounds++;
 					const verifyMsg = createMessage(MessageRole.User,
 						`[System verification round ${verificationRounds}/${MAX_VERIFICATION_ROUNDS}]\n` +
@@ -625,6 +638,7 @@ export class AgentLoop {
 					throw new Error('Cancelled');
 				}
 
+				hasExecutedTool = true;
 				const toolExecStart = Date.now();
 				const result = await this._executeTool(toolCall.id, toolCall.name, toolCall.arguments);
 				const toolExecDuration = Date.now() - toolExecStart;
