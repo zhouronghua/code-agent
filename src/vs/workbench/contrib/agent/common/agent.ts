@@ -52,10 +52,12 @@ const MAX_VERIFICATION_ROUNDS = 2;
 
 // Keywords that indicate a complex task — triggers deep thinking mode with
 // extra system prompt instructions.
+// NOTE: use 'debugging' (not 'debug') so config keys like `debug: false` are not
+// mistaken for a debugging task.
 const COMPLEX_TASK_KEYWORDS = [
 	'refactor', '重构', 'migrate', '迁移', 'implement', '实现',
 	'redesign', '重新设计', 'complex', '复杂', 'multiple files',
-	'architecture', '架构', 'performance', '性能', 'debug', '调试',
+	'architecture', '架构', 'performance', '性能', 'debugging', '调试',
 	'optimize', '优化', 'redesign', 'overhaul', 'rewrite', '重写',
 ];
 
