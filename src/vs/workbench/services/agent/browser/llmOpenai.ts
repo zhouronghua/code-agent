@@ -34,6 +34,19 @@ const MIN_COMPLETION_TOKENS = 2048;
 /** Fraction of the context window reserved as a hard safety margin in max_tokens clamps. */
 const CONTEXT_RESERVE_RATIO = 0.05;
 
+/** Minimum safety reserve (never let a tiny model's whole window become reserve). */
+const MIN_CONTEXT_RESERVE = 1024;
+
+/**
+ * The smallest completion budget this model is allowed to use. For models whose
+ * maxOutputTokens is already below MIN_COMPLETION_TOKENS, the floor is the
+ * model's own output budget (otherwise a small model would always trip the
+ * "window nearly full" guard).
+ */
+function minCompletionFloor(maxOutputTokens: number): number {
+	return Math.min(MIN_COMPLETION_TOKENS, maxOutputTokens);
+}
+
 function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -148,9 +161,9 @@ export class OpenAIProvider implements ILLMProvider {
 		// If the completion budget is crushed to near zero the window is already
 		// effectively full — fail fast with ContextOverflowError so the agent
 		// loop compacts history instead of sending a useless near-empty request.
-		if (clampedMaxTokens < MIN_COMPLETION_TOKENS) {
+		if (clampedMaxTokens < minCompletionFloor(this._maxOutputTokens)) {
 			throw new ContextOverflowError(
-				`Context window nearly full: estimated input leaves only ${clampedMaxTokens} tokens for completion (minimum ${MIN_COMPLETION_TOKENS}). Conversation history must be compacted.`
+				`Context window nearly full: estimated input leaves only ${clampedMaxTokens} tokens for completion (minimum ${minCompletionFloor(this._maxOutputTokens)}). Conversation history must be compacted.`
 			);
 		}
 		body.max_tokens = clampedMaxTokens;
@@ -321,9 +334,9 @@ export class OpenAIProvider implements ILLMProvider {
 		// must never exceed the model's context window. Fail fast when the window
 		// is effectively full so the agent loop can compact and retry.
 		const clampedMaxTokens = this._clampMaxTokens(messages, tools);
-		if (clampedMaxTokens < MIN_COMPLETION_TOKENS) {
+		if (clampedMaxTokens < minCompletionFloor(this._maxOutputTokens)) {
 			throw new ContextOverflowError(
-				`Context window nearly full: estimated input leaves only ${clampedMaxTokens} tokens for completion (minimum ${MIN_COMPLETION_TOKENS}). Conversation history must be compacted.`
+				`Context window nearly full: estimated input leaves only ${clampedMaxTokens} tokens for completion (minimum ${minCompletionFloor(this._maxOutputTokens)}). Conversation history must be compacted.`
 			);
 		}
 		body.max_tokens = clampedMaxTokens;
@@ -524,7 +537,9 @@ export class OpenAIProvider implements ILLMProvider {
 	 */
 	private _clampMaxTokens(messages: IAgentMessage[], tools?: IToolSchema[]): number {
 		const inputTokens = this._estimateInputTokens(messages, tools);
-		const safetyReserve = Math.max(4096, Math.floor(this._maxContextTokens * CONTEXT_RESERVE_RATIO));
+		// Hard safety reserve (5% of the window, min 1024) kept on top of the
+		// estimate so a slightly-off estimate can never fill the window completely.
+		const safetyReserve = Math.max(MIN_CONTEXT_RESERVE, Math.floor(this._maxContextTokens * CONTEXT_RESERVE_RATIO));
 		const remaining = this._maxContextTokens - inputTokens - safetyReserve;
 		return Math.max(1, Math.min(this._maxOutputTokens, remaining));
 	}
