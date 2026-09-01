@@ -76,3 +76,28 @@ rules:
 #   # Simple HTTP MCP server
 #   custom-api:
 #     url: http://localhost:3000/mcp
+
+# Shared memory (tdai_agent_mem) — multi-machine / multi-agent memory hub.
+# When enabled, code-agent:
+#   - recalls relevant memories (L1 facts + L2 scenario index + L3 persona)
+#     before each task and injects them into the system prompt,
+#   - captures each finished task exchange into L0 (the hub distills
+#     L0 → L1 → L2 → L3 automatically),
+#   - registers tdai_memory_search / tdai_conversation_search / tdai_read_file /
+#     tdai_memory_write tools so the LLM can query/write memory directly.
+#
+# Credentials can also live in ~/.codeagent/mcp.json under
+# `mcpServers.tdai_agent_mem` (url + Authorization Bearer user key +
+# x-tdai-service-id header + username/teamId/agentId/userId).
+# memory:
+#   enabled: true
+#   endpoint: http://10.9.114.25:8420
+#   api_key: sk-mem-your-user-key
+#   service_id: default
+#   username: zrh            # your agent user on the memory platform
+#   team_id: team-xxx
+#   agent_id: agt-xxx
+#   user_id: usr-xxx
+#   session_id: ""           # optional; omit to aggregate L0/L1 across sessions
+#   recall: true             # auto-recall before each task (default true)
+#   capture: true            # auto-capture L0 after each task (default true)

@@ -29,6 +29,7 @@ import { AgentModeManager } from '../../src/vs/workbench/contrib/agent/common/ag
 import { AgentCheckpointManager } from '../../src/vs/workbench/contrib/agent/common/agentCheckpoint';
 import { AgentLoop } from '../../src/vs/workbench/contrib/agent/common/agent';
 import { ParallelAgentManager } from '../../src/vs/workbench/contrib/agent/common/agentParallel';
+import { IMemoryIntegration } from '../../src/vs/workbench/contrib/agent/common/agentMemory';
 import { ReadFileTool } from '../../src/vs/workbench/contrib/agent/common/tools/readFile';
 import { WriteFileTool } from '../../src/vs/workbench/contrib/agent/common/tools/writeFile';
 import { EditFileTool } from '../../src/vs/workbench/contrib/agent/common/tools/editFile';
@@ -39,6 +40,7 @@ import { RunTerminalTool } from '../../src/vs/workbench/contrib/agent/common/too
 import { loadConfig, loadConfigForProfile, listProfiles, ResolvedConfig } from '../../src/vs/workbench/contrib/agent/common/agentConfig';
 import { ModelRouter } from '../../src/vs/workbench/contrib/agent/common/agentModelRouter';
 import { SkillsLoader } from '../../src/vs/workbench/contrib/agent/common/agentSkills';
+import { loadMemoryConfig, MemoryClient, MemorySearchTool, ConversationSearchTool, MemoryReadTool, MemoryWriteTool } from '../../src/vs/workbench/contrib/agent/common/agentMemory';
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
 import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common/agentSessions';
 import { TaskLogManager } from '../../src/vs/workbench/contrib/agent/common/agentTaskLog';
@@ -438,9 +440,26 @@ function createServices(resolved: ResolvedConfig) {
 	toolRegistry.registerAlias('search_content', 'search_text');
 	toolRegistry.register(new RunTerminalTool(terminalService, process.cwd()));
 
+	// ---- Shared memory (tdai_agent_mem) ----
+	// Tools + auto recall/capture are enabled when config.yaml `memory:` or
+	// ~/.codeagent/mcp.json `mcpServers.tdai_agent_mem` is present.
+	const memoryConfig = loadMemoryConfig();
+	let memoryClient: MemoryClient | undefined;
+	if (memoryConfig) {
+		memoryClient = new MemoryClient(memoryConfig);
+		toolRegistry.register(new MemorySearchTool(memoryClient));
+		toolRegistry.register(new ConversationSearchTool(memoryClient));
+		toolRegistry.register(new MemoryReadTool(memoryClient));
+		toolRegistry.register(new MemoryWriteTool(memoryClient));
+		const who = memoryConfig.username || memoryConfig.userId;
+		console.log(`${C.green}[MEMORY]${C.reset} Shared memory enabled (tdai_agent_mem): user=${who || '?'} endpoint=${memoryConfig.endpoint} service=${memoryConfig.serviceId}`);
+		console.log(`${C.dim}  Tools: tdai_memory_search / tdai_conversation_search / tdai_read_file / tdai_memory_write${C.reset}`);
+		if (memoryConfig.recall) console.log(`${C.dim}  Auto-recall: on | Auto-capture L0: ${memoryConfig.capture ? 'on' : 'off'}${C.reset}`);
+	}
+
 	const checkpointManager = new AgentCheckpointManager(fileService);
 
-	return { config, llmProvider, toolRegistry, checkpointManager };
+	return { config, llmProvider, toolRegistry, checkpointManager, memoryClient };
 }
 
 function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
@@ -479,7 +498,7 @@ function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
 }
 
 async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
-	const { config, llmProvider, toolRegistry, checkpointManager } = createServices(resolved);
+	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = createServices(resolved);
 
 	console.log(`\n${C.bold}${C.magenta}=== Parallel Agent Mode ===${C.reset}`);
 	console.log(`${C.dim}Running ${tasks.length} tasks concurrently (max 4)${C.reset}\n`);
@@ -487,7 +506,7 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
 	const modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
 
 	const taskLogManager = new TaskLogManager();
-	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4, modelRouter);
+	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4, modelRouter, memoryClient);
 
 	manager.onDidTaskStart(task => {
 		log(C.cyan, `TASK ${task.id.slice(-6)}`, `Started: ${task.description.substring(0, 80)}`);
@@ -681,11 +700,11 @@ async function main() {
 		return;
 	}
 
-	const { config, llmProvider, toolRegistry, checkpointManager } = createServices(resolved);
+	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = createServices(resolved);
 	const modeManager = new AgentModeManager();
 	modeManager.switchMode(opts.mode);
 
-	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd());
+	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient);
 	if (opts.streaming) {
 		agentLoop.setStreaming(true);
 	}

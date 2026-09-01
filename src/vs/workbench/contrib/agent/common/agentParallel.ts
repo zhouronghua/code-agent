@@ -12,6 +12,7 @@ import { AgentModeManager } from './agentModes';
 import { AgentCheckpointManager } from './agentCheckpoint';
 import { AgentLoop } from './agent';
 import { ModelRouter } from './agentModelRouter';
+import { IMemoryIntegration } from './agentMemory';
 
 export interface IParallelTask {
 	readonly id: string;
@@ -53,6 +54,7 @@ export class ParallelAgentManager extends Disposable {
 		private readonly _checkpointManager: AgentCheckpointManager,
 		maxConcurrent = 4,
 		private readonly _modelRouter?: ModelRouter,
+		private readonly _memory?: IMemoryIntegration,
 	) {
 		super();
 		this._maxConcurrent = maxConcurrent;
@@ -119,6 +121,7 @@ export class ParallelAgentManager extends Disposable {
 			modeManager,
 			checkpointManager,
 			this._workingDirectory,
+			this._memory,
 		);
 
 		const messages: IAgentMessage[] = [];

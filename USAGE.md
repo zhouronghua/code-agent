@@ -299,6 +299,64 @@ mcp_servers:
 
 每个 MCP 服务器提供额外的工具，agent 可以在对话中调用它们。
 
+## 共享记忆（tdai_agent_mem）支持
+
+CodeAgent 支持接入 [tdai_agent_mem](https://github.com/Tencent/TencentDB-Agent-Memory)
+多机/多 Agent 共享记忆中心。开启后：
+
+- **自动召回**：每次任务开始前，按 Memory 分级召回相关记忆注入系统提示词
+  - L1（原子事实）`searchAtomic` → `<relevant-memories>`
+  - L2（场景索引）`scenario/ls` → Scenario Index
+  - L3（用户画像）`core/read` → `<user-persona>`
+- **自动捕获**：每次任务结束后，把本轮对话写入 L0（`conversation/add`），
+  记忆中心的后台流水线会自动把 L0 蒸馏为 L1 → L2 → L3，实现多机共享
+- **记忆工具**：注册 `tdai_memory_search`（L1 搜索）、`tdai_conversation_search`
+  （L0 对话搜索）、`tdai_read_file`（读取 L2/L3 文件）、`tdai_memory_write`
+  （按 l1/l2/l3 分级写入）
+
+### 配置方式一：config.yaml（推荐）
+
+```yaml
+memory:
+  enabled: true
+  endpoint: http://10.9.114.25:8420   # Memory 内核 / gateway 地址
+  api_key: sk-mem-xxx                 # 你的用户 key（sk-mem-...）
+  service_id: default                 # 实例 ID（x-tdai-service-id）
+  username: zrh                       # 记忆平台上的用户名
+  team_id: team-xxx
+  agent_id: agt-xxx
+  user_id: usr-xxx
+  session_id: ""                      # 可选；留空则按工作目录聚合
+  recall: true                        # 任务前自动召回（默认 true）
+  capture: true                       # 任务后自动捕获 L0（默认 true）
+```
+
+### 配置方式二：MCP 配置（~/.codeagent/mcp.json）
+
+用户名与凭据也可以写在 `~/.codeagent/mcp.json` 的 `mcpServers.tdai_agent_mem` 条目：
+
+```json
+{
+  "mcpServers": {
+    "tdai_agent_mem": {
+      "type": "streamableHttp",
+      "url": "http://10.9.114.25:8420",
+      "headers": {
+        "Authorization": "Bearer sk-mem-xxx",
+        "X-Tdai-Service-Id": "default",
+        "X-Tdai-User-Key": "sk-mem-xxx"
+      },
+      "username": "zrh",
+      "teamId": "team-xxx",
+      "agentId": "agt-xxx",
+      "userId": "usr-xxx"
+    }
+  }
+}
+```
+
+记忆服务不可用时所有操作静默降级（fail-open），不会影响主流程。
+
 ## 分发
 
 ### 通过 GitHub Releases 分发（推荐）

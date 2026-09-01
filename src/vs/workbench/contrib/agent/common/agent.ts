@@ -33,6 +33,7 @@ import { AgentModeManager } from './agentModes';
 import { AgentPlanner } from './agentPlanner';
 import { AgentCheckpointManager } from './agentCheckpoint';
 import { getSystemPrompt } from './agentPrompts';
+import { IMemoryIntegration } from './agentMemory';
 
 // Maximum characters for a single tool result sent back to the LLM.
 // Large outputs (e.g. read_file of a big file, run_terminal of a long build)
@@ -84,6 +85,10 @@ export class AgentLoop {
 	private _useStreaming = false;
 	private _extraSystemPrompt = '';
 
+	/** Shared-memory (tdai_agent_mem) recall block, rebuilt on every run(). */
+	private _memoryContext = '';
+	private readonly _memory: IMemoryIntegration | undefined;
+
 	/** Pending /btw hints injected during agent execution — consumed each loop iteration. */
 	private _pendingBtwHints: string[] = [];
 
@@ -103,9 +108,11 @@ export class AgentLoop {
 		private readonly _modeManager: AgentModeManager,
 		private readonly _checkpointManager: AgentCheckpointManager,
 		private readonly _workingDirectory: string = process.cwd(),
+		memory?: IMemoryIntegration,
 	) {
 		this._context = new AgentContext(_config.maxContextTokens, _config.maxOutputTokens, _llmProvider);
 		this._planner = new AgentPlanner(_llmProvider);
+		this._memory = memory?.enabled ? memory : undefined;
 	}
 
 	swapProvider(config: IAgentConfig, provider: ILLMProvider): void {
@@ -299,8 +306,24 @@ export class AgentLoop {
 		this._taskError = undefined;
 
 		try {
+			// Recall shared memory (tdai_agent_mem) for this task, if enabled.
+			// Fail-open: memory unavailability must never block the agent.
+			this._memoryContext = '';
+			if (this._memory && this._memory.recall) {
+				try {
+					const recalled = await this._memory.recall(userMessage);
+					if (recalled) {
+						this._memoryContext = `\n\n<shared-memory>\n${recalled}\n</shared-memory>`;
+					}
+				} catch (err) {
+					console.warn(`[memory] recall failed (non-fatal): ${(err as Error).message}`);
+				}
+			}
+
 			const mode = this._modeManager.currentMode;
-			this._context.setSystemPrompt(getSystemPrompt(mode, this._workingDirectory) + this._extraSystemPrompt);
+			this._context.setSystemPrompt(
+				getSystemPrompt(mode, this._workingDirectory) + this._extraSystemPrompt + this._memoryContext
+			);
 
 			const userMsg = createMessage(MessageRole.User, userMessage);
 			this._context.addMessage(userMsg);
@@ -331,6 +354,15 @@ export class AgentLoop {
 				await this._executePlanCore(this._cancellation.token);
 			} else {
 				await this._runAgentLoop(this._cancellation.token, !isComplex);
+			}
+
+			// Capture the finished exchange into shared memory (L0), if enabled.
+			// The memory hub distills L0 → L1 → L2 → L3 automatically.
+			if (this._memory && this._memory.capture && !this._taskError) {
+				const lastAssistant = [...this._context.messages]
+					.reverse()
+					.find(m => m.role === MessageRole.Assistant && m.content && m.content.trim());
+				await this._memory.capture(userMessage, lastAssistant?.content || '');
 			}
 
 			this._onDidComplete.fire();
