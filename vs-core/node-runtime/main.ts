@@ -259,6 +259,12 @@ interface CLIOptions {
 	parallel: boolean;
 	tasks: string[];
 	profile?: string;
+	/** Override sampling temperature for this run (--temperature <float>). */
+	temperature?: number;
+	/** Override top-k sampling for this run (--top-k <int>, 0 = provider default). */
+	topK?: number;
+	/** Force shared agent memory on/off for this run (--memory on|off). */
+	memory?: 'on' | 'off';
 	showProfiles: boolean;
 	showSkills: boolean;
 	useSkill?: string;
@@ -303,6 +309,18 @@ function parseArgs(): CLIOptions {
 			case '--profile':
 				i++;
 				opts.profile = args[i];
+				break;
+			case '--temperature':
+				i++;
+				opts.temperature = parseFloat(args[i]);
+				break;
+			case '--top-k':
+				i++;
+				opts.topK = parseInt(args[i], 10);
+				break;
+			case '--memory':
+				i++;
+				opts.memory = args[i] === 'on' ? 'on' : 'off';
 				break;
 			case '--profiles':
 				opts.showProfiles = true;
@@ -384,6 +402,9 @@ Options:
   --tasks                     List saved task logs
   --task <id>                 View a specific task log
   --delete-task <id>          Delete a task log
+  --temperature <float>       Override sampling temperature (default from config)
+  --top-k <int>               Override top-k sampling; 0 = provider default
+  --memory <on|off>           Force shared agent memory on/off for this run
   --help                      Show this help
 
 Session Management:
@@ -419,7 +440,7 @@ Config (searched in order):
 `);
 }
 
-function createServices(resolved: ResolvedConfig) {
+function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 'off') {
 	const config = resolved.agentConfig;
 
 	if (!config.apiKey) {
@@ -456,7 +477,9 @@ function createServices(resolved: ResolvedConfig) {
 	// ---- Shared memory (tdai_agent_mem) ----
 	// Tools + auto recall/capture are enabled when config.yaml `memory:` or
 	// ~/.codeagent/mcp.json `mcpServers.tdai_agent_mem` is present.
-	const memoryConfig = loadMemoryConfig();
+	// --memory off forces the feature off (deterministic benchmarks); --memory on
+	// forces it on when the config exists.
+	const memoryConfig = memoryOverride === 'off' ? undefined : loadMemoryConfig();
 	let memoryClient: MemoryClient | undefined;
 	if (memoryConfig) {
 		memoryClient = new MemoryClient(memoryConfig);
@@ -510,8 +533,8 @@ function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
 	agentLoop.onDidComplete(() => console.log(`\n${C.dim}--- Task completed ---${C.reset}\n`));
 }
 
-async function runParallelMode(tasks: string[], resolved: ResolvedConfig) {
-	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = createServices(resolved);
+async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memoryOverride?: 'on' | 'off') {
+	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = createServices(resolved, memoryOverride);
 
 	console.log(`\n${C.bold}${C.magenta}=== Parallel Agent Mode ===${C.reset}`);
 	console.log(`${C.dim}Running ${tasks.length} tasks concurrently (max 4)${C.reset}\n`);
@@ -650,6 +673,11 @@ async function main() {
 	// Load config (merges config.yaml + env vars + CLI flags)
 	let resolved = loadConfig(opts.profile);
 
+	// CLI sampling overrides — pin temperature / top-k for reproducible
+	// benchmark runs (takes precedence over config.yaml and models.json).
+	if (opts.temperature !== undefined) resolved.agentConfig.temperature = opts.temperature;
+	if (opts.topK !== undefined) resolved.agentConfig.topK = opts.topK;
+
 	// Load skills and rules
 	const skillsLoader = new SkillsLoader();
 	skillsLoader.loadSkillsFromDirs(resolved.skillsDirs);
@@ -699,6 +727,7 @@ async function main() {
 		console.log(`${C.dim}Model routing: OFF (profile "${resolved.profileName}" pinned via --profile — no runtime model switching)${C.reset}`);
 	}
 	console.log(`${C.dim}API Base: ${cfg.apiBase || 'default'} | Mode: ${modeLabel}${opts.streaming ? ' | Streaming' : ''}${C.reset}`);
+	console.log(`${C.dim}Sampling: temperature=${cfg.temperature} top_k=${cfg.topK || '(provider default)'} | Memory: ${opts.memory ?? 'auto'}${C.reset}`);
 	console.log(`${C.dim}Config: ${resolved.configFilePath || 'none (using defaults)'} | CWD: ${process.cwd()}${C.reset}`);
 
 	const skillCount = skillsLoader.skills.length;
@@ -714,11 +743,11 @@ async function main() {
 	console.log('');
 
 	if (opts.parallel && opts.tasks.length > 1) {
-		await runParallelMode(opts.tasks, resolved);
+		await runParallelMode(opts.tasks, resolved, opts.memory);
 		return;
 	}
 
-	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = createServices(resolved);
+	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = createServices(resolved, opts.memory);
 	const modeManager = new AgentModeManager();
 	modeManager.switchMode(opts.mode);
 
@@ -1149,7 +1178,7 @@ async function main() {
 			if (trimmed.startsWith('/parallel ')) {
 				const tasks = trimmed.slice(10).match(/"[^"]+"/g)?.map(t => t.replace(/"/g, '')) || [];
 				if (tasks.length >= 2) {
-					await runParallelMode(tasks, resolved);
+					await runParallelMode(tasks, resolved, opts.memory);
 				} else {
 					log(C.red, 'ERROR', 'Provide at least 2 tasks in quotes: /parallel "task1" "task2"');
 				}

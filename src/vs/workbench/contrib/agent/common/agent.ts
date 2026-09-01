@@ -602,6 +602,7 @@ export class AgentLoop {
 							messages,
 							undefined,
 							this._config.temperature,
+							this._config.topK,
 						);
 						for await (const token of stream) {
 							chunks.push(token);
@@ -614,6 +615,7 @@ export class AgentLoop {
 							messages,
 							tools.length > 0 ? tools : undefined,
 							this._config.temperature,
+							this._config.topK,
 						);
 					}
 					break;

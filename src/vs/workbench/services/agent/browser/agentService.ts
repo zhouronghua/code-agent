@@ -213,6 +213,7 @@ export class AgentService extends Disposable implements IAgentService {
 			apiBase: (configSection.apiBase as string) || DEFAULT_AGENT_CONFIG.apiBase,
 			maxSteps: (configSection.maxSteps as number) || DEFAULT_AGENT_CONFIG.maxSteps,
 			temperature: (configSection.temperature as number) ?? DEFAULT_AGENT_CONFIG.temperature,
+			topK: (configSection.topK as number) ?? DEFAULT_AGENT_CONFIG.topK,
 		};
 	}
 

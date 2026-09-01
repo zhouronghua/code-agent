@@ -110,6 +110,12 @@ export interface IAgentConfig {
 	maxContextTokens: number;
 	maxOutputTokens: number;
 	temperature: number;
+	/**
+	 * Top-K sampling (only a subset of the highest-probability tokens is
+	 * considered at each step). 0/undefined = not sent to the API (provider
+	 * default). Used to pin deterministic sampling for benchmarks.
+	 */
+	topK?: number;
 	stepTimeout: number;
 	taskTimeout: number;
 }
@@ -177,6 +183,7 @@ export const DEFAULT_AGENT_CONFIG: IAgentConfig = {
 	maxContextTokens: 200000,
 	maxOutputTokens: 65536,
 	temperature: 0,
+	topK: 0,  // 0 = provider default (not sent); set >0 to pin top_k for reproducible benchmarks
 	stepTimeout: 300000,  // 5 minutes - allow tools with custom timeouts to complete
 	taskTimeout: 3600000,  // 1 hour
 };

@@ -137,20 +137,22 @@ export class OpenAIProvider implements ILLMProvider {
 		messages: IAgentMessage[],
 		tools?: IToolSchema[],
 		temperature = 0,
+		topK?: number,
 	): Promise<IAgentMessage> {
-		return this._doComplete(messages, tools, temperature, true);
+		return this._doComplete(messages, tools, temperature, topK, true);
 	}
 
 	private async _doComplete(
 		messages: IAgentMessage[],
 		tools: IToolSchema[] | undefined,
 		temperature = 0,
+		topK: number | undefined,
 		allowRetry: boolean,
 	): Promise<IAgentMessage> {
 		const body: Record<string, unknown> = {
 			model: this._model,
 			messages: this._convertMessages(messages),
-			...this._temperatureParam(temperature),
+			...this._samplingParams(temperature, topK),
 		};
 
 		// Always send an explicit, context-aware max_tokens so the request can
@@ -203,7 +205,7 @@ export class OpenAIProvider implements ILLMProvider {
 					if (allowRetry && response.status === 400 && this._isTemperatureError(errorText)) {
 						this._skipTemperature = true;
 						clearTimeout(apiTimeout);
-						return this._doComplete(messages, tools, temperature, false);
+						return this._doComplete(messages, tools, temperature, topK, false);
 					}
 
 					// "maximum context length" — input + max_tokens exceeds the model window.
@@ -322,11 +324,12 @@ export class OpenAIProvider implements ILLMProvider {
 		messages: IAgentMessage[],
 		tools?: IToolSchema[],
 		temperature = 0,
+		topK?: number,
 	): AsyncIterableIterator<string> {
 		const body: Record<string, unknown> = {
 			model: this._model,
 			messages: this._convertMessages(messages),
-			...this._temperatureParam(temperature),
+			...this._samplingParams(temperature, topK),
 			stream: true,
 		};
 
@@ -373,7 +376,7 @@ export class OpenAIProvider implements ILLMProvider {
 					// Special handling for temperature validation error
 					if (response.status === 400 && this._isTemperatureError(errorText) && !this._skipTemperature) {
 						this._skipTemperature = true;
-						const retryBody = { ...body, ...this._temperatureParam(temperature) };
+						const retryBody = { ...body, ...this._samplingParams(temperature, topK) };
 						delete retryBody.temperature;
 						clearTimeout(apiTimeout);
 						response = await fetch(`${this._apiBase}/chat/completions`, {
@@ -558,9 +561,21 @@ export class OpenAIProvider implements ILLMProvider {
 
 	private _skipTemperature = false;
 
-	private _temperatureParam(temperature: number): Record<string, number> {
-		if (this._skipTemperature) return {};
-		return { temperature };
+	/**
+	 * Build the sampling params for the request body. `temperature` is always
+	 * sent (unless a previous request was rejected for it — see _skipTemperature);
+	 * `top_k` is only sent when explicitly configured (>0) so providers that do
+	 * not support it keep working with their default sampling.
+	 */
+	private _samplingParams(temperature: number, topK?: number): Record<string, number> {
+		const params: Record<string, number> = {};
+		if (!this._skipTemperature) {
+			params.temperature = temperature;
+		}
+		if (topK && topK > 0) {
+			params.top_k = topK;
+		}
+		return params;
 	}
 
 	private _isTemperatureError(text: string): boolean {

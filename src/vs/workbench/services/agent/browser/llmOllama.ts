@@ -26,6 +26,7 @@ export class OllamaProvider implements ILLMProvider {
 		messages: IAgentMessage[],
 		tools?: IToolSchema[],
 		temperature = 0,
+		topK?: number,
 	): Promise<IAgentMessage> {
 		const body: Record<string, unknown> = {
 			model: this._model,
@@ -34,7 +35,10 @@ export class OllamaProvider implements ILLMProvider {
 				content: m.content,
 			})),
 			stream: false,
-			options: { temperature },
+			options: {
+				temperature,
+				...(topK && topK > 0 ? { top_k: topK } : {}),
+			},
 		};
 
 		if (tools && tools.length > 0) {
@@ -88,6 +92,7 @@ export class OllamaProvider implements ILLMProvider {
 		messages: IAgentMessage[],
 		_tools?: IToolSchema[],
 		temperature = 0,
+		topK?: number,
 	): AsyncIterableIterator<string> {
 		const body = {
 			model: this._model,
@@ -96,7 +101,10 @@ export class OllamaProvider implements ILLMProvider {
 				content: m.content,
 			})),
 			stream: true,
-			options: { temperature },
+			options: {
+				temperature,
+				...(topK && topK > 0 ? { top_k: topK } : {}),
+			},
 		};
 
 		const response = await fetch(`${this._apiBase}/api/chat`, {

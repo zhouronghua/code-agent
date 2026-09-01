@@ -11,12 +11,14 @@ export interface ILLMProvider {
 		messages: IAgentMessage[],
 		tools?: IToolSchema[],
 		temperature?: number,
+		topK?: number,
 	): Promise<IAgentMessage>;
 
 	stream(
 		messages: IAgentMessage[],
 		tools?: IToolSchema[],
 		temperature?: number,
+		topK?: number,
 	): AsyncIterableIterator<string>;
 
 	countTokens(text: string): number;

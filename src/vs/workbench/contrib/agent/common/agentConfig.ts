@@ -21,6 +21,7 @@ interface ConfigProfile {
 	api_key: string;
 	api_base?: string;
 	temperature?: number;
+	top_k?: number;
 	max_input_tokens?: number;
 	max_output_tokens?: number;
 }
@@ -60,6 +61,7 @@ interface ConfigFile {
 		max_steps?: number;
 		max_context_tokens?: number;
 		temperature?: number;
+		top_k?: number;
 		step_timeout?: number;
 		task_timeout?: number;
 	};
@@ -142,6 +144,7 @@ function parseYaml(text: string): ConfigFile {
 			else if (k === 'api_key') profile.api_key = val.replace(/^["']|["']$/g, '');
 			else if (k === 'api_base') profile.api_base = val;
 			else if (k === 'temperature') profile.temperature = parseFloat(val);
+			else if (k === 'top_k') profile.top_k = parseInt(val, 10);
 			else if (k === 'max_input_tokens') profile.max_input_tokens = parseInt(val, 10);
 			else if (k === 'max_output_tokens') profile.max_output_tokens = parseInt(val, 10);
 			continue;
@@ -155,6 +158,7 @@ function parseYaml(text: string): ConfigFile {
 			if (k === 'max_steps') result.agent.max_steps = parseInt(val, 10);
 			else if (k === 'max_context_tokens') result.agent.max_context_tokens = parseInt(val, 10);
 			else if (k === 'temperature') result.agent.temperature = parseFloat(val);
+			else if (k === 'top_k') result.agent.top_k = parseInt(val, 10);
 			else if (k === 'step_timeout') result.agent.step_timeout = parseInt(val, 10);
 			else if (k === 'task_timeout') result.agent.task_timeout = parseInt(val, 10);
 			continue;
@@ -355,6 +359,7 @@ function profileToAgentConfig(profile: ConfigProfile, agent: ConfigFile['agent']
 		maxContextTokens: budgets.maxContextTokens,
 		maxOutputTokens: budgets.maxOutputTokens,
 		temperature: profile.temperature ?? agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
+		topK: profile.top_k ?? agent?.top_k ?? DEFAULT_AGENT_CONFIG.topK,
 		stepTimeout: agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
 		taskTimeout: agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,
 	};
@@ -449,6 +454,7 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		maxContextTokens: budgets.maxContextTokens,
 		maxOutputTokens: budgets.maxOutputTokens,
 		temperature: profile?.temperature ?? fileConfig.agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
+		topK: profile?.top_k ?? fileConfig.agent?.top_k ?? DEFAULT_AGENT_CONFIG.topK,
 		stepTimeout: fileConfig.agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
 		taskTimeout: fileConfig.agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,
 	};

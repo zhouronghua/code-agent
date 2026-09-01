@@ -36,6 +36,7 @@ export class AnthropicProvider implements ILLMProvider {
 		messages: IAgentMessage[],
 		tools?: IToolSchema[],
 		temperature = 0,
+		_topK?: number,  // Anthropic API has no top_k; ignored
 	): Promise<IAgentMessage> {
 		const systemMessage = messages.find(m => m.role === MessageRole.System);
 		const nonSystemMessages = messages.filter(m => m.role !== MessageRole.System);
@@ -96,6 +97,7 @@ export class AnthropicProvider implements ILLMProvider {
 		messages: IAgentMessage[],
 		tools?: IToolSchema[],
 		temperature = 0,
+		_topK?: number,  // Anthropic API has no top_k; ignored
 	): AsyncIterableIterator<string> {
 		const systemMessage = messages.find(m => m.role === MessageRole.System);
 		const nonSystemMessages = messages.filter(m => m.role !== MessageRole.System);

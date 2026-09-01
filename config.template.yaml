@@ -17,6 +17,7 @@ active_profile: openai
 # profiles:
 #   deepseek-v4-pro:
 #     temperature: 0.5
+#     top_k: 40
 
 # Model routing — automatically select & switch models per prompt within a session.
 # Scenarios are detected from the prompt: 'vision' | 'reasoning' | 'fast'.
@@ -35,6 +36,9 @@ agent:
   max_steps: 999999
   max_context_tokens: 200000
   temperature: 0
+  # top_k: 1            # Top-K sampling (0/omitted = provider default, not sent).
+                        # Pin to a fixed value (e.g. top_k: 1 with temperature: 0)
+                        # for reproducible benchmark runs.
   step_timeout: 120000    # 2 min (reasoning models need more time for tool execution)
   task_timeout: 600000     # 10 min
 
@@ -89,6 +93,10 @@ rules:
 # Credentials can also live in ~/.codeagent/mcp.json under
 # `mcpServers.tdai_agent_mem` (url + Authorization Bearer user key +
 # x-tdai-service-id header + username/teamId/agentId/userId).
+#
+# For reproducible benchmarks, pin sampling with
+#   agent-cli --temperature 0 --top-k 1 --memory off "task"
+# so temperature/top-k/memory are fixed across runs.
 # memory:
 #   enabled: true
 #   endpoint: http://10.9.114.25:8420
