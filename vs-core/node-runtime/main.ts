@@ -11,6 +11,8 @@
  *    agent-cli --profiles                                   # List available profiles
  *    agent-cli --skills                                     # List loaded skills
  *    agent-cli --use-skill cpp-forge "compile my project"   # Activate a specific skill
+ *    agent-cli --temperature 0 --top-k 1 --memory off "task"  # Pin sampling params (benchmarks)
+ *    agent-cli --version                                    # Show version
  *
  *  Config resolution (highest priority first):
  *    1. CLI flags
@@ -406,6 +408,7 @@ Options:
   --top-k <int>               Override top-k sampling; 0 = provider default
   --memory <on|off>           Force shared agent memory on/off for this run
   --help                      Show this help
+  --version, -v               Show version
 
 Session Management:
   Sessions persist your agent conversation context across restarts.

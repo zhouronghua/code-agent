@@ -38,14 +38,25 @@ code-agent --mode ask "explain the project structure"
 code-agent [options] "task description"
 
 Options:
-  --mode <agent|plan|ask>     Agent mode (default: agent)
-  --stream                    Streaming output
+  --mode <agent|plan|ask>     Set agent mode (default: agent)
+  --stream                    Enable streaming output
   --parallel "t1" "t2"        Run tasks in parallel
   --profile <name>            Use a config profile
   --profiles                  List available profiles
   --skills                    List loaded skills
   --use-skill <name>          Activate a skill for this session
+  --session <id>              Resume a specific session by ID
+  --resume                    Resume the most recent session
+  --sessions                  List saved sessions
+  --delete-session <id>       Delete a session
+  --tasks                     List saved task logs
+  --task <id>                 View a specific task log
+  --delete-task <id>          Delete a task log
+  --temperature <float>       Override sampling temperature (default from config)
+  --top-k <int>               Override top-k sampling; 0 = provider default
+  --memory <on|off>           Force shared agent memory on/off for this run
   --help                      Show help
+  --version, -v               Show version
 ```
 
 See [USAGE.md](USAGE.md) for full documentation including configuration, skills, distribution, and more.
