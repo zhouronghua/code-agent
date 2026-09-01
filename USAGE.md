@@ -248,17 +248,49 @@ agent-cli --use-skill code-review-excellence "review the latest changes"
   SKILL.md
 ```
 
-SKILL.md 格式：
+SKILL.md 格式（推荐使用完整的前置元数据，支持自动匹配）：
 
 ```markdown
 ---
 name: my-skill
 description: Description of what this skill does
+whenToUse: Situations the skill applies to (used for self-matching)
+trigger:
+  - trigger-keyword-1
+  - trigger-keyword-2
+disable-model-invocation: false
+user-invocable: false
 ---
 
 # My Skill
 
 Detailed instructions for the agent when this skill is active...
+```
+
+- `name`：小写 kebab-case（如 `cpp-forge`）
+- `description`：一句话说明技能用途和调用时机（必需）
+- `whenToUse`：可选的适用场景说明，帮助 Agent 自匹配
+- `trigger`：可选的触发关键词列表，命中任务时自动激活并注入完整内容
+- `disable-model-invocation` / `user-invocable`：调用权限标记
+
+### 技能封装（Meta-Skill：skills of skills）
+
+CodeAgent 内置了从 `dsh-run2skill` 移植的技能封装逻辑，让 Agent 自己就能
+创建、去重和发布规范的 SKILL.md，实现"技能的技能"：
+
+- **规范渲染**：`renderCanonicalSkill` 按统一契约（name/description/whenToUse/trigger/invocation）
+  渲染 SKILL.md，非法名称、缺少描述、内容无标题等都会在写入前被拒绝。
+- **技能目录**：`skill_catalog` 工具快照所有已加载技能；传入 `query` 时按
+  相关性排序（拉丁词 + 中文二元组模糊匹配），提示 `COVERED` / `PARTIAL` / `UNRELATED`。
+- **去重召回**：创建前先召回已有技能，避免重复造轮子——`COVERED` 应更新旧技能，
+  `PARTIAL` 应合并扩展，`UNRELATED` 才新建。
+- **发布**：`create_skill` / `update_skill` 将技能原子写入 `{skills 目录}/{name}/SKILL.md`，
+  默认不覆盖已存在技能。
+
+```bash
+# 在会话中直接让 Agent 管理技能库
+Agent> 把刚才的提交流程保存成一个 skill
+Agent> 查一下有没有和"提交代码"相关的技能   # Agent 会调用 skill_catalog
 ```
 
 ## Rules 支持

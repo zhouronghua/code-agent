@@ -55,15 +55,17 @@ code-agent/
 │       │   │   ├── agentParallel.ts  #   并行 Agent 管理器
 │       │   │   ├── agentPrompts.ts   #   系统提示词模板
 │       │   │   ├── agentConfig.ts    #   YAML 配置解析
-│       │   │   ├── agentSkills.ts    #   Skills/Rules 加载器
-│       │   │   └── tools/            #   工具实现（7个）
+│       │   │   ├── agentSkills.ts    #   Skills/Rules 加载器（含 Meta-Skill 提示）
+│       │   │   ├── agentSkillFactory.ts # 技能封装逻辑（skills of skills，移植自 dsh-run2skill）
+│       │   │   └── tools/            #   工具实现（10个）
 │       │   │       ├── readFile.ts
 │       │   │       ├── writeFile.ts
 │       │   │       ├── editFile.ts
 │       │   │       ├── listDir.ts
 │       │   │       ├── searchText.ts
 │       │   │       ├── searchFiles.ts
-│       │   │       └── runTerminal.ts
+│       │   │       ├── runTerminal.ts
+│       │   │       └── skillTools.ts #   技能管理工具（skill_catalog/create_skill/update_skill）
 │       │   └── browser/              #   VS Code UI 集成
 │       │       ├── agent.contribution.ts
 │       │       ├── agentViewPane.ts

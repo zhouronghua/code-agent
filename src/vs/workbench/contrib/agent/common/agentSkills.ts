@@ -14,6 +14,12 @@ export interface ISkill {
 	readonly content: string;
 	/** Trigger keywords from frontmatter for auto-matching (e.g. ["commit", "jira", "push"]) */
 	readonly triggers: string[];
+	/** whenToUse guidance from frontmatter (dsh-run2skill canonical contract) */
+	readonly whenToUse?: string;
+	/** Whether the model may auto-invoke this skill (disable-model-invocation) */
+	readonly modelInvocable: boolean;
+	/** Whether the user may explicitly invoke this skill (user-invocable) */
+	readonly userInvocable: boolean;
 }
 
 export interface IRule {
@@ -107,6 +113,13 @@ export class SkillsLoader {
 			// Show trigger keywords so the agent can self-match at runtime
 			if (skill.triggers.length > 0) {
 				lines.push(`Triggers: ${skill.triggers.join(', ')}`);
+			}
+			// Show whenToUse guidance (dsh-run2skill canonical contract)
+			if (skill.whenToUse) {
+				lines.push(`When to use: ${skill.whenToUse}`);
+			}
+			if (!skill.modelInvocable) {
+				lines.push('Invocation: manual only (not auto-activated)');
 			}
 
 			// If this skill was auto-matched, include its FULL content so the
@@ -267,10 +280,48 @@ export class SkillsLoader {
 	}
 
 	/**
+	 * Build the "Skills of Skills" (meta-skill) prompt section.
+	 *
+	 * This ports dsh-run2skill's skill packaging logic into a prompt contract so
+	 * the agent itself can create, catalog, recall and publish well-formed skills:
+	 *
+	 *   - Canonical SKILL.md contract (renderCanonicalSkill / validateSkillProposal)
+	 *   - Dedup/recall before CREATE (recallExistingSkills → COVERED/PARTIAL/UNRELATED)
+	 *   - Publication location (first configured skills dir)
+	 *
+	 * The matching tool implementations live in agentSkillFactory.ts and
+	 * tools/skillTools.ts (skill_catalog / create_skill / update_skill).
+	 */
+	buildMetaSkillPromptSection(skillsDirs: string[]): string {
+		const primaryDir = skillsDirs[0] || '~/.codeagent/skills';
+		return `\n## Skill Crafting (Meta-Skill: skills of skills)
+You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL.md\` files loaded from: ${skillsDirs.join(', ') || '~/.codeagent/skills'} (primary: ${primaryDir}).
+
+### When to create or update a skill
+- The user explicitly asks to save a workflow/constraint as a reusable skill ("保存为skill", "save this as a skill").
+- You notice the same reusable workflow, constraint, or correction appearing across tasks.
+
+### Canonical SKILL.md contract (MUST follow — use the create_skill / update_skill tools)
+- Frontmatter fields: \`name\` (lowercase-kebab-case, e.g. \`cpp-forge\`), \`description\` (one or two sentences, what + when), optional \`whenToUse\` (situations it applies to), optional \`trigger:\` keyword list for auto-matching, \`disable-model-invocation\` and \`user-invocable\` flags.
+- Body: complete, executable Markdown that MUST start with a heading (\`# ...\`). Keep it focused and under 60 KB.
+- Write description/whenToUse/content in the user's working language (Simplified Chinese by default); keep code, commands and identifiers unchanged.
+
+### Dedup before creating (CRITICAL)
+1. Call \`skill_catalog\` with a query describing the new capability BEFORE \`create_skill\`.
+2. If recall says \`COVERED\` — do NOT create a duplicate; prefer \`update_skill\` to extend the existing skill.
+3. If recall says \`PARTIAL\` — extend the existing skill via \`update_skill\` (merge), or create only when the workflows are materially different.
+4. If recall says \`UNRELATED\` and no same-name skill exists — safe to \`create_skill\`.
+
+### Publication
+- New skills are published to \`{primaryDir}/{name}/SKILL.md\`. Never overwrite an existing skill unless the user approves (or pass \`force: true\` after confirmation).
+- After creating/updating a skill, tell the user the file path and that a new session (or \`/skills\`) will pick it up.`;
+	}
+
+	/**
 	 * Build full context prompt with all rules and skills.
 	 * Optionally accepts a task description for auto-matching skills.
 	 */
-	buildFullContextPrompt(taskDescription?: string, excludeRulePatterns?: string[]): string {
+	buildFullContextPrompt(taskDescription?: string, excludeRulePatterns?: string[], skillsDirs?: string[]): string {
 		let prompt = '';
 
 		// Preload ALL rules content (not just alwaysApply) for auto-matching
@@ -286,6 +337,11 @@ export class SkillsLoader {
 		// Preload skills headers for auto-matching (with triggers shown)
 		const skillsSection = this.buildSkillsPromptSection(preActivatedSkills);
 		if (skillsSection) prompt += skillsSection;
+
+		// "Skills of skills": teach the agent how to package its own skills
+		if (skillsDirs && skillsDirs.length > 0) {
+			prompt += this.buildMetaSkillPromptSection(skillsDirs);
+		}
 
 		return prompt;
 	}
@@ -319,12 +375,20 @@ export class SkillsLoader {
 				? meta.trigger.split('\n').map(t => t.trim()).filter(t => t.length > 0)
 				: [];
 
+			// Parse canonical metadata (dsh-run2skill contract: whenToUse, invocation flags)
+			const whenToUse = meta.whenToUse?.trim() || undefined;
+			const modelInvocable = meta['disable-model-invocation'] !== 'true';
+			const userInvocable = meta['user-invocable'] === 'true';
+
 			this._skills.push({
 				name: meta.name || fallbackName,
 				description: meta.description || '',
 				filePath,
 				content: body,
 				triggers,
+				...(whenToUse ? { whenToUse } : {}),
+				modelInvocable,
+				userInvocable,
 			});
 		} catch {
 			// skip unreadable files

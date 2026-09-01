@@ -20,6 +20,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as readline from 'node:readline';
+import * as nodePath from 'node:path';
+import * as nodeOs from 'node:os';
 import { URI } from '../base/common/uri';
 import { AgentMode, MessageRole } from '../../src/vs/workbench/services/agent/common/agentModels';
 import { LLMProviderFactory } from '../../src/vs/workbench/services/agent/browser/llmProvider';
@@ -40,6 +42,7 @@ import { RunTerminalTool } from '../../src/vs/workbench/contrib/agent/common/too
 import { loadConfig, loadConfigForProfile, listProfiles, ResolvedConfig } from '../../src/vs/workbench/contrib/agent/common/agentConfig';
 import { ModelRouter } from '../../src/vs/workbench/contrib/agent/common/agentModelRouter';
 import { SkillsLoader } from '../../src/vs/workbench/contrib/agent/common/agentSkills';
+import { SkillCatalogTool, CreateSkillTool, UpdateSkillTool } from '../../src/vs/workbench/contrib/agent/common/tools/skillTools';
 import { loadMemoryConfig, MemoryClient, MemorySearchTool, ConversationSearchTool, MemoryReadTool, MemoryWriteTool } from '../../src/vs/workbench/contrib/agent/common/agentMemory';
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
 import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common/agentSessions';
@@ -440,6 +443,16 @@ function createServices(resolved: ResolvedConfig) {
 	toolRegistry.registerAlias('search_content', 'search_text');
 	toolRegistry.register(new RunTerminalTool(terminalService, process.cwd()));
 
+	// ---- Skill management ("Skills of Skills"): catalog / create / update ----
+	// Ports dsh-run2skill's skill packaging logic so the agent can manage its own
+	// skill library using canonical SKILL.md files (see agentSkillFactory.ts).
+	const skillDirs = resolved.skillsDirs && resolved.skillsDirs.length > 0
+		? resolved.skillsDirs
+		: [nodePath.join(nodeOs.homedir(), '.codeagent', 'skills')];
+	toolRegistry.register(new SkillCatalogTool(skillDirs));
+	toolRegistry.register(new CreateSkillTool(skillDirs));
+	toolRegistry.register(new UpdateSkillTool(skillDirs));
+
 	// ---- Shared memory (tdai_agent_mem) ----
 	// Tools + auto recall/capture are enabled when config.yaml `memory:` or
 	// ~/.codeagent/mcp.json `mcpServers.tdai_agent_mem` is present.
@@ -641,6 +654,7 @@ async function main() {
 	const skillsLoader = new SkillsLoader();
 	skillsLoader.loadSkillsFromDirs(resolved.skillsDirs);
 	skillsLoader.loadRulesFromDirs(resolved.rulesDirs);
+	setResolvedSkillDirs(resolved.skillsDirs);
 
 	if (opts.showSkills) {
 		if (skillsLoader.skills.length === 0) {
@@ -649,6 +663,9 @@ async function main() {
 			console.log(`\n${C.bold}Loaded skills (${skillsLoader.skills.length}):${C.reset}`);
 			for (const s of skillsLoader.skills) {
 				console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
+				if (s.whenToUse) {
+					console.log(`      whenToUse: ${C.dim}${s.whenToUse.substring(0, 100)}${C.reset}`);
+				}
 			}
 		}
 		if (skillsLoader.rules.length > 0) {
@@ -658,6 +675,7 @@ async function main() {
 				console.log(`  ${tag}${C.reset}  ${C.dim}${r.description}${C.reset}`);
 			}
 		}
+		console.log(`\n${C.dim}Skill management tools (meta-skill): skill_catalog / create_skill / update_skill${C.reset}`);
 		return;
 	}
 
@@ -1091,6 +1109,7 @@ async function main() {
 					const newProvider = LLMProviderFactory.create(newResolved.agentConfig);
 					agentLoop.swapProvider(newResolved.agentConfig, newProvider);
 					resolved = newResolved;
+					setResolvedSkillDirs(newResolved.skillsDirs);
 					modelRouter = new ModelRouter(newResolved.modelRouting, newResolved.profiles, newResolved.agentConfig);
 					currentModel = newResolved.agentConfig.model;
 					const nc = newResolved.agentConfig;
@@ -1102,9 +1121,18 @@ async function main() {
 			}
 
 			if (trimmed === '/skills') {
-				for (const s of skillsLoader.skills) {
-					console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
+				if (skillsLoader.skills.length === 0) {
+					console.log(`${C.dim}No skills loaded. Configure skills directories in config.yaml.${C.reset}`);
+				} else {
+					console.log(`\n${C.bold}Loaded skills (${skillsLoader.skills.length}):${C.reset}`);
+					for (const s of skillsLoader.skills) {
+						console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
+						if (s.whenToUse) {
+							console.log(`      whenToUse: ${C.dim}${s.whenToUse.substring(0, 100)}${C.reset}`);
+						}
+					}
 				}
+				console.log(`${C.dim}Skill tools: skill_catalog / create_skill / update_skill (ask the agent to manage skills)${C.reset}`);
 				processingLock = false; displayPrompt(); return;
 			}
 
@@ -1206,6 +1234,11 @@ function buildSkillsContext(loader: SkillsLoader, activeSkill?: string, taskDesc
 	// Build skills section — pre-activated skills get their FULL content included
 	prompt += loader.buildSkillsPromptSection(preActivatedSkills);
 
+	// "Skills of skills" meta-skill: teach the agent to package its own skills
+	// (canonical SKILL.md contract, dedup recall, publication location).
+	const skillDirs = getResolvedSkillDirs();
+	prompt += loader.buildMetaSkillPromptSection(skillDirs);
+
 	// If user explicitly activated a skill not in the auto-matched set,
 	// append its full content separately (redundancy for safety)
 	if (activeSkill) {
@@ -1218,6 +1251,15 @@ function buildSkillsContext(loader: SkillsLoader, activeSkill?: string, taskDesc
 	}
 
 	return prompt;
+}
+
+// Tracks the resolved skills dirs for the meta-skill prompt (set at startup).
+let _resolvedSkillDirs: string[] = [];
+function getResolvedSkillDirs(): string[] {
+	return _resolvedSkillDirs;
+}
+function setResolvedSkillDirs(dirs: string[]): void {
+	_resolvedSkillDirs = dirs && dirs.length > 0 ? dirs : [nodePath.join(nodeOs.homedir(), '.codeagent', 'skills')];
 }
 
 main().catch(err => { console.error('Fatal:', err); process.exit(1); });
