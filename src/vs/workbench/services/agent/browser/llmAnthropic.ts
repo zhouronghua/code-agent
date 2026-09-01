@@ -2,7 +2,7 @@
  *  Anthropic LLM Provider - Messages API with tool_use blocks + streaming
  *--------------------------------------------------------------------------------------------*/
 
-import { ILLMProvider, LLMProviderFactory } from './llmProvider';
+import { ILLMProvider, LLMProviderFactory, estimateTokenCount } from './llmProvider';
 import {
 	IAgentConfig,
 	IAgentMessage,
@@ -165,7 +165,7 @@ export class AnthropicProvider implements ILLMProvider {
 	}
 
 	countTokens(text: string): number {
-		return Math.ceil(text.length / 4);
+		return estimateTokenCount(text);
 	}
 
 	private _parseResponse(content: AnthropicContentBlock[], usage?: ILlmUsage): IAgentMessage {

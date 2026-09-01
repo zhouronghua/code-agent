@@ -5,7 +5,7 @@
  *  model-specific max tokens, rate limit recovery, and graceful error handling.
  *--------------------------------------------------------------------------------------------*/
 
-import { ILLMProvider, LLMProviderFactory } from './llmProvider';
+import { ILLMProvider, LLMProviderFactory, ContextOverflowError, estimateTokenCount, TOKENS_PER_MESSAGE_OVERHEAD } from './llmProvider';
 import {
 	IAgentConfig,
 	IAgentMessage,
@@ -22,6 +22,17 @@ const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 // Maximum timeout for the API request itself (not tool execution)
 const API_REQUEST_TIMEOUT_MS = 300000; // 5 minutes
+
+/**
+ * Minimum completion budget a request is allowed to use. When the clamp leaves
+ * less than this, the window is effectively full — fail fast with a
+ * ContextOverflowError so the agent loop compacts history instead of sending a
+ * useless near-zero-token request that wastes a round trip.
+ */
+const MIN_COMPLETION_TOKENS = 2048;
+
+/** Fraction of the context window reserved as a hard safety margin in max_tokens clamps. */
+const CONTEXT_RESERVE_RATIO = 0.05;
 
 function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
@@ -133,7 +144,16 @@ export class OpenAIProvider implements ILLMProvider {
 		// never exceed the model's context window (input + completion <= context).
 		// Prevents "maximum context length" API errors when maxOutputTokens is
 		// larger than the remaining budget.
-		body.max_tokens = this._clampMaxTokens(messages, tools);
+		const clampedMaxTokens = this._clampMaxTokens(messages, tools);
+		// If the completion budget is crushed to near zero the window is already
+		// effectively full — fail fast with ContextOverflowError so the agent
+		// loop compacts history instead of sending a useless near-empty request.
+		if (clampedMaxTokens < MIN_COMPLETION_TOKENS) {
+			throw new ContextOverflowError(
+				`Context window nearly full: estimated input leaves only ${clampedMaxTokens} tokens for completion (minimum ${MIN_COMPLETION_TOKENS}). Conversation history must be compacted.`
+			);
+		}
+		body.max_tokens = clampedMaxTokens;
 
 		// Reasoning models: enable deep thinking explicitly and allow long
 		// chain-of-thought outputs (budget is clamped to remaining context above).
@@ -171,6 +191,26 @@ export class OpenAIProvider implements ILLMProvider {
 						this._skipTemperature = true;
 						clearTimeout(apiTimeout);
 						return this._doComplete(messages, tools, temperature, false);
+					}
+
+					// "maximum context length" — input + max_tokens exceeds the model window.
+					// Retry with a progressively smaller completion budget (covers the near-miss
+					// case where input alone fits but input + maxOutputTokens doesn't). If the
+					// budget is already minimal, escalate to ContextOverflowError so the agent
+					// loop compacts the history and retries with a smaller window.
+					if (response.status === 400 && this._isContextOverflowError(errorText)) {
+						const currentMaxTokens = body.max_tokens as number;
+						if (attempt < MAX_RETRIES && currentMaxTokens > MIN_COMPLETION_TOKENS) {
+							const reduced = Math.max(MIN_COMPLETION_TOKENS, Math.floor(currentMaxTokens / 4));
+							body.max_tokens = reduced;
+							const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+							console.warn(`[LLM Retry] Context overflow — reducing max_tokens ${currentMaxTokens} -> ${reduced} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+							lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+							await sleepWithProgress(delay, 'Retry backoff');
+							continue;
+						}
+						clearTimeout(apiTimeout);
+						throw new ContextOverflowError(`Model context window exceeded: ${errorText}`);
 					}
 
 					// Graceful recovery from DeepSeek-specific transient errors
@@ -278,8 +318,15 @@ export class OpenAIProvider implements ILLMProvider {
 		};
 
 		// Same context-aware max_tokens clamp as complete(): input + max_tokens
-		// must never exceed the model's context window.
-		body.max_tokens = this._clampMaxTokens(messages, tools);
+		// must never exceed the model's context window. Fail fast when the window
+		// is effectively full so the agent loop can compact and retry.
+		const clampedMaxTokens = this._clampMaxTokens(messages, tools);
+		if (clampedMaxTokens < MIN_COMPLETION_TOKENS) {
+			throw new ContextOverflowError(
+				`Context window nearly full: estimated input leaves only ${clampedMaxTokens} tokens for completion (minimum ${MIN_COMPLETION_TOKENS}). Conversation history must be compacted.`
+			);
+		}
+		body.max_tokens = clampedMaxTokens;
 
 		if (this._isReasoning) {
 			body.thinking = { type: 'enabled' };
@@ -330,6 +377,23 @@ export class OpenAIProvider implements ILLMProvider {
 							throw new Error(`OpenAI API error ${response.status}: ${retryErrorText}`);
 						}
 						break;
+					}
+
+					// "maximum context length" — reduce the completion budget and retry,
+					// then escalate to ContextOverflowError so the agent loop compacts.
+					if (response.status === 400 && this._isContextOverflowError(errorText)) {
+						const currentMaxTokens = body.max_tokens as number;
+						if (attempt < MAX_RETRIES && currentMaxTokens > MIN_COMPLETION_TOKENS) {
+							const reduced = Math.max(MIN_COMPLETION_TOKENS, Math.floor(currentMaxTokens / 4));
+							body.max_tokens = reduced;
+							const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+							console.warn(`[LLM Retry] Context overflow — reducing max_tokens ${currentMaxTokens} -> ${reduced} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+							lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+							await sleepWithProgress(delay, 'Retry backoff');
+							continue;
+						}
+						clearTimeout(apiTimeout);
+						throw new ContextOverflowError(`Model context window exceeded: ${errorText}`);
 					}
 
 					// Graceful recovery from DeepSeek-specific transient errors
@@ -418,8 +482,10 @@ export class OpenAIProvider implements ILLMProvider {
 	}
 
 	countTokens(text: string): number {
-		// cl100k_base approximation: ~4 chars per token
-		return Math.ceil(text.length / 4);
+		// Conservative, CJK-aware estimate shared by all providers. The old
+		// chars/4 rule undercounts mixed code + reasoning_content by ~1.6x,
+		// which defeats the context-budget guardrails (see estimateTokenCount).
+		return estimateTokenCount(text);
 	}
 
 	/**
@@ -435,6 +501,8 @@ export class OpenAIProvider implements ILLMProvider {
 			if (msg.reasoningContent) {
 				total += this.countTokens(msg.reasoningContent);
 			}
+			// JSON message framing (role, id, timestamp, tool_call_id, keys)
+			total += TOKENS_PER_MESSAGE_OVERHEAD;
 		}
 		if (tools) {
 			for (const tool of tools) {
@@ -448,13 +516,29 @@ export class OpenAIProvider implements ILLMProvider {
 	/**
 	 * Clamp the completion token budget so that input + max_tokens never exceeds
 	 * the model's total context window. Without this, a large maxOutputTokens
-	 * (e.g. deepseek-v4's 393216) combined with a near-full message window
+	 * (e.g. deepseek-v4's 65536) combined with a near-full message window
 	 * produces "This model's maximum context length is X tokens..." API errors.
+	 *
+	 * A hard safety reserve (5% of the window, min 4096) is kept on top of the
+	 * estimate so a slightly-off estimate can never fill the window completely.
 	 */
 	private _clampMaxTokens(messages: IAgentMessage[], tools?: IToolSchema[]): number {
 		const inputTokens = this._estimateInputTokens(messages, tools);
-		const remaining = this._maxContextTokens - inputTokens;
+		const safetyReserve = Math.max(4096, Math.floor(this._maxContextTokens * CONTEXT_RESERVE_RATIO));
+		const remaining = this._maxContextTokens - inputTokens - safetyReserve;
 		return Math.max(1, Math.min(this._maxOutputTokens, remaining));
+	}
+
+	/**
+	 * Detect "This model's maximum context length is X tokens..." API errors.
+	 * These are NOT retryable as-is: the request must shrink (smaller max_tokens
+	 * or a compacted message window) before it can succeed.
+	 */
+	private _isContextOverflowError(text: string): boolean {
+		const lower = text.toLowerCase();
+		return lower.includes('maximum context length')
+			|| lower.includes('reduce the length of the messages')
+			|| (lower.includes('context') && lower.includes('exceed'));
 	}
 
 	private _skipTemperature = false;

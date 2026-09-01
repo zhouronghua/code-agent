@@ -13,7 +13,15 @@ import {
 	MessageRole,
 	createMessage,
 } from 'vs/workbench/services/agent/common/agentModels';
-import { ILLMProvider } from 'vs/workbench/services/agent/browser/llmProvider';
+import { ILLMProvider, TOKENS_PER_MESSAGE_OVERHEAD } from 'vs/workbench/services/agent/browser/llmProvider';
+
+/**
+ * Fraction of the input budget the sliding window may use. Deliberately
+ * conservative: token estimates are heuristics, and the API counts the REAL
+ * tokenizer output — a window filled to 100% of the estimate can still overflow
+ * the model's actual limit once the completion budget is added.
+ */
+const WINDOW_UTILIZATION = 0.75;
 
 export class AgentContext {
 	private readonly _messages: IAgentMessage[] = [];
@@ -76,7 +84,7 @@ export class AgentContext {
 			const msg = this._messages[i];
 			const msgTokens = this._estimateTokens(msg);
 
-			if (tokenCount + msgTokens > this._inputBudget * 0.8) {
+			if (tokenCount + msgTokens > this._inputBudget * WINDOW_UTILIZATION) {
 				break;
 			}
 
@@ -88,10 +96,16 @@ export class AgentContext {
 		return result;
 	}
 
-	async compactIfNeeded(): Promise<boolean> {
+	/**
+	 * Compact the conversation history when it grows too large (or always, when
+	 * `force` is set — used to recover from a context-overflow API error).
+	 * Older messages are summarized via the LLM; if summarization fails, the
+	 * oldest messages are truncated instead. Returns true if a compaction ran.
+	 */
+	async compactIfNeeded(force = false): Promise<boolean> {
 		const totalTokens = this._estimateTotalTokens();
 
-		if (totalTokens < this._inputBudget * 0.8) {
+		if (!force && totalTokens < this._inputBudget * WINDOW_UTILIZATION) {
 			return false;
 		}
 
@@ -180,7 +194,8 @@ export class AgentContext {
 		if (message.reasoningContent) {
 			total += this._llmProvider.countTokens(message.reasoningContent);
 		}
-		return total;
+		// Account for JSON message framing (role, id, timestamp, tool_call_id, keys)
+		return total + TOKENS_PER_MESSAGE_OVERHEAD;
 	}
 
 	private _estimateTotalTokens(): number {

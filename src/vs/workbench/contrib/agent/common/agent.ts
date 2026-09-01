@@ -26,7 +26,7 @@ import {
 	IAgentTaskLog,
 	generateId,
 } from 'vs/workbench/services/agent/common/agentModels';
-import { ILLMProvider } from 'vs/workbench/services/agent/browser/llmProvider';
+import { ILLMProvider, ContextOverflowError } from 'vs/workbench/services/agent/browser/llmProvider';
 import { ToolRegistry } from './agentTools';
 import { AgentContext } from './agentContext';
 import { AgentModeManager } from './agentModes';
@@ -515,10 +515,7 @@ export class AgentLoop {
 
 			await this._context.compactIfNeeded();
 
-			const messages = this._context.getContextWindow();
-			const tools = this._modeManager.isReadOnly
-				? this._toolRegistry.getReadOnlySchemas()
-				: this._toolRegistry.listSchemas();
+			let messages = this._context.getContextWindow();
 
 			// Check if the current context uses reasoning_content (thinking mode).
 			// Reasoning models require special handling:
@@ -532,41 +529,71 @@ export class AgentLoop {
 
 			// ---- Step tracing: record LLM request metadata ----
 			const stepStartTime = Date.now();
-			const llmRequestMeta = {
-				messageCount: messages.length,
-				estimatedTokens: messages.reduce((sum, m) => sum + this._llmProvider.countTokens(m.content), 0),
-			};
 
-			// Streaming is only safe when:
-			//   1. Streaming is explicitly enabled by user
-			//   2. No tools are available (streaming with tools doesn't work well)
-			//   3. No reasoning_content in context (would be lost in streaming)
-			//   4. Provider claims to support streaming
-			const canStream = this._useStreaming
-				&& (!tools || tools.length === 0)
-				&& !hasThinking
-				&& providerSupportsStreaming
-				&& !isReasoningModel;
+			// ---- LLM call with context-overflow recovery ----
+			// If the request cannot fit in the model's window (either the provider
+			// detects it proactively, or the API rejects it with "maximum context
+			// length"), force-compact the conversation history and retry with a
+			// smaller window. Each compaction roughly halves the history, so a
+			// handful of retries is enough even for very large resumed sessions.
+			let llmRequestMeta = { messageCount: 0, estimatedTokens: 0 };
+			let overflowRetries = 0;
+			const MAX_OVERFLOW_RETRIES = 3;
+			for (;;) {
+				messages = this._context.getContextWindow();
+				const tools = this._modeManager.isReadOnly
+					? this._toolRegistry.getReadOnlySchemas()
+					: this._toolRegistry.listSchemas();
 
-			if (canStream) {
-				const chunks: string[] = [];
-				const stream = this._llmProvider.stream(
-					messages,
-					undefined,
-					this._config.temperature,
-				);
-				for await (const token of stream) {
-					chunks.push(token);
-					this._onDidStreamToken.fire(token);
+				llmRequestMeta = {
+					messageCount: messages.length,
+					estimatedTokens: messages.reduce((sum, m) =>
+						sum + this._llmProvider.countTokens(m.content)
+						+ (m.reasoningContent ? this._llmProvider.countTokens(m.reasoningContent) : 0), 0),
+				};
+
+				try {
+					// Streaming is only safe when:
+					//   1. Streaming is explicitly enabled by user
+					//   2. No tools are available (streaming with tools doesn't work well)
+					//   3. No reasoning_content in context (would be lost in streaming)
+					//   4. Provider claims to support streaming
+					const canStream = this._useStreaming
+						&& (!tools || tools.length === 0)
+						&& !hasThinking
+						&& providerSupportsStreaming
+						&& !isReasoningModel;
+
+					if (canStream) {
+						const chunks: string[] = [];
+						const stream = this._llmProvider.stream(
+							messages,
+							undefined,
+							this._config.temperature,
+						);
+						for await (const token of stream) {
+							chunks.push(token);
+							this._onDidStreamToken.fire(token);
+						}
+						response = createMessage(MessageRole.Assistant, chunks.join(''));
+					} else {
+						// Use non-streaming complete() which preserves reasoning_content
+						response = await this._llmProvider.complete(
+							messages,
+							tools.length > 0 ? tools : undefined,
+							this._config.temperature,
+						);
+					}
+					break;
+				} catch (err) {
+					if (err instanceof ContextOverflowError && overflowRetries < MAX_OVERFLOW_RETRIES) {
+						overflowRetries++;
+						console.warn(`[Context Overflow] Conversation history too large — compacting and retrying (${overflowRetries}/${MAX_OVERFLOW_RETRIES}): ${(err as Error).message}`);
+						await this._context.compactIfNeeded(true);
+						continue;
+					}
+					throw err;
 				}
-				response = createMessage(MessageRole.Assistant, chunks.join(''));
-			} else {
-				// Use non-streaming complete() which preserves reasoning_content
-				response = await this._llmProvider.complete(
-					messages,
-					tools.length > 0 ? tools : undefined,
-					this._config.temperature,
-				);
 			}
 
 			this._context.addMessage(response);

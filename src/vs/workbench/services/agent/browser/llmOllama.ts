@@ -2,7 +2,7 @@
  *  Ollama LLM Provider - Local model REST API with tool support
  *--------------------------------------------------------------------------------------------*/
 
-import { ILLMProvider, LLMProviderFactory } from './llmProvider';
+import { ILLMProvider, LLMProviderFactory, estimateTokenCount } from './llmProvider';
 import {
 	IAgentConfig,
 	IAgentMessage,
@@ -137,7 +137,7 @@ export class OllamaProvider implements ILLMProvider {
 	}
 
 	countTokens(text: string): number {
-		return Math.ceil(text.length / 4);
+		return estimateTokenCount(text);
 	}
 }
 
