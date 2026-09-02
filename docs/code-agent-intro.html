@@ -510,7 +510,7 @@ html.no-js .term-line{opacity:1;transform:none}
       <div class="b-card reveal d2">
         <div class="ico">📦</div>
         <h3>多形态分发</h3>
-        <p>esbuild 单文件打包（~121KB 零运行时依赖），npm / GitHub Releases / Docker / 单文件直跑四种方式。</p>
+        <p>esbuild 单文件打包（~121KB 零运行时依赖），源码构建 / Docker 镜像 / 单文件直跑，发布到内部 Git 仓库与 JFrog。</p>
         <span class="tag">build.mjs · Dockerfile · CI/CD</span>
       </div>
     </div>
@@ -823,41 +823,41 @@ html.no-js .term-line{opacity:1;transform:none}
   <div class="wrap">
     <div class="sec-tag reveal">07 · Quick Start</div>
     <h2 class="reveal">60 秒<span class="grad">上手</span></h2>
-    <p class="sec-sub reveal">单文件分发，零运行时依赖 —— 装好即用。</p>
+    <p class="sec-sub reveal">源码构建，零运行时依赖 —— clone 代码后 3 步即可全局使用（最新代码以内部 Git 仓库为准）。</p>
 
     <div class="qs">
       <div class="qs-step reveal">
         <div class="n">1</div>
         <div class="body">
-          <h4>安装（npm 全局）</h4>
-          <pre class="code"><span class="c"># 或从 GitHub Releases 安装 .tgz</span>
-<span class="k">npm</span> install -g code-agent</pre>
+          <h4>获取代码（内部 Git 仓库）</h4>
+          <pre class="code"><span class="k">git</span> clone git@git.enflame.cn:ronghua.zhou/code-agent.git
+<span class="k">cd</span> code-agent && <span class="k">npm</span> install</pre>
         </div>
       </div>
       <div class="qs-step reveal d1">
         <div class="n">2</div>
         <div class="body">
-          <h4>配置</h4>
-          <pre class="code"><span class="k">cp</span> $(npm root -g)/code-agent/config.template.yaml ~/.codeagent/config.yaml
-<span class="c"># 编辑 ~/.codeagent/models.json 填入模型与 API key</span></pre>
+          <h4>构建并全局链接</h4>
+          <pre class="code"><span class="k">npm</span> run link      <span class="c"># = npm run build + npm link，注册全局 code-agent 命令</span>
+<span class="c"># 或直接运行构建产物（免安装）：node build/agent-cli.js &lt;任务&gt;</span></pre>
         </div>
       </div>
       <div class="qs-step reveal d2">
         <div class="n">3</div>
+        <div class="body">
+          <h4>配置</h4>
+          <pre class="code"><span class="k">cp</span> config.template.yaml ~/.codeagent/config.yaml
+<span class="c"># 编辑 ~/.codeagent/models.json 填入模型与 API key</span></pre>
+        </div>
+      </div>
+      <div class="qs-step reveal d3">
+        <div class="n">4</div>
         <div class="body">
           <h4>运行</h4>
           <pre class="code"><span class="k">code-agent</span> <span class="s">"write a hello world in Python"</span>
 <span class="k">code-agent</span> --mode plan <span class="s">"design a REST API"</span>
 <span class="k">code-agent</span> --parallel <span class="s">"t1"</span> <span class="s">"t2"</span>   <span class="c"># 并行任务</span>
 <span class="k">code-agent</span> --resume                   <span class="c"># 恢复最近会话</span></pre>
-        </div>
-      </div>
-      <div class="qs-step reveal d3">
-        <div class="n">4</div>
-        <div class="body">
-          <h4>构建与打包</h4>
-          <pre class="code"><span class="k">npm</span> run build:release   <span class="c"># esbuild minify → build/agent-cli.js (~121KB)</span>
-<span class="k">npm</span> run pack             <span class="c"># 生成 code-agent-0.3.33.tgz</span></pre>
         </div>
       </div>
     </div>
@@ -869,7 +869,7 @@ html.no-js .term-line{opacity:1;transform:none}
   <div class="wrap">
     <div class="brand" style="font-size:16px"><span class="logo">CA</span> CodeAgent · AI Coding Agent CLI</div>
     <div class="f-links">
-      <a href="https://github.com/zhouronghua/code-agent" target="_blank" rel="noopener">GitHub</a>
+      <a href="http://git.enflame.cn/ronghua.zhou/code-agent" target="_blank" rel="noopener">内部 Git 仓库</a>
       <a href="http://dolphin.enflame.cn/artifact-service/a/gi04gtwrtz" target="_blank" rel="noopener">Benchmark Report</a>
       <a href="#timeline">演进历史</a>
       <a href="#architecture">架构</a>
