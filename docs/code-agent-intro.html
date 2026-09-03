@@ -429,6 +429,7 @@ pre.code{overflow-x:auto;max-width:100%}
     <a href="#timeline">演进历史</a>
     <a href="#benchmark">基准测试</a>
     <a href="#demoscript">演示脚本</a>
+    <a href="#commands">命令参考</a>
     <a href="#quickstart">快速开始</a>
     <a href="#faq">FAQ / 附录</a>
   </div>
@@ -505,9 +506,10 @@ pre.code{overflow-x:auto;max-width:100%}
             <tr><td class="f">⑦ 记忆 · 路由 · 配置</td><td class="t">深挖 · 4′</td><td class="d">L0→L3 记忆、场景路由、config.yaml 全景</td></tr>
             <tr><td class="f">⑧ 演进历史</td><td class="t">核心 · 6′</td><td class="d">讲故事：每次升级都源于真实痛点（看 commit）</td></tr>
             <tr><td class="f">⑨ 基准测试 agent_bm</td><td class="t">核心 · 8′</td><td class="d">公平性设计 + 指标口径 + 每日 02:00 流水线 + 现场打开报告</td></tr>
-            <tr><td class="f">⑩ 现场演示脚本</td><td class="t">核心 · 10′</td><td class="d">6 个可复现 live demo + 兜底预案（讲之前先看这节）</td></tr>
-            <tr><td class="f">⑪ 快速开始</td><td class="t">核心 · 3′</td><td class="d">三行命令把听众带回家</td></tr>
-            <tr><td class="f">⑫ FAQ / 附录</td><td class="t">深挖 · 自由</td><td class="d">10 个高频问题 + CLI/REPL/路径速查表，冷场专用</td></tr>
+            <tr><td class="f">⑩ 现场演示脚本</td><td class="t">核心 · 10–15′</td><td class="d">10 个 live demo（D1–D10，选 4–6 个讲）+ 兜底预案（讲之前先看这节）</td></tr>
+            <tr><td class="f">⑪ 命令与交互指令</td><td class="t">核心 · 4′</td><td class="d">CLI 参数 + 推理中指令（/btw 等），让观众看完就会用</td></tr>
+            <tr><td class="f">⑫ 快速开始</td><td class="t">核心 · 3′</td><td class="d">三行命令把听众带回家</td></tr>
+            <tr><td class="f">⑬ FAQ / 附录</td><td class="t">深挖 · 自由</td><td class="d">10 个高频问题 + 参数/路径速查表，冷场专用</td></tr>
           </tbody>
         </table>
         </div>
@@ -1162,7 +1164,7 @@ BENCHMARK_TEMPERATURE=0 BENCHMARK_TOP_K=1 BENCHMARK_MEMORY=0 \
   <div class="wrap">
     <div class="sec-tag reveal">10 · Demo Script</div>
     <h2 class="reveal">现场演示<span class="grad">脚本</span> —— 照着讲就能撑满 60 分钟</h2>
-    <div class="sec-meta reveal"><span class="pill core">核心 · 必讲</span><span class="pill">建议 10′</span><span class="pill warn">开讲前先读这节</span></div>
+    <div class="sec-meta reveal"><span class="pill core">核心 · 必讲</span><span class="pill">建议 10–15′</span><span class="pill warn">开讲前先读这节</span></div>
     <p class="sec-sub reveal">下面每个 demo 都标注了时长、命令、讲解点与兜底方案。<b>节奏自检点</b>：走到第 20 分钟还没讲完架构 → 直接从 ⑧ 演进历史接管；第 35 分钟还没进 Benchmark → 砍掉 demo D6–D8。
     全场始终保留“随时可讲”的静态 terminal 回放（页首 hero），即使网络全挂也能撑住。</p>
 
@@ -1190,7 +1192,7 @@ BENCHMARK_TEMPERATURE=0 BENCHMARK_TOP_K=1 BENCHMARK_MEMORY=0 \
         <div class="kv"><span>模型 / 网络不可用</span><b>切 profile 或本地 Ollama；或 MOCK_LLM=1 node standalone-demo/agent.mjs（619 行零依赖，纯本地）</b></div>
         <div class="kv"><span>API 4xx / 限流</span><b>改讲策略：429/5xx 自动重试 + 4xx 不重试、指数退避（讲不跑）</b></div>
         <div class="kv"><span>任务跑太久</span><b>现场演示 /btw cancel 打断，或讲 poll 工具设计</b></div>
-        <div class="kv"><span>现场提问冷场</span><b>FAQ ⑫ 备了 10 个高频问题</b></div>
+        <div class="kv"><span>现场提问冷场</span><b>FAQ ⑬ 备了 10 个高频问题</b></div>
       </div>
       <div class="bm-card">
         <h4>🎤 每节一句话“提词”（Elevator pitch）</h4>
@@ -1210,9 +1212,124 @@ BENCHMARK_TEMPERATURE=0 BENCHMARK_TOP_K=1 BENCHMARK_MEMORY=0 \
 
 
 <!-- ================= 快速开始 ================= -->
+<section id="commands" style="background:var(--bg-2)">
+  <div class="wrap">
+    <div class="sec-tag reveal">11 · Commands</div>
+    <h2 class="reveal">命令行参数与<span class="grad">推理中指令</span> —— 看完就会用</h2>
+    <div class="sec-meta reveal"><span class="pill core">核心 · 必讲</span><span class="pill">建议 4′</span><span class="pill demo">配合 ⑩ 现场演示引用</span></div>
+    <p class="sec-sub reveal">先记住一句话：code-agent 底层<b style="color:#c7d5ea">就是 REPL</b>，带任务参数只是把第一条任务自动敲进去 ——
+    所以“跑任务 / 中途打断 / 追问 / 恢复”全是同一套交互，演示里那些操作都能在下面找到对应命令。安装后同时注册两个命令名：<span class="mono" style="font-family:var(--mono);color:var(--cyan)">code-agent</span> 与 <span class="mono" style="font-family:var(--mono);color:var(--cyan)">agent-cli</span>。</p>
+
+    <div class="grid2 reveal">
+      <div class="bm-card">
+        <h4>⚙️ CLI 参数（一）任务 · 输出 · 采样</h4>
+        <div style="overflow-x:auto">
+        <table class="mod-table">
+          <tbody>
+            <tr><td class="f">--mode &lt;agent|plan|ask&gt;</td><td class="d">执行模式：agent 全自主 / plan 先规划后执行 / ask 只读问答（默认 agent）</td></tr>
+            <tr><td class="f">--parallel "t1" "t2"</td><td class="d">并行跑多个任务（相互独立）</td></tr>
+            <tr><td class="f">--stream</td><td class="d">启用流式输出（逐 token 显示，默认见配置）</td></tr>
+            <tr><td class="f">--profile &lt;name&gt; / --profiles</td><td class="d">切换 / 列出配置 profile</td></tr>
+            <tr><td class="f">--temperature &lt;float&gt;</td><td class="d">覆盖采样温度（0 = 确定性输出）</td></tr>
+            <tr><td class="f">--top-k &lt;int&gt;</td><td class="d">覆盖 top-k（0 = 不发送，用 provider 默认）</td></tr>
+            <tr><td class="f">--memory &lt;on|off&gt;</td><td class="d">共享记忆开关（基准固定 off 保证可复现）</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+      <div class="bm-card">
+        <h4>⚙️ CLI 参数（二）会话 · 技能 · 追踪</h4>
+        <div style="overflow-x:auto">
+        <table class="mod-table">
+          <tbody>
+            <tr><td class="f">--resume</td><td class="d">恢复最近一次会话继续干</td></tr>
+            <tr><td class="f">--session &lt;id&gt; / --sessions</td><td class="d">恢复指定会话 / 列出所有会话</td></tr>
+            <tr><td class="f">--delete-session &lt;id&gt;</td><td class="d">删除某个会话</td></tr>
+            <tr><td class="f">--skills / --use-skill &lt;name&gt;</td><td class="d">列出已加载技能 / 显式启用技能（如 commit）</td></tr>
+            <tr><td class="f">--tasks / --task &lt;id&gt;</td><td class="d">任务日志：列表 / 查看某次详情</td></tr>
+            <tr><td class="f">--delete-task &lt;id&gt;</td><td class="d">删除某次任务日志</td></tr>
+            <tr><td class="f">--help / --version, -v</td><td class="d">完整帮助（自带分组说明）/ 版本号</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p class="bm-note" style="margin-top:10px">配置优先级：CLI 参数 / 环境变量 &gt; ./config.yaml（项目）&gt; ~/.codeagent/config.yaml（全局）；API key 在 ~/.codeagent/models.json。</p>
+      </div>
+    </div>
+
+    <div class="grid2 reveal" style="margin-top:18px">
+      <div class="bm-card">
+        <h4>🚀 常用组合（照着敲就行）</h4>
+        <pre class="code"><span class="k">code-agent</span> <span class="s">"创建并验证 hello.txt"</span>          <span class="c"># 单条任务</span>
+<span class="k">code-agent</span> --mode ask <span class="s">"解释这个仓库怎么分层"</span>  <span class="c"># 只读问答，零副作用</span>
+<span class="k">code-agent</span> --mode plan <span class="s">"给 REST API 出实现方案"</span> <span class="c"># 先规划再执行</span>
+<span class="k">code-agent</span> --parallel <span class="s">"写模块A测试"</span> <span class="s">"写模块B文档"</span> <span class="c"># 并行</span>
+<span class="k">code-agent</span> --use-skill commit <span class="s">"提交当前改动"</span>   <span class="c"># 走 commit 技能</span>
+<span class="k">code-agent</span> --resume                           <span class="c"># 接着上次会话干</span>
+<span class="k">code-agent</span> --temperature 0 --top-k 1 --memory off <span class="s">"bm-task"</span> <span class="c"># 固定采样</span></pre>
+      </div>
+      <div class="bm-card">
+        <h4>🎮 推理过程中能做什么（核心交互）</h4>
+        <div class="kv"><span>[running] 提示符</span><b>运行中提示符变 [running - /btw to intervene]</b></div>
+        <div class="kv"><span>/btw &lt;提示&gt;</span><b>把方向提示注入后续推理（如“先读 scheduler.ts 再改，别动公共接口”）</b></div>
+        <div class="kv"><span>/btw cancel</span><b>中止当前工具调用（卡住的 build / 长 poll）</b></div>
+        <div class="kv"><span>直接打字</span><b>不丢：排队（QUEUED），任务结束后依次执行</b></div>
+        <div class="kv"><span>Ctrl+C / exit / quit</span><b>保存会话并优雅退出（下次 --resume 接着干）</b></div>
+        <p class="bm-note" style="margin-top:10px">空闲时 /btw &lt;话&gt; = 当作直接提问，立即得到回答（不用再敲一遍斜杠格式）。</p>
+      </div>
+    </div>
+
+    <div class="grid2 reveal" style="margin-top:18px">
+      <div class="bm-card">
+        <h4>💬 空闲提示符（Agent&gt; / Ask&gt; / Plan&gt;）下的指令</h4>
+        <div style="overflow-x:auto">
+        <table class="mod-table">
+          <tbody>
+            <tr><td class="f">/save [名称]</td><td class="d">手动保存当前会话</td></tr>
+            <tr><td class="f">/sessions · /resume [id] · /new</td><td class="d">会话列表 · 恢复（默认最近）· 开新会话</td></tr>
+            <tr><td class="f">/auto-save</td><td class="d">切换任务结束后自动保存</td></tr>
+            <tr><td class="f">/mode plan|ask|agent</td><td class="d">中途切换执行模式</td></tr>
+            <tr><td class="f">/profile &lt;name&gt; · /profiles</td><td class="d">热切换模型配置（打印 old → new）/ 列表</td></tr>
+            <tr><td class="f">/stream</td><td class="d">流式输出开关</td></tr>
+            <tr><td class="f">/skills · /skill &lt;name&gt;</td><td class="d">查看已加载技能 / 激活技能</td></tr>
+            <tr><td class="f">/parallel "a" "b"</td><td class="d">直接并行派发任务（≥2 个）</td></tr>
+            <tr><td class="f">/continue</td><td class="d">让 agent 接着上一轮继续（也可直接打 continue）</td></tr>
+            <tr><td class="f">/tasks · /task &lt;id&gt; · /delete-task &lt;id&gt;</td><td class="d">执行日志回放：列表 / 详情 / 删除</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p class="bm-note" style="margin-top:10px">Tab 补全所有斜杠命令，还能补会话 id（/resume &lt;前缀&gt;）与技能名（/use-skill &lt;前缀&gt;）。</p>
+      </div>
+      <div class="bm-card">
+        <h4>🎬 一段现场实录（示意 transcript）</h4>
+        <pre class="code">$ code-agent
+Commands: /mode, /profile, /profiles, /stream, /skill,
+          /skills, /parallel, /btw, exit
+Session:  /save, /sessions, /resume, /new, /auto-save
+Tasks:    /tasks, /task &lt;id&gt;, /delete-task &lt;id&gt;
+Tip: use /btw &lt;hint&gt; any time — even while agent is
+     running; /btw cancel to abort current tool
+
+Agent&gt; 给 scheduler 加 async worker 并发执行
+[running - /btw to intervene] /btw 先读 scheduler.ts 再
+      动手，别改公共接口
+[running - /btw to intervene] /btw cancel
+✔ done（4 steps · 6 tool calls · 58k tokens）
+
+Agent&gt; /tasks                <span class="c">← 回放本次执行日志</span>
+Agent&gt; /task &lt;上次id&gt;         <span class="c">← 看每步工具入参/出参与 token</span>
+Agent&gt; /resume               <span class="c">← 下次进来从这里继续</span>
+Agent&gt; exit                  <span class="c">← 保存会话，优雅退出（Ctrl+C 同）</span></pre>
+        <p class="bm-note" style="margin-top:10px">提示符与命令来自真实实现；会话内容为演示示意。参数按字母速查 → ⑬ FAQ 速查表。</p>
+      </div>
+    </div>
+
+    <p class="arch-note reveal" style="margin-top:20px">🎓 上手顺序建议：<b>code-agent --help</b> 看分组说明 → 先 <b>--mode ask</b> 问仓库 → 再跑一个 agent 任务 → 用 <b>/tasks</b> 回放 → 试着在运行中 <b>/btw</b> 纠偏一次 —— 你就“会用”了。</p>
+  </div>
+</section>
+
 <section id="quickstart">
   <div class="wrap">
-    <div class="sec-tag reveal">11 · Quick Start</div>
+    <div class="sec-tag reveal">12 · Quick Start</div>
     <h2 class="reveal">60 秒<span class="grad">上手</span></h2>
     <p class="sec-sub reveal">源码构建，零运行时依赖 —— clone 代码后 3 步即可全局使用（最新代码以内部 Git 仓库为准）。</p>
 
@@ -1274,7 +1391,7 @@ BENCHMARK_TEMPERATURE=0 BENCHMARK_TOP_K=1 BENCHMARK_MEMORY=0 \
 
 <section id="faq" style="background:var(--bg-2)">
   <div class="wrap">
-    <div class="sec-tag reveal">12 · FAQ / 附录</div>
+    <div class="sec-tag reveal">13 · FAQ / 附录</div>
     <h2 class="reveal">高频问题与<span class="grad">速查表</span></h2>
     <div class="sec-meta reveal"><span class="pill opt">深挖 · 可跳过</span><span class="pill">建议 0–5′，冷场与答疑专用</span></div>
 
