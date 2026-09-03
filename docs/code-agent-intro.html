@@ -410,6 +410,47 @@ pre.code{overflow-x:auto;max-width:100%}
 .bm-card .kv{flex-wrap:wrap;column-gap:12px}
 .bm-card .kv b{overflow-wrap:break-word;text-align:right;max-width:68%}
 @media(max-width:560px){.bm-card .kv b{max-width:100%;text-align:left}}
+</style><style>
+/* ============================================================
+   演示（放映）模式 —— 方向键 / PgUp / PgDn / Space 翻页
+   ============================================================ */
+#presBtn{position:fixed;right:20px;bottom:20px;z-index:1800;display:inline-flex;align-items:center;gap:7px;
+ font-family:var(--mono);font-size:12px;font-weight:700;color:#06121f;letter-spacing:.4px;
+ background:var(--grad);border:none;border-radius:999px;padding:9px 16px;cursor:pointer;
+ box-shadow:0 6px 22px rgba(34,211,238,.35);transition:transform .15s,box-shadow .15s}
+#presBtn:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(34,211,238,.5)}
+#presChrome{position:fixed;top:12px;right:14px;z-index:2100;display:none;
+ align-items:center;gap:8px;max-width:calc(100vw - 32px);
+ background:rgba(10,17,32,.85);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+ border:1px solid var(--border-2);border-radius:999px;padding:6px 8px 6px 16px;box-shadow:0 8px 28px rgba(0,0,0,.5)}
+#presChrome button{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;
+ border:1px solid var(--border);background:rgba(255,255,255,.05);color:var(--text);
+ border-radius:999px;font-size:14px;line-height:1;cursor:pointer;padding:0 8px;transition:background .15s,border-color .15s}
+#presChrome button:hover{background:var(--panel-2);border-color:var(--border-2);color:#fff}
+#presChrome #presTitle{font-family:var(--mono);font-size:11.5px;color:var(--cyan);letter-spacing:.3px;
+ white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:min(34vw,360px)}
+#presChrome #presCount{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap}
+#presBar{position:fixed;top:0;left:0;height:3px;background:var(--grad);z-index:2300;display:none;transition:width .25s ease}
+#presHint{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:2100;display:none;
+ background:rgba(10,17,32,.82);border:1px solid var(--border);border-radius:999px;padding:6px 15px;
+ font-family:var(--mono);font-size:11px;color:var(--muted-2);letter-spacing:.3px;white-space:nowrap}
+body.presMode{overflow:hidden;height:100vh;height:100dvh}
+body.presMode #nav,body.presMode #scrollbar,body.presMode footer,body.presMode #toTop,body.presMode #presBtn{display:none!important}
+body.presMode #presChrome,body.presMode #presBar{display:flex}
+body.presMode #presBar{display:block}
+body.presMode #presHint{display:inline-flex}
+body.presMode > header#hero,body.presMode > section{
+  position:fixed;top:0;left:0;right:0;bottom:0;margin:0;display:block;
+  width:100%;height:100vh;height:100dvh;overflow-y:auto;overflow-x:hidden;
+  opacity:0;visibility:hidden;pointer-events:none;
+  transition:opacity .3s ease,visibility .3s ease}
+body.presMode > header#hero.pres-on,body.presMode > section.pres-on{
+  opacity:1;visibility:visible;pointer-events:auto;z-index:100}
+body.presMode > header#hero{padding:14px 24px 40px}
+body.presMode > section{padding:70px 24px 96px}
+body.presMode .pres-on::-webkit-scrollbar{width:6px}
+body.presMode .pres-on::-webkit-scrollbar-thumb{background:rgba(148,163,184,.35);border-radius:3px}
+@media(max-width:900px){#presHint{display:none!important}#presChrome #presTitle{max-width:34vw}}
 </style></head>
 <body>
 
@@ -434,6 +475,19 @@ pre.code{overflow-x:auto;max-width:100%}
     <a href="#faq">FAQ / 附录</a>
   </div>
 </nav>
+<!-- ================= 演示模式 UI ================= -->
+<div id="presBar"></div>
+<div id="presChrome" role="toolbar" aria-label="演示模式控制">
+  <span id="presTitle">CodeAgent</span>
+  <span id="presCount">1 / 14</span>
+  <button id="presPrev" title="上一页（← / PageUp）" aria-label="上一页">‹</button>
+  <button id="presNext" title="下一页（→ / PageDown / Space）" aria-label="下一页">›</button>
+  <button id="presFs" title="切换全屏" aria-label="切换全屏">⛶</button>
+  <button id="presExit" title="退出演示（Esc）" aria-label="退出演示">✕</button>
+</div>
+<div id="presHint">← → 翻页 · PageUp / PageDown · Space 下一页 · Home / End 首尾 · Esc 退出 · 长页滚轮查看</div>
+<button id="presBtn" title="演示模式：左右方向键 / PageUp / PageDown 翻页，Esc 退出">▶ 演示</button>
+
 
 <!-- ================= HERO ================= -->
 <header id="hero">
@@ -492,7 +546,7 @@ pre.code{overflow-x:auto;max-width:100%}
         <p class="bm-note" style="margin-bottom:16px">每个小节顶部都有 <span class="pill core">核心 · 必讲</span> /
         <span class="pill opt">深挖 · 可跳过</span> / <span class="pill demo">演示</span> 三种标记与建议时长：
         时间紧就走 <b style="color:#c7d5ea">核心路径（约 40′，跳过所有 [深挖]）</b>；时间充裕就走完整版（约 60′）。
-        下表中 ① 概览 / ⑤ 仓库结构 / ⑧ 演进历史 / ⑨ 基准 是四条“主线”，无论怎么跳都不建议全删。</p>
+        下表中 ① 概览 / ⑤ 仓库结构 / ⑧ 演进历史 / ⑨ 基准 是四条“主线”，无论怎么跳都不建议全删。💡 放映时点右下角 <b>▶ 演示</b>（或按 <span class="mono" style="font-family:var(--mono)">P</span>）进入放映模式：<b>← / → 或 PageUp / PageDown</b> 翻页，Esc 退出回到滚动浏览。</p>
         <div style="overflow-x:auto">
         <table class="mod-table">
           <thead><tr><th>章节</th><th>定位 / 建议时长</th><th>现场要点</th></tr></thead>
@@ -1656,5 +1710,169 @@ Agent&gt; exit                  <span class="c">← 保存会话，优雅退出�
   }
 })();
 </script>
+
+<script>
+/* ============================================================
+   CodeAgent Intro Deck — 演示（放映）模式（零依赖追加模块）
+   进入：右下角 ▶ 演示 或按 P；翻页：←/→、↑/↓、PageUp/PageDown、
+   Space、Home/End；退出：Esc 或 ✕。每页可内部滚动阅读长内容。
+   ============================================================ */
+(function(){
+  'use strict';
+  var slides = Array.prototype.slice.call(
+    document.querySelectorAll('body > header#hero, body > section'));
+  if (!slides.length) return;
+  var inPres = false, idx = 0, offsets = [];
+  var btn = document.getElementById('presBtn');
+  var chrome = document.getElementById('presChrome');
+  var prevB = document.getElementById('presPrev');
+  var nextB = document.getElementById('presNext');
+  var fsB = document.getElementById('presFs');
+  var exitB = document.getElementById('presExit');
+  var titleEl = document.getElementById('presTitle');
+  var countEl = document.getElementById('presCount');
+  var bar = document.getElementById('presBar');
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function slideTitle(el){
+    var t = el.querySelector('h2') || el.querySelector('h1');
+    return t ? t.textContent.replace(/\s+/g, ' ').trim() : (el.id || '');
+  }
+  function computeOffsets(){
+    var arr = [];
+    slides.forEach(function(s){ arr.push(s.offsetTop); });
+    return arr;
+  }
+  function show(i, jump){
+    if (i < 0 || i >= slides.length) return;
+    idx = i;
+    slides.forEach(function(s, k){ s.classList.toggle('pres-on', k === i); });
+    var cur = slides[i];
+    cur.scrollTop = 0;
+    countEl.textContent = (i + 1) + ' / ' + slides.length;
+    titleEl.textContent = slideTitle(cur);
+    bar.style.width = (((i + 1) / slides.length) * 100) + '%';
+  }
+  function nextSlide(){ if (idx < slides.length - 1) show(idx + 1); }
+  function prevSlide(){ if (idx > 0) show(idx - 1); }
+  function pageDown(){
+    var cur = slides[idx];
+    if (cur) {
+      var max = cur.scrollHeight - cur.clientHeight;
+      if (max > 4 && cur.scrollTop < max - 4) {
+        cur.scrollBy({ top: Math.max(48, cur.clientHeight * 0.9),
+                       behavior: reduced ? 'auto' : 'smooth' });
+        return;
+      }
+    }
+    nextSlide();
+  }
+  function pageUp(){
+    var cur = slides[idx];
+    if (cur && cur.scrollTop > 4) {
+      cur.scrollBy({ top: -Math.max(48, cur.clientHeight * 0.9),
+                     behavior: reduced ? 'auto' : 'smooth' });
+      return;
+    }
+    prevSlide();
+  }
+  function currentFromScroll(){
+    if (!offsets.length) offsets = computeOffsets();
+    var probe = (window.scrollY || document.documentElement.scrollTop || 0)
+                + window.innerHeight * 0.35;
+    var cur = 0;
+    for (var k = 0; k < offsets.length; k++) if (offsets[k] <= probe) cur = k;
+    return cur;
+  }
+  function enterPres(){
+    if (inPres) return;
+    offsets = computeOffsets();
+    inPres = true;
+    document.body.classList.add('presMode');
+    show(currentFromScroll());
+  }
+  function exitPres(){
+    if (!inPres) return;
+    var top = offsets[idx] || 0;
+    inPres = false;
+    slides.forEach(function(s){ s.classList.remove('pres-on'); });
+    document.body.classList.remove('presMode');
+    window.scrollTo(0, Math.max(0, top - 2));
+  }
+  function toggleFs(){
+    var d = document;
+    if (d.fullscreenElement) {
+      (d.exitFullscreen || function(){}).call(d);
+    } else {
+      var el = d.documentElement;
+      (el.requestFullscreen || el.webkitRequestFullscreen ||
+       el.mozRequestFullScreen || function(){}).call(el);
+    }
+  }
+
+  if (btn) btn.addEventListener('click', enterPres);
+  if (prevB) prevB.addEventListener('click', prevSlide);
+  if (nextB) nextB.addEventListener('click', nextSlide);
+  if (fsB) fsB.addEventListener('click', toggleFs);
+  if (exitB) exitB.addEventListener('click', exitPres);
+
+  // 键盘：演示模式翻页；非演示模式按 P 进入
+  document.addEventListener('keydown', function(e){
+    var tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (!inPres && (e.key === 'p' || e.key === 'P') &&
+        !e.ctrlKey && !e.metaKey && !e.altKey &&
+        !/^(INPUT|TEXTAREA|SELECT)$/.test(tag)) {
+      e.preventDefault(); enterPres(); return;
+    }
+    if (!inPres) return;
+    var k = e.key;
+    if (k === 'Escape') {
+      e.preventDefault();
+      if (document.fullscreenElement) toggleFs(); else exitPres();
+      return;
+    }
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' ||
+        k === ' ' || k === 'Spacebar' || k === 'Enter') {
+      e.preventDefault();
+      if (k === 'PageDown' || k === ' ' || k === 'Spacebar') pageDown();
+      else nextSlide();
+      return;
+    }
+    if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp' || k === 'Backspace') {
+      e.preventDefault();
+      if (k === 'PageUp') pageUp();
+      else prevSlide();
+      return;
+    }
+    if (k === 'Home') { e.preventDefault(); show(0); }
+    if (k === 'End')  { e.preventDefault(); show(slides.length - 1); }
+  });
+
+  // 页内锚点（如路线图跳转）在演示模式下改为切页
+  document.addEventListener('click', function(e){
+    if (!inPres) return;
+    var a = e.target && e.target.closest ? e.target.closest('a[href^="#"]') : null;
+    if (!a) return;
+    var id = (a.getAttribute('href') || '').slice(1);
+    if (!id) return;
+    var target = document.getElementById(id);
+    var k = target ? slides.indexOf(target) : -1;
+    if (k >= 0) { e.preventDefault(); show(k); }
+  });
+
+  // 触摸左右滑动翻页
+  var tx = null;
+  document.addEventListener('touchstart', function(e){
+    if (!inPres) return; tx = e.touches[0].clientX;
+  }, { passive: true });
+  document.addEventListener('touchend', function(e){
+    if (!inPres || tx === null) return;
+    var dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 60) { if (dx < 0) nextSlide(); else prevSlide(); }
+    tx = null;
+  }, { passive: true });
+})();
+</script>
+
 </body>
 </html>
