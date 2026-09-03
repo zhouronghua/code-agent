@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CodeAgent — AI 编码代理 CLI · 架构与演进</title>
-<meta name="description" content="CodeAgent 代码仓库结构、框架与演进历史介绍，以及 agent_bm 基准测试体系。">
+<title>CodeAgent — AI 编码代理 CLI · 架构与演进（1 小时演示版）</title>
+<meta name="description" content="CodeAgent 仓库结构、架构与演进；Skills/记忆/模型路由深挖；agent_bm 基准测试体系；60 分钟现场演示脚本与 FAQ。">
 <script>document.documentElement.classList.add('js');</script>
 <style>
 /* ============================================================
@@ -379,7 +379,38 @@ html.no-js .term-line{opacity:1;transform:none}
   .bar-fill{transition:none}
 }
 </style>
-</head>
+<style>
+/* ============================================================
+   1 小时演示增强组件（由 build_deck.py 追加，零外部资源）
+   ============================================================ */
+.sec-meta{display:flex;flex-wrap:wrap;gap:8px;margin:-2px 0 20px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;padding:3px 11px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--muted);letter-spacing:.3px}
+.pill.core{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.08);color:var(--cyan)}
+.pill.opt{border-style:dashed;color:var(--muted-2)}
+.pill.demo{border-color:rgba(52,211,153,.5);background:rgba(52,211,153,.08);color:var(--green)}
+.pill.warn{border-color:rgba(251,191,36,.5);background:rgba(251,191,36,.07);color:var(--amber)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:18px;align-items:start}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;align-items:start}
+@media(max-width:880px){.grid2,.grid3{grid-template-columns:1fr}}
+.step{display:grid;grid-template-columns:40px 1fr;gap:14px;align-items:start;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 18px;margin-bottom:10px}
+.step .sn{width:30px;height:30px;border-radius:9px;background:var(--grad);display:grid;place-items:center;font-family:var(--mono);font-weight:800;color:#06121f;font-size:13.5px;margin-top:2px}
+.step h4{font-size:15px;margin:0 0 5px;font-weight:700}
+.step p{color:var(--muted);font-size:13.6px;margin:0;line-height:1.7}
+.step .file{font-family:var(--mono);font-size:12.3px;color:var(--cyan);display:block;margin-top:6px;opacity:.85}
+.note{background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.25);border-radius:12px;padding:13px 16px;font-size:13.4px;color:var(--muted);line-height:1.7}
+.note.warn{background:rgba(251,191,36,.07);border-color:rgba(251,191,36,.3)}
+.note.good{background:rgba(52,211,153,.07);border-color:rgba(52,211,153,.3)}
+.q h4{font-size:14.5px;font-weight:700;margin-bottom:6px}
+.q p{color:var(--muted);font-size:13.5px;margin:0;line-height:1.75}
+.src{display:inline-block;font-family:var(--mono);font-size:11.5px;color:var(--muted-2);border:1px solid var(--border);border-radius:7px;padding:2px 8px;margin-top:10px;background:rgba(255,255,255,.03)}
+.bm-card h4,.t-card h4,.chart h4{font-size:14.5px;font-weight:700;margin:2px 0 10px}
+.demo-time{font-family:var(--mono);font-size:12px;color:var(--muted-2);white-space:nowrap}
+pre.code{overflow-x:auto;max-width:100%}
+.mod-table{min-width:0}
+.bm-card .kv{flex-wrap:wrap;column-gap:12px}
+.bm-card .kv b{overflow-wrap:break-word;text-align:right;max-width:68%}
+@media(max-width:560px){.bm-card .kv b{max-width:100%;text-align:left}}
+</style></head>
 <body>
 
 <div id="scrollbar"></div>
@@ -387,14 +418,19 @@ html.no-js .term-line{opacity:1;transform:none}
 <nav id="nav">
   <div class="brand"><span class="logo">CA</span> CodeAgent <small>v0.3.33</small></div>
   <button id="navToggle" aria-label="菜单">☰</button>
-  <div class="links" id="navLinks">
-    <a href="#overview">概览</a>
+    <div class="links" id="navLinks">
+    <a href="#overview">概览 · 路线图</a>
     <a href="#features">核心能力</a>
     <a href="#architecture">架构</a>
+    <a href="#exec">执行链路</a>
     <a href="#structure">仓库结构</a>
+    <a href="#skills-deep">Skills</a>
+    <a href="#memorycfg">记忆 · 路由 · 配置</a>
     <a href="#timeline">演进历史</a>
     <a href="#benchmark">基准测试</a>
+    <a href="#demoscript">演示脚本</a>
     <a href="#quickstart">快速开始</a>
+    <a href="#faq">FAQ / 附录</a>
   </div>
 </nav>
 
@@ -443,10 +479,39 @@ html.no-js .term-line{opacity:1;transform:none}
     既能当日常编码助手，也能作为团队内部 Agent 基础设施被反复打磨。</p>
 
     <div class="stats">
-      <div class="stat reveal"><div class="num" data-count="82">0</div><div class="lbl">Git 提交（2026-04 至今）</div></div>
+      <div class="stat reveal"><div class="num" data-count="84">0</div><div class="lbl">Git 提交（2026-04 至今）</div></div>
       <div class="stat reveal d1"><div class="num" data-count="70">0</div><div class="lbl">TypeScript 源文件</div></div>
       <div class="stat reveal d2"><div class="num" data-count="10">0</div><div class="lbl">~万行核心代码</div></div>
       <div class="stat reveal d3"><div class="num" data-count="11">0</div><div class="lbl">演进阶段</div></div>
+    </div>
+
+    <div class="reveal" style="margin-top:54px">
+      <div class="bm-card">
+        <h3><span class="ico">🗺️</span> 演示路线图 —— 60 分钟怎么切（本 deck 自带跳级能力）</h3>
+        <p class="bm-note" style="margin-bottom:16px">每个小节顶部都有 <span class="pill core">核心 · 必讲</span> /
+        <span class="pill opt">深挖 · 可跳过</span> / <span class="pill demo">演示</span> 三种标记与建议时长：
+        时间紧就走 <b style="color:#c7d5ea">核心路径（约 40′，跳过所有 [深挖]）</b>；时间充裕就走完整版（约 60′）。
+        下表中 ① 概览 / ⑤ 仓库结构 / ⑧ 演进历史 / ⑨ 基准 是四条“主线”，无论怎么跳都不建议全删。</p>
+        <div style="overflow-x:auto">
+        <table class="mod-table">
+          <thead><tr><th>章节</th><th>定位 / 建议时长</th><th>现场要点</th></tr></thead>
+          <tbody>
+            <tr><td class="f">① 概览 + 路线图</td><td class="t">核心 · 3′</td><td class="d">一句话定位 + 本节路线图（您现在在这）</td></tr>
+            <tr><td class="f">② 核心能力全景</td><td class="t">核心 · 5′</td><td class="d">扫一遍 9 张卡，重点讲 Skills / 记忆 / 路由三件套</td></tr>
+            <tr><td class="f">③ 分层架构</td><td class="t">核心 · 7′</td><td class="d">contribution / service / vs-core 三层心智模型</td></tr>
+            <tr><td class="f">④ 执行链路深挖</td><td class="t">深挖 · 5′</td><td class="d">一条任务从回车到交付穿过哪 9 个阶段、落了哪些盘</td></tr>
+            <tr><td class="f">⑤ 仓库结构</td><td class="t">核心 · 4′</td><td class="d">filetree + 模块行数表，呼应②③④</td></tr>
+            <tr><td class="f">⑥ Skills 体系深挖</td><td class="t">深挖 · 4′</td><td class="d">SKILL.md 契约 / 匹配算法 / meta-skill（提问常客）</td></tr>
+            <tr><td class="f">⑦ 记忆 · 路由 · 配置</td><td class="t">深挖 · 4′</td><td class="d">L0→L3 记忆、场景路由、config.yaml 全景</td></tr>
+            <tr><td class="f">⑧ 演进历史</td><td class="t">核心 · 6′</td><td class="d">讲故事：每次升级都源于真实痛点（看 commit）</td></tr>
+            <tr><td class="f">⑨ 基准测试 agent_bm</td><td class="t">核心 · 8′</td><td class="d">公平性设计 + 指标口径 + 每日 02:00 流水线 + 现场打开报告</td></tr>
+            <tr><td class="f">⑩ 现场演示脚本</td><td class="t">核心 · 10′</td><td class="d">6 个可复现 live demo + 兜底预案（讲之前先看这节）</td></tr>
+            <tr><td class="f">⑪ 快速开始</td><td class="t">核心 · 3′</td><td class="d">三行命令把听众带回家</td></tr>
+            <tr><td class="f">⑫ FAQ / 附录</td><td class="t">深挖 · 自由</td><td class="d">10 个高频问题 + CLI/REPL/路径速查表，冷场专用</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -458,6 +523,7 @@ html.no-js .term-line{opacity:1;transform:none}
     <h2 class="reveal">核心能力 <span class="grad">全景</span></h2>
     <p class="sec-sub reveal">从多模式执行到共享记忆，每个能力都对应仓库里的一个独立模块，可单独演进、独立测试。</p>
 
+    <p class="bm-note" style="margin:-6px 0 18px">卡片标题下方的<b style="color:var(--muted);font-family:var(--mono);font-weight:600"> 文件路径 </b>是深挖入口 —— 对应小节：<a href="#exec">④ 执行链路</a> · <a href="#skills-deep">⑥ Skills</a> · <a href="#memorycfg">⑦ 记忆 · 路由 · 配置</a></p>
     <div class="bento">
       <div class="b-card reveal">
         <div class="ico">⚡</div>
@@ -486,7 +552,7 @@ html.no-js .term-line{opacity:1;transform:none}
       <div class="b-card reveal d1">
         <div class="ico">🛠</div>
         <h3>13+ 内置工具</h3>
-        <p>文件读写 / 精确编辑 / 正则搜索 / 目录浏览 / 终端执行 / 指数退避轮询，外加技能管理（skill_catalog / create_skill / update_skill）与记忆读写工具。</p>
+        <p>文件读写 / 精确编辑 / 正则搜索 / 目录浏览 / 终端执行 / 指数退避轮询 8 个核心工具，外加技能管理（skill_catalog / create_skill / update_skill）与记忆读写（tdai_memory_*）4 个，另有 search_content 别名，注册名共 16 个。</p>
         <span class="tag">agentTools.ts · tools/</span>
       </div>
       <div class="b-card reveal d2">
@@ -591,9 +657,56 @@ html.no-js .term-line{opacity:1;transform:none}
 </section>
 
 <!-- ================= 仓库结构 ================= -->
+<section id="exec" style="background:var(--bg-2)">
+  <div class="wrap">
+    <div class="sec-tag reveal">04 · Execution</div>
+    <h2 class="reveal">一次任务如何被<span class="grad">完成</span> —— 执行链路深挖</h2>
+    <div class="sec-meta reveal"><span class="pill opt">深挖 · 可跳过</span><span class="pill">建议 5′</span><span class="pill demo">配合 --stream / task log 现场对照</span></div>
+    <p class="sec-sub reveal">从命令行回车到最终交付，一条任务依次穿过 9 个阶段；每个阶段都能在仓库里找到对应模块，并在 <span class="mono" style="font-family:var(--mono);color:var(--cyan)">~/.codeagent</span> 下留下可回放的产物。讲这一节等于把②③⑤的模块串成一条线。</p>
+
+    <div class="reveal">
+      <div class="step"><div class="sn">1</div><div><h4>参数解析 / 进入 REPL</h4><p>带任务参数 → 单轮执行（<b>--mode</b> 决定 agent / plan / ask 语义，<b>--parallel</b> 拆并发，<b>--resume</b> 接上次会话）；不带参数 → 交互式 REPL（斜杠命令 + Tab 补全）。</p><span class="file">vs-core/node-runtime/main.ts · 1,297 行</span></div></div>
+      <div class="step"><div class="sn">2</div><div><h4>配置加载（三层优先级）</h4><p>CLI 参数 / 环境变量 &gt; ./config.yaml（项目级）&gt; ~/.codeagent/config.yaml（全局）；<b>active_profile</b> 决定默认模型，可 --profile 随时切换。模型定义独立放在 models.json。</p><span class="file">agentConfig.ts · 529 行</span></div></div>
+      <div class="step"><div class="sn">3</div><div><h4>服务装配（vs-core DI 容器）</h4><p>实例化 FileService(fs) / SearchService(ripgrep) / TerminalService(child_process) / LLM Provider / ToolRegistry / SkillsLoader / MemoryGateway。业务层只面向接口编程，换实现不动业务。</p><span class="file">vs-core/platform + node-runtime 服务实现</span></div></div>
+      <div class="step"><div class="sn">4</div><div><h4>技能与规则装配（任务级重建）</h4><p>扫描 skills / rules 目录：<b>alwaysApply</b> 规则全量注入；技能先做 trigger 评分自动匹配（top ≤ 5），把匹配到的 SKILL.md <b>全文</b> 注入系统提示词 —— 任务不同，上下文不同。</p><span class="file">agentSkills.ts · 426 行</span></div></div>
+      <div class="step"><div class="sn">5</div><div><h4>记忆召回（fail-open）</h4><p>MemoryGateway.recall(task)：并行拉取 L1 原子事实检索 + L2 场景索引 + L3 人格，注入系统提示词。任何一步失败仅 console.warn，绝不阻断任务。</p><span class="file">agentMemory.ts · 639 行</span></div></div>
+      <div class="step"><div class="sn">6</div><div><h4>模型路由选择</h4><p>detectScenario(prompt) → <b>reasoning / vision / fast</b> 三档，映射到对应模型；发生切换时打印 “switching：模型 A → 模型 B”。无路由配置则回退 active_profile。</p><span class="file">agentModelRouter.ts · 96 行</span></div></div>
+      <div class="step"><div class="sn">7</div><div><h4>ReAct 主循环（核心）</h4><p>while 步数 &lt; max：取滑动窗口上下文 → llm.complete(messages, tool schemas) → 有 tool_calls 就执行（写文件前 Checkpoint 快照；异步工具可 /btw cancel；长任务用 poll 指数退避）→ 观察结果回填 → 直到无 tool_calls 输出答案。Ask 只暴露只读工具，Plan 先生成计划。</p><span class="file">agent.ts · 857 行 + agentContext / agentCheckpoint / agentParallel / agentPlanner</span></div></div>
+      <div class="step"><div class="sn">8</div><div><h4>验证与收尾</h4><p>复杂任务（refactor / migrate / 性能等）自动自我验证；简单任务直接跳过（省 ~9s）。收尾三件事：会话自动保存、任务日志落盘、L0 对话记忆捕获。</p><span class="file">agentSessions.ts · 233 行 / agentTaskLog.ts · 244 行</span></div></div>
+      <div class="step"><div class="sn">9</div><div><h4>产物落盘（演示时可现场 cat）</h4><p>见下方清单 —— sessions / tasks 都是 JSON，LLM 每步请求、工具入参与结果、耗时、token 用量（含缓存命中）全可回放。</p><span class="file">~/.codeagent/sessions/ · ~/.codeagent/tasks/</span></div></div>
+    </div>
+
+    <div class="grid2 reveal" style="margin-top:22px">
+      <div class="bm-card">
+        <h4>🗂 落盘清单（演示可 cat 验证）</h4>
+        <div class="kv"><span>~/.codeagent/config.yaml</span><b>全局配置（profile / 超时 / 目录）</b></div>
+        <div class="kv"><span>~/.codeagent/models.json</span><b>模型能力声明 + API key 来源</b></div>
+        <div class="kv"><span>~/.codeagent/mcp.json</span><b>MCP 服务器（dolphin / tdai / …）凭据</b></div>
+        <div class="kv"><span>~/.codeagent/sessions/&lt;id&gt;.json</span><b>会话消息历史，--resume 即恢复</b></div>
+        <div class="kv"><span>~/.codeagent/tasks/&lt;id&gt;.json</span><b>任务日志：steps / llmUsage / cache</b></div>
+      </div>
+      <div class="bm-card">
+        <h4>📄 任务日志节选（示意结构）</h4>
+        <pre class="code">{
+  "task": "refactor the task scheduler…",
+  "mode": "agent", "model": "deepseek-v4-pro",
+  "totalSteps": 4, "toolCalls": 6,
+  "llmUsage": { "promptTokens": 57317,
+    "completionTokens": 435,
+    "cachedTokens": 42291,
+    "cacheHitRate": 0.73 },
+  "steps": [ { "reasoning": "…",
+    "tool": "edit_file",
+    "result": "scheduler.ts +126 −54" } ]
+}</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section id="structure" style="background:var(--bg-2)">
   <div class="wrap">
-    <div class="sec-tag reveal">04 · Repository</div>
+    <div class="sec-tag reveal">05 · Repository</div>
     <h2 class="reveal">仓库<span class="grad">结构</span>与关键模块</h2>
     <p class="sec-sub reveal">约 1 万行 TypeScript，70 个源文件，全部由 esbuild 打进一个 ~121KB 的独立可执行文件。</p>
 
@@ -615,13 +728,13 @@ html.no-js .term-line{opacity:1;transform:none}
 │     │  ├─ <span class="file">agentContext.ts</span>  <span class="cmt"># 上下文窗口 (207)</span>
 │     │  ├─ <span class="file">agentModelRouter.ts</span> <span class="cmt"># 模型路由 (96)</span>
 │     │  └─ <span class="file">agentPlanner / Modes / Checkpoint / Prompts / Tools</span>
-│     └─ <span class="dir">tools/</span>            <span class="cmt"># 13+ 个内置工具</span>
+│     └─ <span class="dir">tools/</span>            <span class="cmt"># 15 个内置工具</span>
 ├─ <span class="dir">vs-core/</span>               <span class="cmt"># VS Code 精简核心</span>
 │  ├─ <span class="dir">base/common/</span>        <span class="cmt"># event · lifecycle · uri</span>
 │  ├─ <span class="dir">platform/</span>           <span class="cmt"># files · search · instantiation</span>
 │  ├─ <span class="dir">workbench/</span>          <span class="cmt"># service 接口定义</span>
 │  └─ <span class="dir">node-runtime/</span>       <span class="cmt"># main.ts (1297) · 服务实现</span>
-├─ <span class="dir">standalone-demo/</span>       <span class="cmt"># 502 行零依赖演示</span>
+├─ <span class="dir">standalone-demo/</span>       <span class="cmt"># 619 行零依赖演示</span>
 ├─ <span class="dir">docs/</span>                 <span class="cmt"># CHANGELOG · design · spec</span>
 ├─ <span class="dir">build/</span>               <span class="cmt"># agent-cli.js (~121KB)</span>
 ├─ <span class="dir">.github/workflows/</span>     <span class="cmt"># ci.yml + release.yml</span>
@@ -650,15 +763,181 @@ html.no-js .term-line{opacity:1;transform:none}
         </table>
       </div>
     </div>
+
+    <div class="grid2 reveal" style="margin-top:22px">
+      <div>
+        <table class="mod-table">
+          <thead><tr><th>工具 / 服务层（行数实测）</th><th>职责</th></tr></thead>
+          <tbody>
+            <tr><td class="f">tools/ · 10 文件 · 1,137 行</td><td class="d">8 核心 + skill_catalog / create_skill / update_skill</td></tr>
+            <tr><td class="f">llmOpenai.ts · 704</td><td class="d">OpenAI / DeepSeek 兼容 + 重试 + 流式 reasoning</td></tr>
+            <tr><td class="f">agentService(browser) · 252</td><td class="d">IAgentService 实现（装配入口）</td></tr>
+            <tr><td class="f">llmAnthropic.ts · 232</td><td class="d">Claude tool_use</td></tr>
+            <tr><td class="f">agentModels.ts · 215</td><td class="d">数据模型 + 配置接口定义</td></tr>
+            <tr><td class="f">llmOllama.ts · 152 / llmProvider.ts · 88</td><td class="d">Ollama 本地 + Provider 工厂</td></tr>
+            <tr><td class="f">contrib/browser · 568</td><td class="d">VS Code 面板 / action / contribution</td></tr>
+            <tr><td class="f">standalone-demo/agent.mjs · 619</td><td class="d">零依赖演示（MOCK_LLM=1 可离线跑）</td></tr>
+            <tr><td class="f">合计 · 70 文件 · 9,987 行 TS</td><td class="d">esbuild → build/agent-cli.js ≈ 121KB</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="bm-card">
+        <h4>📦 构建与分发（可在现场展示）</h4>
+        <div class="kv"><span>npm run build</span><b>esbuild 开发构建（build.mjs）</b></div>
+        <div class="kv"><span>npm run build:release</span><b>--minify 生产构建</b></div>
+        <div class="kv"><span>npm run pack</span><b>build:release + npm pack → .tgz</b></div>
+        <div class="kv"><span>Dockerfile</span><b>node:18-alpine 镜像</b></div>
+        <div class="kv"><span>.github/workflows/</span><b>ci.yml（Node 18/20/22）+ release.yml</b></div>
+        <div class="kv"><span>docs/</span><b>CHANGELOG / design.md / spec.md / 本 deck 源文件</b></div>
+        <p class="bm-note" style="margin-top:12px">运行时依赖为 <b>0</b>：单文件 build/agent-cli.js（~121KB，含全部服务实现），Node ≥ 18 即可直跑 <span class="mono">node build/agent-cli.js &lt;task&gt;</span>。</p>
+      </div>
+    </div>
   </div>
 </section>
 
 <!-- ================= 演进历史 ================= -->
+
+<section id="skills-deep" style="background:var(--bg-2)">
+  <div class="wrap">
+    <div class="sec-tag reveal">06 · Skills</div>
+    <h2 class="reveal">Skills <span class="grad">体系深挖</span> —— 从 SKILL.md 到自动匹配</h2>
+    <div class="sec-meta reveal"><span class="pill opt">深挖 · 可跳过</span><span class="pill">建议 4′</span><span class="pill core">提问率最高的模块</span></div>
+    <p class="sec-sub reveal">CodeAgent 的技能是 <b style="color:#c7d5ea">Cursor 兼容的 SKILL.md</b>：一个技能 = 一个目录里的 SKILL.md（frontmatter + Markdown 正文）。
+    任务启动时按 <b>trigger 关键词 + 名称 + 描述</b> 自动激活并把全文注入上下文 —— 也可以让 Agent 自己维护技能库（meta-skill，skills of skills）。本机 ~/.codeagent/skills 现装 19 个技能目录。</p>
+
+    <div class="grid2 reveal">
+      <div class="bm-card">
+        <h4>📜 SKILL.md 契约（真实示例 · 取自已安装的 commit 技能）</h4>
+        <pre class="code">---
+name: commit
+description: 按服务端要求生成 commit 信息并执行提交流程…
+trigger:
+  - commit
+  - 提交
+  - push
+  - gerrit
+  - git
+  - gitee
+  - jira
+  - topsop
+  - 静态检查
+---
+# 代码提交流程
+当用户要在本仓提交或推送代码时，按本skill执行。</pre>
+        <p class="bm-note" style="margin-top:10px">契约字段：<b>name</b>（kebab-case）· <b>description</b>（what + when）· 可选 <b>whenToUse</b> · <b>trigger</b> 关键词列表 · <b>disable-model-invocation</b> · <b>user-invocable</b>；正文以 <span class="mono"># </span>开头。</p>
+      </div>
+      <div class="bm-card">
+        <h4>🧩 自动匹配算法（agentSkills.ts · 426 行）</h4>
+        <div class="kv"><span>trigger 精确命中</span><b>+10 分 / 个（最强信号）</b></div>
+        <div class="kv"><span>技能名出现在任务中</span><b>+15 分</b></div>
+        <div class="kv"><span>描述与任务词重叠</span><b>+2 分 / 词</b></div>
+        <div class="kv"><span>部分包含 bonus</span><b>+1 分（如“提交”↔“提交代码”）</b></div>
+        <div class="kv"><span>排序取 top ≤ 5</span><b>全文注入，防上下文膨胀</b></div>
+        <p class="bm-note" style="margin-top:10px">任务启动时预载所有技能“头部”（名称 + 描述 + triggers）供模型自匹配；命中者（top ≤ 5）把 SKILL.md <b>全文</b>注入系统提示词，未命中者可运行时 <span class="mono">code-agent --use-skill &lt;name&gt;</span> 显式激活。命令行 <span class="mono">code-agent --skills</span> 可查看当前装了什么。</p>
+      </div>
+    </div>
+
+    <div class="grid2 reveal">
+      <div class="bm-card">
+        <h4>📐 Rules：alwaysApply 自动注入</h4>
+        <p class="bm-note">.mdc 规则文件加载自 rules 目录；<b>alwaysApply: true</b> 的规则注入每一次对话（本 deck 的排版、Gerrit 查询、MCP 访问等约束正是这么来的）。</p>
+        <div style="overflow-x:auto;margin-top:8px">
+        <table class="mod-table">
+          <thead><tr><th>本机 ~/.codeagent/rules 示例</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td class="f">html-frontend-dev.mdc</td><td class="d">HTML 页面必须走 frontend-dev 流程</td></tr>
+            <tr><td class="f">gerrit-query.mdc</td><td class="d">Gerrit 查询优先 MCP 工具</td></tr>
+            <tr><td class="f">mcp-access-policy.mdc</td><td class="d">外部服务访问策略</td></tr>
+            <tr><td class="f">post-change-workflow.mdc</td><td class="d">改完代码自动重打包 / 容器 / 推送</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+      <div class="bm-card">
+        <h4>🛠 meta-skill —— 让 Agent 自己维护技能库</h4>
+        <div class="kv"><span>skill_catalog</span><b>建库前先 recall → COVERED / PARTIAL / UNRELATED</b></div>
+        <div class="kv"><span>create_skill</span><b>校验 canonical 契约后发布到 skillsDirs[0]</b></div>
+        <div class="kv"><span>update_skill</span><b>合并字段并重渲染，不覆盖已有技能</b></div>
+        <div class="kv"><span>避免重复</span><b>相似能力优先扩展已有技能</b></div>
+        <p class="bm-note" style="margin-top:10px">实现：agentSkillFactory.ts（455 行）+ tools/skillTools.ts（271 行）；prompt 端由 buildMetaSkillPromptSection 注入“技能工匠”身份段，代码源自 dsh-run2skill 移植。</p>
+      </div>
+    </div>
+  </div>
+</section>
+<section id="memorycfg">
+  <div class="wrap">
+    <div class="sec-tag reveal">07 · Memory · Router · Config</div>
+    <h2 class="reveal">记忆 · <span class="grad">模型路由</span> · 配置三件套</h2>
+    <div class="sec-meta reveal"><span class="pill opt">深挖 · 可跳过</span><span class="pill">建议 4′</span><span class="pill demo">配合 ~/.codeagent 目录现场讲解</span></div>
+    <p class="sec-sub reveal">这三个能力让 CodeAgent 从“单机单会话的脚本”变成“团队共享的 Agent 基础设施”：记忆跨机器沉淀、模型按任务路由、一切行为可配置。</p>
+
+    <div class="grid3 reveal">
+      <div class="bm-card">
+        <h4>🧠 共享记忆（agentMemory.ts · 639 行）</h4>
+        <div class="kv"><span>L0 原始对话</span><b>每次任务结束自动 capture</b></div>
+        <div class="kv"><span>L1 原子事实</span><b>偏好 / 规则 / 决策，可检索</b></div>
+        <div class="kv"><span>L2 场景文件</span><b>长上下文工作场景索引</b></div>
+        <div class="kv"><span>L3 人格</span><b>跨机器一致的行为画像</b></div>
+        <p class="bm-note" style="margin-top:10px">recall：任务开始前并行拉 L1+L2+L3 注入系统提示词；capture：结束后整段对话写 L0，由 hub 异步蒸馏 L0→L3。<b>fail-open</b>：服务不可用只告警不阻断；按 team/agent/user 隔离；基准测试用 --memory off 保证测量独立。</p>
+      </div>
+      <div class="bm-card">
+        <h4>🔄 场景化模型路由（agentModelRouter.ts）</h4>
+        <div class="kv"><span>reasoning</span><b>重构 / 迁移 / 架构 / 调试 → 强推理模型</b></div>
+        <div class="kv"><span>vision</span><b>截图 / 图片 / OCR → 视觉模型</b></div>
+        <div class="kv"><span>fast</span><b>其余简单任务 → 快模型（省成本）</b></div>
+        <div class="kv"><span>切换时展示</span><b>“switching：A → B”，成本透明</b></div>
+        <p class="bm-note" style="margin-top:10px">路由 fallback：scenario 模型 → default → active_profile。注意关键词用 <b>debugging</b> 而非 debug，避免把 config 里的 <span class="mono">debug: false</span> 误判成调试任务（这曾是 9.6s → 6.7s 的一次真实优化）。</p>
+      </div>
+      <div class="bm-card">
+        <h4>⚙️ 配置全景（config.template.yaml）</h4>
+        <div class="kv"><span>active_profile</span><b>默认模型；profiles 覆盖采样参数</b></div>
+        <div class="kv"><span>model_routing</span><b>scenarios → 模型映射开关</b></div>
+        <div class="kv"><span>agent</span><b>max_steps / 上下文 / 超时 / temperature</b></div>
+        <div class="kv"><span>skills / rules</span><b>扫描目录列表</b></div>
+        <div class="kv"><span>mcp_servers</span><b>stdio / streamableHttp 扩展工具</b></div>
+        <div class="kv"><span>memory</span><b>tdai_agent_mem 端点与身份</b></div>
+        <p class="bm-note" style="margin-top:10px">models.json 里每个模型声明 <b>supportsToolCall / Images / Reasoning、thinking.type、maxTokens、maxInputTokens</b> —— 路由与 max_tokens 钳制都依赖这些能力位。</p>
+      </div>
+    </div>
+
+    <div class="grid2 reveal" style="margin-top:18px">
+      <div class="bm-card">
+        <h4>📄 记忆配置示例（脱敏 · 两种来源任一即可）</h4>
+        <pre class="code"># ~/.codeagent/mcp.json —— mcpServers.tdai_agent_mem
+"tdai_agent_mem": {
+  "type": "streamableHttp",
+  "url": "http://10.9.114.25:8420",
+  "headers": {
+    "Authorization": "Bearer sk-mem-xxx",
+    "X-Tdai-Service-Id": "default"
+  },
+  "username": "zrh",
+  "teamId": "team-xxx",
+  "agentId": "agt-xxx",
+  "userId": "usr-xxx"
+}</pre>
+      </div>
+      <div class="bm-card">
+        <h4>📄 路由配置示例（config.yaml）</h4>
+        <pre class="code">model_routing:
+  enabled: true
+  default: deepseek-v4-flash        # 未命中场景的兜底
+  scenarios:
+    reasoning: deepseek-v4-pro      # 重构/迁移/架构/调试
+    vision: deepseek-v4-flash-vision-exp
+    fast: deepseek-v4-flash         # 简单任务走快模型
+
+# 固定采样，让基准可复现：
+# agent-cli --temperature 0 --top-k 1 --memory off "task"</pre>
+      </div>
+    </div>
+  </div>
+</section>
 <section id="timeline">
   <div class="wrap">
-    <div class="sec-tag reveal">05 · Evolution</div>
+    <div class="sec-tag reveal">08 · Evolution</div>
     <h2 class="reveal">从 0 到 <span class="grad">0.3.33</span> 的演进</h2>
-    <p class="sec-sub reveal">2026-04-24 首个提交至今，82 次提交、11 个阶段。每一次能力升级都源于真实使用中的痛点 —— 兼容性、稳定性、性能、可观测性，最后是可复现的基准测试。</p>
+    <p class="sec-sub reveal">2026-04-24 首个提交至今，84 次提交、11 个阶段。每一次能力升级都源于真实使用中的痛点 —— 兼容性、稳定性、性能、可观测性，最后是可复现的基准测试。</p>
 
     <div class="timeline">
       <div class="tl-item reveal">
@@ -749,7 +1028,7 @@ html.no-js .term-line{opacity:1;transform:none}
 <!-- ================= 基准测试 ================= -->
 <section id="benchmark" style="background:var(--bg-2)">
   <div class="wrap">
-    <div class="sec-tag reveal">06 · Benchmark · agent_bm</div>
+    <div class="sec-tag reveal">09 · Benchmark · agent_bm</div>
     <h2 class="reveal">用<span class="grad">基准测试</span>驱动演进</h2>
     <p class="sec-sub reveal">2026-08 起，基准测试从 code-agent 拆分为独立仓库 <b style="color:#c7d5ea">agent_bm</b>：
     每天凌晨 02:00（北京时间）自动对<b style="color:#c7d5ea">所有未测 commit</b> 跑同一套任务，并把 code-agent 与其它 4 个 agent 放进同一张对比表，
@@ -764,7 +1043,7 @@ html.no-js .term-line{opacity:1;transform:none}
           <li><b>003</b> 编辑文件</li>
           <li><b>004</b> 列出目录结构</li>
           <li><b>005</b> 执行终端命令</li>
-        </ul>
+        </ul><p class="bm-note" style="margin-top:8px">每个任务 maxDurationSec=60，setup 预置最小工程目录；verify 脚本断言：001 → hello.txt 存在且包含 Hello, CodeAgent!；003 → debug: true 且不含 debug: false；005 → 用 wc -l 统计 .ts 行数并写文件。</p>
         <p class="bm-note">verify 阶段由脚本校验（fileExists / fileContains 等），非 LLM 自评，杜绝"自说自话"。</p>
       </div>
       <div class="bm-card reveal d1">
@@ -780,19 +1059,19 @@ html.no-js .term-line{opacity:1;transform:none}
       </div>
     </div>
 
-    <!-- 跨 agent 对比 -->
+        <!-- 跨 agent 对比（快照 2026-09-03 02:00 北京时间每日基准） -->
     <div class="chart reveal">
       <h3>跨 Agent 对比（同一模型 · 同一任务集）</h3>
-      <div class="sub">avg duration over 5 tasks · lower is better · 全部 100% 通过</div>
-      <div class="bar-row bar-best"><div class="name"><b>code-agent</b><small>v0.3.33 · 基线</small></div><div class="bar-track"><div class="bar-fill" data-w="22"><span class="v">6.0s</span></div></div><div class="val">6.0s</div></div>
-      <div class="bar-row bar-2"><div class="name"><b>deepseek-harness</b><small>v0.3.0 · wrapper</small></div><div class="bar-track"><div class="bar-fill" data-w="24"><span class="v">6.6s</span></div></div><div class="val">6.6s</div></div>
-      <div class="bar-row bar-3"><div class="name"><b>hermes-agent</b><small>v0.20.6</small></div><div class="bar-track"><div class="bar-fill" data-w="50"><span class="v">13.5s</span></div></div><div class="val">13.5s</div></div>
-      <div class="bar-row bar-4"><div class="name"><b>Claude Code</b><small>v2.1.205</small></div><div class="bar-track"><div class="bar-fill" data-w="56"><span class="v">15.2s</span></div></div><div class="val">15.2s</div></div>
-      <div class="bar-row bar-5"><div class="name"><b>OpenAI Codex</b><small>v0.151.0</small></div><div class="bar-track"><div class="bar-fill" data-w="77"><span class="v">20.8s</span></div></div><div class="val">20.8s</div></div>
-      <p class="bm-note">code-agent 在相同模型与端点下比 Claude Code 快 60%、比 OpenAI Codex 快 71% —— 更少步骤（avg 3.6 vs 8+）、更低 token 消耗。⚠️ 各 agent 内部策略不同（重试/校验次数等），该对比反映的是"默认配置下的端到端耗时"。</p>
+      <div class="sub">avg duration over 5 tasks · lower is better · 全部 100% 通过 · 快照 2026-09-03 02:00</div>
+      <div class="bar-row bar-best"><div class="name"><b>code-agent</b><small>v0.3.33 · 66fdc94</small></div><div class="bar-track"><div class="bar-fill" data-w="22"><span class="v">6.0s</span></div></div><div class="val">6.0s</div></div>
+      <div class="bar-row bar-2"><div class="name"><b>deepseek-harness</b><small>v0.3.0 · 极简 wrapper</small></div><div class="bar-track"><div class="bar-fill" data-w="16"><span class="v">4.4s</span></div></div><div class="val">4.4s</div></div>
+      <div class="bar-row bar-3"><div class="name"><b>hermes-agent</b><small>v0.20.6</small></div><div class="bar-track"><div class="bar-fill" data-w="43"><span class="v">11.6s</span></div></div><div class="val">11.6s</div></div>
+      <div class="bar-row bar-4"><div class="name"><b>Claude Code</b><small>v2.1.205</small></div><div class="bar-track"><div class="bar-fill" data-w="51"><span class="v">13.8s</span></div></div><div class="val">13.8s</div></div>
+      <div class="bar-row bar-5"><div class="name"><b>OpenAI Codex</b><small>codex-cli 0.151.0</small></div><div class="bar-track"><div class="bar-fill" data-w="72"><span class="v">19.3s</span></div></div><div class="val">19.3s</div></div>
+      <p class="bm-note">code-agent 在相同模型（deepseek-v4-pro · api.enflame.cn）与相同 5 任务下，比 Claude Code 快约 57%、比 OpenAI Codex 快约 69%、比 hermes-agent 快约 48% —— 更少步骤（avg 3.6 vs 8+）。⚠️ 口径：各 agent 内部策略不同（重试 / 自校验次数等），本表为“默认配置下的端到端耗时”；deepseek-harness 是每任务仅 1~2 次 LLM 调用的极简 wrapper，只作参照。数值每日 02:00 刷新，演示前请以在线报告为准。</p>
     </div>
 
-    <!-- 趋势 + token -->
+<!-- 趋势 + token -->
     <div class="trend">
       <div class="t-card reveal">
         <h4>📉 code-agent 耗时趋势（基准历史）</h4>
@@ -812,16 +1091,128 @@ html.no-js .term-line{opacity:1;transform:none}
       </div>
     </div>
 
-    <p class="arch-note reveal" style="margin-top:22px">📊 完整趋势报告（含逐 commit 明细与跨 agent 对比）在线查看：
+        <div class="grid2 reveal" style="margin-top:6px">
+      <div class="bm-card">
+        <h4>📐 指标口径（报告里都按 commit 画趋势）</h4>
+        <div class="kv"><span>successRate · 成功率</span><b>按任务文件脚本校验，越高越好</b></div>
+        <div class="kv"><span>avgDurationSec · 平均耗时</span><b>越低越好（墙钟，端到端）</b></div>
+        <div class="kv"><span>avgSteps / avgToolCalls</span><b>越低越好（code-agent 内部日志）</b></div>
+        <div class="kv"><span>toolExecSuccessRate</span><b>工具执行成功率，越高越好</b></div>
+        <div class="kv"><span>avgTotalTokens</span><b>输入+输出 tokens，越低越好</b></div>
+        <div class="kv"><span>cacheHitRate · 缓存命中</span><b>cache read / 输入 tokens，越高越省</b></div>
+        <p class="bm-note" style="margin-top:10px">token 观测点（v2）：跨 provider 归一化 —— OpenAI/DeepSeek usage.*、Anthropic input/output/cache_*、Ollama prompt_eval/eval_count。报告里每次 LLM 调用还会记录 cacheCreationTokens。</p>
+      </div>
+      <div class="bm-card">
+        <h4>🕑 每日 02:00 流水线（agent_bm · scripts/）</h4>
+        <div class="kv"><span>1 · agents.json</span><b>读 repo / 分支 / 配额 / agent 列表</b></div>
+        <div class="kv"><span>2 · 筛未测 commit</span><b>clean-main 上无结果者，≤5 个/天</b></div>
+        <div class="kv"><span>3 · worktree 构建</span><b>checkout → npm ci + build → 跑 suite</b></div>
+        <div class="kv"><span>4 · 跑其它 agent</span><b>codex / claude / hermes / dsh 同一套</b></div>
+        <div class="kv"><span>5 · gen_site.mjs</span><b>趋势 + 对比表 + 成功矩阵 + suites×agents</b></div>
+        <div class="kv"><span>6 · 提交并发布</span><b>git push + publish_site.py 更新稳定 URL</b></div>
+        <p class="bm-note" style="margin-top:10px">cron 由 install_cron.sh 一键部署（UTC 18:00 = 北京 02:00），日志 logs/daily_bm.log；code-agent 每个任务跑 3 次取中位数，其它 agent AGENT_RUNS=1。</p>
+      </div>
+    </div>
+
+    <div class="grid2 reveal" style="margin-top:18px">
+      <div class="bm-card">
+        <h4>⌨️ 手动跑一次基准（现场可选演示）</h4>
+        <pre class="code"><span class="c"># 1) 构建被测代码</span>
+<span class="k">cd</span> ~/work/code/code-agent && <span class="k">npm</span> run build
+
+<span class="c"># 2) 对某个 commit 跑 5 任务（固定采样 · 3 次取中位）</span>
+BENCHMARK_TEMPERATURE=0 BENCHMARK_TOP_K=1 BENCHMARK_MEMORY=0 \
+  <span class="k">node</span> ~/work/code/agent_bm/benchmark.mjs --run \
+    --repo ~/work/code/code-agent --commit &lt;sha&gt; \
+    --out ~/work/code/agent_bm/results/&lt;sha&gt;.json
+
+<span class="c"># 3) 其它 agent 同一套（只更新 latest）</span>
+<span class="k">node</span> ~/work/code/agent_bm/scripts/run_agents.mjs --agent codex
+
+<span class="c"># 4) 重新生成报告并发布（URL 不变）</span>
+<span class="k">node</span> ~/work/code/agent_bm/scripts/gen_site.mjs
+<span class="k">python3</span> ~/work/code/agent_bm/scripts/publish_site.py</pre>
+      </div>
+      <div class="bm-card">
+        <h4>📁 结果文件长什么样（results/66fdc94….json 节选）</h4>
+        <pre class="code">{
+  "commit": "66fdc94bf684…",
+  "successRate": 1,            // 5/5
+  "avgDurationSec": 6.0,
+  "avgSteps": 3.6,
+  "avgToolCalls": 2.8,
+  "toolExecSuccessRate": 1,
+  "avgPromptTokens": 57684,
+  "avgCompletionTokens": 435,
+  "avgTotalTokens": 58085,
+  "cacheHitRate": 0.733,
+  "perTask": [ { "id": "001",
+      "durationMs": 2556,
+      "steps": 2, "toolCalls": 1, … } ]
+}</pre>
+        <p class="bm-note" style="margin-top:10px">38 条 history（首个 08-28 → 最近 09-03 凌晨，北京时间）；code-agent 平均耗时从 ~26.6s 峰值降到 5.7–9.6s 区间 —— 两次关键优化：v0.3.30 简单任务跳过自校验（18.6→9.6s）、v0.3.31 修复 debug 误路由（9.6→6.7s）。</p>
+      </div>
+    </div>
+
+<p class="arch-note reveal" style="margin-top:22px">📊 完整趋势报告（含逐 commit 明细与跨 agent 对比）在线查看：
       <a href="http://dolphin.enflame.cn/artifact-service/a/gi04gtwrtz" target="_blank" rel="noopener">dolphin.enflame.cn/artifact-service/a/gi04gtwrtz</a>
     </p>
   </div>
+</section><section id="demoscript">
+  <div class="wrap">
+    <div class="sec-tag reveal">10 · Demo Script</div>
+    <h2 class="reveal">现场演示<span class="grad">脚本</span> —— 照着讲就能撑满 60 分钟</h2>
+    <div class="sec-meta reveal"><span class="pill core">核心 · 必讲</span><span class="pill">建议 10′</span><span class="pill warn">开讲前先读这节</span></div>
+    <p class="sec-sub reveal">下面每个 demo 都标注了时长、命令、讲解点与兜底方案。<b>节奏自检点</b>：走到第 20 分钟还没讲完架构 → 直接从 ⑧ 演进历史接管；第 35 分钟还没进 Benchmark → 砍掉 demo D6–D8。
+    全场始终保留“随时可讲”的静态 terminal 回放（页首 hero），即使网络全挂也能撑住。</p>
+
+    <div class="reveal">
+      <table class="mod-table" style="margin-bottom:6px">
+        <thead><tr><th>#</th><th>Live Demo（全部可复现）</th><th>时长</th><th>讲什么 / 兜底</th></tr></thead>
+        <tbody>
+          <tr><td class="f">D1</td><td class="f">code-agent "create hello.txt…"</td><td class="demo-time">3′</td><td class="d">单轮任务：流式 reasoning → edit_file 工具调用 → done 汇总（steps / tool calls / tokens）。兜底：<span class="mono">node build/agent-cli.js …</span>（免安装单文件）。</td></tr>
+          <tr><td class="f">D2</td><td class="f">--mode ask（只读问答）</td><td class="demo-time">2′</td><td class="d">对 code-agent 仓库提问，只读工具生效、零副作用 —— 适合现场问“这仓库怎么分层”。</td></tr>
+          <tr><td class="f">D3</td><td class="f">--mode plan</td><td class="demo-time">2′</td><td class="d">“design a REST API”：先生成计划再自动执行（plan → auto-exec）。</td></tr>
+          <tr><td class="f">D4</td><td class="f">--parallel "t1" "t2"</td><td class="demo-time">2′</td><td class="d">两个任务并发、独立上下文互不污染（agentParallel.ts）。</td></tr>
+          <tr><td class="f">D5</td><td class="f">REPL 交互</td><td class="demo-time">3′</td><td class="d">无参进入 REPL：Tab 补全、/sessions、/resume、/btw 中途纠偏、/btw cancel 打断长命令、优雅 Ctrl+C（SIGINT 兜底）。</td></tr>
+          <tr><td class="f">D6</td><td class="f">可观测性</td><td class="demo-time">3′</td><td class="d">/tasks、/task &lt;id&gt; 看每步 messages / 工具入参出参 / tokenUsage（含缓存命中率）；cat ~/.codeagent/tasks/&lt;id&gt;.json。</td></tr>
+          <tr><td class="f">D7</td><td class="f">Skills 自动匹配</td><td class="demo-time">4′</td><td class="d">code-agent --skills 列目录；提一个“提交代码 / 查 Gerrit”类任务，观察系统提示词里被激活的 SKILL.md 全文；再打开 commit/SKILL.md 讲契约。</td></tr>
+          <tr><td class="f">D8</td><td class="f">共享记忆</td><td class="demo-time">3′</td><td class="d">本机跑任务 → 新会话问“还记得我上次的项目吗”，展示注入的 L3 人格 / L2 场景段；环境不允许就只讲 fail-open 与隔离设计。</td></tr>
+          <tr><td class="f">D9</td><td class="f">基准报告现场打开</td><td class="demo-time">3′</td><td class="d">打开在线报告滑到最新趋势与跨 agent 对比；若剩 ≥5 分钟且网络好，可手动跑一次 benchmark.mjs（见 ⑨）。</td></tr>
+          <tr><td class="f">D10</td><td class="f">收尾三行命令</td><td class="demo-time">2′</td><td class="d">快速开始三行 + 指向 FAQ —— 让听众带走“今晚就能装”的动作。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid2 reveal" style="margin-top:18px">
+      <div class="bm-card">
+        <h4>⚠️ 兜底预案（翻车也别慌）</h4>
+        <div class="kv"><span>模型 / 网络不可用</span><b>切 profile 或本地 Ollama；或 MOCK_LLM=1 node standalone-demo/agent.mjs（619 行零依赖，纯本地）</b></div>
+        <div class="kv"><span>API 4xx / 限流</span><b>改讲策略：429/5xx 自动重试 + 4xx 不重试、指数退避（讲不跑）</b></div>
+        <div class="kv"><span>任务跑太久</span><b>现场演示 /btw cancel 打断，或讲 poll 工具设计</b></div>
+        <div class="kv"><span>现场提问冷场</span><b>FAQ ⑫ 备了 10 个高频问题</b></div>
+      </div>
+      <div class="bm-card">
+        <h4>🎤 每节一句话“提词”（Elevator pitch）</h4>
+        <div class="kv"><span>① 概览</span><b>一套可自我进化的编码代理框架，不是一次性脚本</b></div>
+        <div class="kv"><span>② 能力</span><b>九个能力 = 九个可插拔模块，各自独立演进</b></div>
+        <div class="kv"><span>③ 架构</span><b>借 VS Code 的分层：换任何一层都不影响其它层</b></div>
+        <div class="kv"><span>④ 执行链路</span><b>一条任务从回车到交付，9 步全可回放</b></div>
+        <div class="kv"><span>⑤ 仓库</span><b>1 万行 TS 打进 121KB 单文件，零依赖</b></div>
+        <div class="kv"><span>⑥ Skills</span><b>技能即 SKILL.md，自动匹配、Agent 自己也能写</b></div>
+        <div class="kv"><span>⑦ 记忆·路由·配置</span><b>跨机记忆、按场景切模型、一切可配</b></div>
+        <div class="kv"><span>⑧ 演进</span><b>84 次提交里每一次升级都源于真实痛点</b></div>
+        <div class="kv"><span>⑨ 基准</span><b>每天凌晨无人值守地回答“这次改动变快还是变慢”</b></div>
+      </div>
+    </div>
+  </div>
 </section>
+
 
 <!-- ================= 快速开始 ================= -->
 <section id="quickstart">
   <div class="wrap">
-    <div class="sec-tag reveal">07 · Quick Start</div>
+    <div class="sec-tag reveal">11 · Quick Start</div>
     <h2 class="reveal">60 秒<span class="grad">上手</span></h2>
     <p class="sec-sub reveal">源码构建，零运行时依赖 —— clone 代码后 3 步即可全局使用（最新代码以内部 Git 仓库为准）。</p>
 
@@ -861,6 +1252,115 @@ html.no-js .term-line{opacity:1;transform:none}
         </div>
       </div>
     </div>
+
+      <div class="grid2 reveal" style="margin-top:24px">
+        <div class="bm-card">
+          <h4>✅ 校验安装 &amp; 检查技能</h4>
+          <pre class="code"><span class="k">code-agent</span> --version     <span class="c"># v0.3.33</span>
+<span class="k">code-agent</span> --profiles   <span class="c"># 列出配置 profile</span>
+<span class="k">code-agent</span> --skills     <span class="c"># 列出已加载技能（19 个）</span>
+<span class="k">code-agent</span> --sessions   <span class="c"># 会话列表，--resume &lt;id&gt; 恢复</span></pre>
+        </div>
+        <div class="bm-card">
+          <h4>📦 其它分发形态（一句话带过）</h4>
+          <div class="kv"><span>Docker</span><b>docker build -t code-agent . &amp;&amp; docker run --rm code-agent code-agent --help # node:18-alpine</b></div>
+          <div class="kv"><span>npm pack</span><b>npm run pack → code-agent-0.3.33.tgz，npm install -g 全局装</b></div>
+          <div class="kv"><span>单文件直跑</span><b>node build/agent-cli.js "task"（无需安装）</b></div>
+        </div>
+      </div>
+  </div>
+</section>
+
+
+<section id="faq" style="background:var(--bg-2)">
+  <div class="wrap">
+    <div class="sec-tag reveal">12 · FAQ / 附录</div>
+    <h2 class="reveal">高频问题与<span class="grad">速查表</span></h2>
+    <div class="sec-meta reveal"><span class="pill opt">深挖 · 可跳过</span><span class="pill">建议 0–5′，冷场与答疑专用</span></div>
+
+    <div class="grid2 reveal">
+      <div class="bm-card q">
+        <h4>Q1 和 Cursor / Claude Code / Codex 有什么区别？</h4>
+        <p>定位不同：CodeAgent 是团队内部、可插拔的 Agent 基础设施 —— VS Code 分层、技能/记忆/路由都是独立模块。基准上同模型同端点默认配置更快（快照口径见 ⑨），但各框架内部策略不同，宜以“默认配置端到端耗时”口径理解。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q2 怎么加一个新模型 / Provider？</h4>
+        <p>models.json 加一个条目（id / url / apiKey / 能力声明），config.yaml 改 active_profile 即可 —— 兼容任意 OpenAI 格式端点（DeepSeek 等）与 Anthropic / Ollama。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q3 怎么给 CodeAgent 加一个技能？</h4>
+        <p>在 skills 目录建 技能名/SKILL.md，frontmatter 写 name/description/trigger，正文写流程 —— 下一次任务自动命中；或直接让 Agent 用 meta-skill（skill_catalog → create_skill）自己写。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q4 API key 安全吗？会不会入库？</h4>
+        <p>models.json / mcp.json 只落在 ~/.codeagent（.gitignore 外）；基准 agent_bm 的 agents.json 不落 key，运行时从 models.json 解析或 BM_API_KEY 注入；记忆与 MCP 凭据走内部 Bearer token。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q5 为什么基准里 code-agent 比别的快？</h4>
+        <p>更少步骤（avg 3.6 vs 8+）与更省 token 的提示词策略：简单任务跳过自校验、工具 schema 精简、上下文压缩保守预算。注意这是默认配置口径。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q6 断网 / 内网隔离环境能用吗？</h4>
+        <p>能。单文件 agent-cli.js 零依赖直跑；模型可切 Ollama 本地；standalone-demo（MOCK_LLM=1）甚至不需要真模型，用于演示链路。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q7 上下文太长 / 溢出怎么办？</h4>
+        <p>滑动窗口 + 摘要压缩（agentContext.ts）、max_tokens 按模型上下文钳制、保守 token 预算（agentConfig agent.max_context_tokens 默认 200000）；小模型也有模型相对的溢出护栏。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q8 什么时候用 agent / ask / plan / parallel？</h4>
+        <p>agent 全自主；ask 只读问答（讲代码、查资料）；plan 先规划再执行；parallel 多个相互独立的任务并发。演示脚本 ⑩ 里每个模式都有对应 demo。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q9 演示中途断了怎么办？</h4>
+        <p>/resume 恢复最近会话；/tasks + /task &lt;id&gt; 看上次执行全记录；会话与任务日志都是磁盘 JSON，跨重启可回放。</p>
+      </div>
+      <div class="bm-card q">
+        <h4>Q10 下一步打算做什么？（规划中 · 非承诺）</h4>
+        <p>suite 扩展复杂工程任务并统一跨 agent 的 skills/rules 口径；场景记忆在更多工作流落地；更细的 token/成本观测；VS Code 面板与远程场景。演进路线最终以 commit 为准。</p>
+      </div>
+    </div>
+
+    <div class="grid2 reveal" style="margin-top:18px">
+      <div>
+        <h4 style="font-size:14.5px;font-weight:700;margin:0 0 10px">⌨️ CLI 速查</h4>
+        <div style="overflow-x:auto">
+        <table class="mod-table">
+          <tbody>
+            <tr><td class="f">--mode &lt;agent|plan|ask&gt;</td><td class="d">执行模式（默认 agent）</td></tr>
+            <tr><td class="f">--parallel "t1" "t2"</td><td class="d">并行任务</td></tr>
+            <tr><td class="f">--profile &lt;name&gt; / --profiles</td><td class="d">切换 / 列出 profile</td></tr>
+            <tr><td class="f">--skills / --use-skill &lt;n&gt;</td><td class="d">列技能 / 显式启用技能</td></tr>
+            <tr><td class="f">--session &lt;id&gt; / --resume</td><td class="d">恢复指定 / 最近会话</td></tr>
+            <tr><td class="f">--sessions / --delete-session</td><td class="d">会话管理</td></tr>
+            <tr><td class="f">--tasks / --task &lt;id&gt;</td><td class="d">任务执行日志</td></tr>
+            <tr><td class="f">--temperature / --top-k</td><td class="d">采样覆盖（0 + top-k=1 可复现）</td></tr>
+            <tr><td class="f">--memory &lt;on|off&gt;</td><td class="d">共享记忆开关</td></tr>
+            <tr><td class="f">--stream / --version / --help</td><td class="d">流式输出 / 版本 / 帮助</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+      <div>
+        <h4 style="font-size:14.5px;font-weight:700;margin:0 0 10px">💬 REPL 斜杠命令 + 存储路径</h4>
+        <div style="overflow-x:auto">
+        <table class="mod-table">
+          <tbody>
+            <tr><td class="f">/btw &lt;hint&gt; · /btw cancel</td><td class="d">中途纠偏 / 打断长工具</td></tr>
+            <tr><td class="f">/save · /sessions · /resume · /new</td><td class="d">会话管理（Tab 补全）</td></tr>
+            <tr><td class="f">/mode · /profile · /use-skill</td><td class="d">切换模式 / 配置 / 技能</td></tr>
+            <tr><td class="f">/tasks · /task &lt;id&gt; · /continue</td><td class="d">执行日志 / 继续</td></tr>
+            <tr><td class="f">~/.codeagent/config.yaml</td><td class="d">全局配置</td></tr>
+            <tr><td class="f">~/.codeagent/models.json</td><td class="d">模型定义（CodeBuddy 兼容）</td></tr>
+            <tr><td class="f">~/.codeagent/mcp.json</td><td class="d">MCP / 记忆服务凭据</td></tr>
+            <tr><td class="f">~/.codeagent/sessions/</td><td class="d">会话 JSON</td></tr>
+            <tr><td class="f">~/.codeagent/tasks/</td><td class="d">任务日志 JSON</td></tr>
+          </tbody>
+        </table>
+        </div>
+        <p class="bm-note" style="margin-top:10px">数据口径：code-agent v0.3.33 · 84 commits（2026-04-24 → 09-02）；agent_bm history 38 条 · 快照 2026-09-03 02:00（每日 02:00 自动刷新）。本页为自包含 HTML，无外部资源。</p>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -871,10 +1371,12 @@ html.no-js .term-line{opacity:1;transform:none}
     <div class="f-links">
       <a href="http://git.enflame.cn/ronghua.zhou/code-agent" target="_blank" rel="noopener">内部 Git 仓库</a>
       <a href="http://dolphin.enflame.cn/artifact-service/a/gi04gtwrtz" target="_blank" rel="noopener">Benchmark Report</a>
+      <a href="#demoscript">演示脚本</a>
+      <a href="#faq">FAQ</a>
       <a href="#timeline">演进历史</a>
       <a href="#architecture">架构</a>
     </div>
-    <p class="f-note">本页为自包含 HTML 演示文稿，无任何外部资源。数据来源：code-agent 仓库（v0.3.33 · 82 commits）与 agent_bm 基准仓库（results/history.json · 2026-09-01）。MIT License。</p>
+    <p class="f-note">本页为自包含 HTML 演示文稿，无任何外部资源。数据来源：code-agent 仓库（v0.3.33 · 84 commits）与 agent_bm 基准仓库（results/history.json · 38 条 · 快照 2026-09-03 02:00，每日自动刷新）。</p>
   </div>
 </footer>
 
