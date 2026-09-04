@@ -30,6 +30,7 @@
   "scripts": {
     "build": "node build.mjs",
     "build:release": "node build.mjs --minify",
+    "build:portable": "bash scripts/build-portable.sh",
     "typecheck": "tsc --noEmit",
     "start": "node build/agent-cli.js",
     "start:mock": "MOCK_LLM=1 node standalone-demo/agent.mjs",

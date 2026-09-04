@@ -55,6 +55,37 @@ node agent-cli.js --help
 node agent-cli.js "your task"
 ```
 
+### 方法五：单文件二进制（自带 Node，离线拷贝即用）
+
+目标机器**无法访问外网 / 不想装 Node.js / 不想跑 npm install** 时，用本方法。
+产物是一个自包含单文件（内嵌 Node.js 运行时 + 编译后的 agent-cli.js），
+拷过去 `chmod +x` 后直接执行即可。
+
+```bash
+# 1. 构建（需要一台能跑 npm 的机器，产物 ~29MB）
+npm run build:portable
+#    或指定内嵌的 node： NODE_SRC_BIN=/path/to/node bash scripts/build-portable.sh
+
+# 2. 拷贝产物到目标 Linux 机器
+scp build/code-agent-portable-linux-x64 user@target:~/
+
+# 3. 目标机器上直接执行（无需 node / npm / 外网）
+chmod +x code-agent-portable-linux-x64
+./code-agent-portable-linux-x64 --help
+./code-agent-portable-linux-x64 "your task"
+```
+
+说明：
+
+- 产物依赖目标机自带的 `bash` / `tar` / `gzip`（Linux 基本都有），**不需要 Node.js**。
+- 首次运行会把内嵌内容解压缓存到 `${XDG_CACHE_HOME:-~/.cache}/codeagent-run/`，
+  之后直接复用缓存，接近原生启动速度。
+- 内嵌 Node 来自构建机的 `node`（默认取 `PATH` 中的 node）。
+  若目标机器系统更老（glibc 更低），请用 `NODE_SRC_BIN` 指定一个与目标机兼容的
+  node 再构建（建议先在一台与目标机同代的机器上验证 `node --version` 可运行）。
+- 使用方法三/方法四一致的配置方式：把 `config.template.yaml` 复制为
+  `~/.codeagent/config.yaml` 并填入 API key 即可。
+
 ## 配置
 
 CodeAgent 通过 YAML 配置文件管理 LLM 提供商和参数，**不需要每次手动设置环境变量**。

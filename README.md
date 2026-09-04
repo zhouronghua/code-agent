@@ -81,8 +81,15 @@ Built with TypeScript, bundled with esbuild into a single executable JS file.
 npm install
 npm run build              # Development build
 npm run build:release      # Production build (minified)
+npm run build:portable     # Single-file offline binary (Node.js bundled, ~29MB)
 npm run pack               # Create distributable .tgz
 ```
+
+Offline-friendly distribution: `build/agent-cli.js` is a zero-dependency single JS
+file that only needs `node >= 18` on the target. If the target machine has no
+Node.js / no internet (cannot `npm install`), use `npm run build:portable` and copy
+`build/code-agent-portable-linux-x64` — a self-contained executable with the Node
+runtime embedded — then run it directly on any Linux host (bash/tar/gzip only).
 
 ## License
 
