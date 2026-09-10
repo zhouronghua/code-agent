@@ -243,6 +243,72 @@ agent-cli --skills     # 列出已加载的技能
 agent-cli --help       # 显示帮助
 ```
 
+### 批处理 / 定时任务（--batch）
+
+`--batch` 为无交互（headless）模式：跑完任务即退出，**不需要 TTY**，并返回确定的
+退出码，适合 cron / CI。配合 `--use-skill` 可让 agent 完整执行某个技能流程，
+而不是写死一条 shell 脚本。
+
+```bash
+code-agent --batch \
+  --mode agent \
+  --use-skill caps-llvm-nda-daily \
+  --mcp on --mcp-tools "add_gerrit_review,list_pipeline_runs,trigger_pipeline" \
+  --cwd /home/ronghua.zhou/.codeagent/skills/caps-llvm-nda-daily \
+  --batch-log   logs/daily.log \
+  --batch-result logs/daily.result.json \
+  --lock        logs/daily.lock \
+  --batch-timeout 82800 \
+  "按 SKILL.md 完整执行今天的流程"
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--batch` | 无交互批处理模式，跑完即退出 |
+| `--batch-log <file>` | 同时把全部输出追加写入该文件（便于 cron 留档） |
+| `--batch-result <file>` | 写出 JSON 结果摘要（status/duration/taskLogId/error/lastAssistant） |
+| `--batch-timeout <sec>` | 整体墙钟上限，0 = 不限制；超时退出码 124 |
+| `--lock <file>` | 建议锁文件；已被其它进程持有时本次直接跳过（退出 0） |
+| `--cwd <dir>` | 运行前切换工作目录 |
+| `--step-timeout <ms>` | 覆盖单次工具调用超时（长任务可调大） |
+| `--mcp <off\|on\|a,b>` | 加载 MCP 服务器（`on` = config.yaml + ~/.codeagent/mcp.json） |
+| `--mcp-tools <a,b,c>` | 只暴露这些 MCP 工具（全局白名单，强烈建议） |
+
+退出码：`0` 成功 / `1` 任务失败 / `2` 用法错误 / `124` 超时；`--lock` 被占用时跳过为 `0`。
+
+> 长任务（数小时）建议把长命令 `nohup ... &` 后台执行，再用内置 `poll` 工具
+> 周期检查；agent 在 batch 模式下同样拥有 `poll` 工具。
+
+定时任务示例（本机为 UTC，`0 18 * * *` = 北京时间 02:00）：
+
+```cron
+0 18 * * * /path/to/skill/run.sh >> /path/to/skill/logs/daily.log 2>&1
+```
+
+## MCP 工具（--mcp）
+
+技能（如 `dolphin-mcp`、`caps-llvm-nda-daily`）会调用外部 MCP 工具。CLI 通过
+`--mcp` 加载 MCP 服务器并把其工具注册为 agent 工具：
+
+- `--mcp off` / 不传：只加载 `config.yaml` 的 `mcp_servers`（默认行为）；
+- `--mcp on`：加载 `config.yaml` 的 `mcp_servers` **加上** `~/.codeagent/mcp.json`
+  的 `mcpServers`（dolphin / opendisplay 等）；
+- `--mcp dolphin,opendisplay`：只加载指定服务器。
+
+部分网关工具极多（如 dolphin 约 180 个），建议用 `--mcp-tools a,b,c` 做全局白名单，
+或在服务器配置里加 `tools: [...]` 逐服务器白名单：
+
+```yaml
+mcp_servers:
+  dolphin:
+    type: streamableHttp
+    url: http://10.9.92.215:9666/mcp
+    headers: { Authorization: "Bearer ..." }
+    tools: [list_pipeline_runs, trigger_pipeline, add_gerrit_review]
+```
+
+> MCP 加载失败为**非致命**：只会打印告警并继续，不会中断本次运行。
+
 ## Skills 支持
 
 CodeAgent 支持 Cursor 兼容的 SKILL.md 技能文件。技能提供特定领域的专业知识，

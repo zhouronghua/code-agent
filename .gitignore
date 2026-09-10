@@ -9,3 +9,6 @@ build/
 config.yaml
 code-agent-*.tgz
 .cursor
+
+# local commit message scratch
+.commit_msg.txt

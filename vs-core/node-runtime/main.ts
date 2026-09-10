@@ -24,6 +24,7 @@
 import * as readline from 'node:readline';
 import * as nodePath from 'node:path';
 import * as nodeOs from 'node:os';
+import * as fs from 'node:fs';
 import { URI } from '../base/common/uri';
 import { AgentMode, MessageRole } from '../../src/vs/workbench/services/agent/common/agentModels';
 import { LLMProviderFactory } from '../../src/vs/workbench/services/agent/browser/llmProvider';
@@ -41,6 +42,8 @@ import { ListDirectoryTool } from '../../src/vs/workbench/contrib/agent/common/t
 import { SearchTextTool } from '../../src/vs/workbench/contrib/agent/common/tools/searchText';
 import { SearchFilesTool } from '../../src/vs/workbench/contrib/agent/common/tools/searchFiles';
 import { RunTerminalTool } from '../../src/vs/workbench/contrib/agent/common/tools/runTerminal';
+import { PollTool } from '../../src/vs/workbench/contrib/agent/common/tools/poll';
+import { loadMcpServersFromJsonFile, registerMcpTools, McpServerSpec } from '../../src/vs/workbench/contrib/agent/common/agentMcp';
 import { loadConfig, loadConfigForProfile, listProfiles, ResolvedConfig } from '../../src/vs/workbench/contrib/agent/common/agentConfig';
 import { ModelRouter } from '../../src/vs/workbench/contrib/agent/common/agentModelRouter';
 import { SkillsLoader } from '../../src/vs/workbench/contrib/agent/common/agentSkills';
@@ -62,6 +65,128 @@ const C = {
 
 function log(color: string, prefix: string, msg: string) {
 	console.log(`${color}${C.bold}[${prefix}]${C.reset} ${msg}`);
+}
+
+function expandHomePath(p: string): string {
+	if (p.startsWith('~/')) return nodePath.join(nodeOs.homedir(), p.slice(2));
+	return nodePath.resolve(p);
+}
+
+/**
+ * Batch mode: tee stdout/stderr into `file` (append) in addition to the
+ * console, so cron runs leave a durable log even if the caller forgets to
+ * redirect. Returns a teardown function.
+ */
+function installBatchLog(file?: string): () => void {
+	if (!file) return () => { /* no-op */ };
+	const outPath = expandHomePath(file);
+	const stream = fs.createWriteStream(outPath, { flags: 'a' });
+	const origOut = process.stdout.write.bind(process.stdout);
+	const origErr = process.stderr.write.bind(process.stderr);
+	(process.stdout as any).write = (chunk: any, enc?: any, cb?: any) => {
+		stream.write(typeof chunk === 'string' ? chunk : Buffer.from(chunk));
+		return origOut(chunk, enc, cb);
+	};
+	(process.stderr as any).write = (chunk: any, enc?: any, cb?: any) => {
+		stream.write(typeof chunk === 'string' ? chunk : Buffer.from(chunk));
+		return origErr(chunk, enc, cb);
+	};
+	return () => {
+		(process.stdout as any).write = origOut;
+		(process.stderr as any).write = origErr;
+		try { stream.end(); } catch { /* ignore */ }
+	};
+}
+
+/**
+ * Simple advisory lock for cron-style jobs: create the lock file with O_EXCL
+ * and record the pid. A stale lock (process gone) is reclaimed automatically.
+ * Returns a release function, or undefined when the lock is held elsewhere.
+ */
+function acquireLock(file: string): (() => void) | undefined {
+	const lockPath = expandHomePath(file);
+	try { fs.mkdirSync(nodePath.dirname(lockPath), { recursive: true }); } catch { /* ignore */ }
+
+	const tryCreate = (): number | undefined => {
+		try {
+			const fd = fs.openSync(lockPath, 'wx');
+			fs.writeSync(fd, String(process.pid));
+			fs.closeSync(fd);
+			return process.pid;
+		} catch (e: any) {
+			if (e && e.code === 'EEXIST') return undefined;
+			return process.pid; // unknown error: proceed rather than block the job
+		}
+	};
+
+	if (tryCreate()) {
+		return () => { try { fs.unlinkSync(lockPath); } catch { /* ignore */ } };
+	}
+
+	// Lock exists — is the owner still alive?
+	let stale = false;
+	try {
+		const pid = parseInt(fs.readFileSync(lockPath, 'utf-8').trim(), 10);
+		if (!pid || pid <= 0) {
+			stale = true;
+		} else {
+			try { process.kill(pid, 0); } catch { stale = true; }
+		}
+	} catch { stale = true; }
+
+	if (stale) {
+		try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+		if (tryCreate()) {
+			return () => { try { fs.unlinkSync(lockPath); } catch { /* ignore */ } };
+		}
+	}
+	return undefined;
+}
+
+function writeJsonFile(file: string, data: unknown): void {
+	try {
+		const p = expandHomePath(file);
+		fs.mkdirSync(nodePath.dirname(p), { recursive: true });
+		fs.writeFileSync(p, JSON.stringify(data, null, 2));
+	} catch (e) {
+		console.error(`${C.yellow}[BATCH]${C.reset} failed to write result file ${file}: ${(e as Error).message}`);
+	}
+}
+
+function mergeMcpSpecs(primary: McpServerSpec[], secondary: McpServerSpec[]): McpServerSpec[] {
+	const out = [...primary];
+	const seen = new Set(primary.map(s => s.name));
+	for (const s of secondary) {
+		if (!seen.has(s.name)) { out.push(s); seen.add(s.name); }
+	}
+	return out;
+}
+
+/**
+ * Resolve which MCP servers to load:
+ *   --mcp off            → none
+ *   --mcp on             → config.yaml `mcp_servers` + ~/.codeagent/mcp.json
+ *   --mcp a,b            → only the named servers from the merged set
+ *   (no --mcp flag)      → config.yaml `mcp_servers` only (docs-compatible)
+ */
+function resolveMcpSpecs(resolved: ResolvedConfig, opts: CLIOptions): McpServerSpec[] {
+	const mode = (opts.mcp || '').trim().toLowerCase();
+	const fromConfig: McpServerSpec[] = (resolved.mcpServers || []).map(s => ({
+		name: s.name, type: s.type, url: s.url, headers: s.headers,
+		command: s.command, args: s.args, env: s.env, tools: s.tools,
+	}));
+	if (mode === 'off' || mode === 'false' || mode === 'none') return [];
+	if (!mode) return fromConfig;
+	const merged = mergeMcpSpecs(fromConfig, loadMcpServersFromJsonFile());
+	if (mode === 'on' || mode === 'true' || mode === 'all') return merged;
+	const want = new Set(mode.split(',').map(x => x.trim()).filter(Boolean));
+	return merged.filter(s => want.has(s.name));
+}
+
+function mcpAllowTools(opts: CLIOptions): string[] | undefined {
+	const raw = (opts.mcpTools || '').trim();
+	if (!raw) return undefined;
+	return raw.split(',').map(x => x.trim()).filter(Boolean);
 }
 
 /**
@@ -277,6 +402,25 @@ interface CLIOptions {
 	listTaskLogs: boolean;
 	taskLogId?: string;
 	deleteTaskLogId?: string;
+	// ---- batch / headless mode ----
+	/** --batch: run the task(s) without the interactive REPL and exit. */
+	batch?: boolean;
+	/** --batch-log <file>: append the full run output to a file as well. */
+	batchLog?: string;
+	/** --batch-result <file>: write a JSON result summary (status/duration/log id). */
+	batchResult?: string;
+	/** --batch-timeout <seconds>: overall wall-clock limit (0 = unlimited). */
+	batchTimeout?: number;
+	/** --lock <file>: skip the run if another process holds this lock. */
+	lockFile?: string;
+	/** --cwd <dir>: change working directory before running. */
+	cwd?: string;
+	/** --step-timeout <ms>: override the per-tool-call timeout. */
+	stepTimeout?: number;
+	/** --mcp <off|on|name1,name2>: enable MCP servers for this run. */
+	mcp?: string;
+	/** --mcp-tools <a,b,c>: global MCP tool allowlist (intersected per server). */
+	mcpTools?: string;
 }
 
 function parseArgs(): CLIOptions {
@@ -359,6 +503,41 @@ function parseArgs(): CLIOptions {
 				i++;
 				opts.deleteTaskLogId = args[i];
 				break;
+			case '--batch':
+				opts.batch = true;
+				break;
+			case '--batch-log':
+				i++;
+				opts.batchLog = args[i];
+				break;
+			case '--batch-result':
+				i++;
+				opts.batchResult = args[i];
+				break;
+			case '--batch-timeout':
+				i++;
+				opts.batchTimeout = parseInt(args[i], 10) || 0;
+				break;
+			case '--lock':
+				i++;
+				opts.lockFile = args[i];
+				break;
+			case '--cwd':
+				i++;
+				opts.cwd = args[i];
+				break;
+			case '--step-timeout':
+				i++;
+				opts.stepTimeout = parseInt(args[i], 10) || 0;
+				break;
+			case '--mcp':
+				i++;
+				opts.mcp = args[i] || 'on';
+				break;
+			case '--mcp-tools':
+				i++;
+				opts.mcpTools = args[i];
+				break;
 			case '--help':
 				printHelp();
 				process.exit(0);
@@ -407,8 +586,30 @@ Options:
   --temperature <float>       Override sampling temperature (default from config)
   --top-k <int>               Override top-k sampling; 0 = provider default
   --memory <on|off>           Force shared agent memory on/off for this run
+  --batch                     Headless: run the task(s), then exit (no REPL)
+  --batch-log <file>          Also append all run output to <file>
+  --batch-result <file>       Write a JSON result summary to <file>
+  --batch-timeout <seconds>   Overall wall-clock limit for the run (0 = unlimited)
+  --lock <file>               Skip the run if another process holds the lock
+  --cwd <dir>                 Change working directory before running
+  --step-timeout <ms>         Override the per-tool-call timeout
+  --mcp <off|on|a,b>          Load MCP servers (on = config.yaml + mcp.json)
+  --mcp-tools <a,b,c>         Only expose these MCP tools (global allowlist)
   --help                      Show this help
   --version, -v               Show version
+
+Batch / Cron:
+  code-agent --batch --use-skill <skill> --cwd <dir> "do the whole workflow"
+    Runs one-shot, no TTY required, and exits 0 on success / 1 on failure
+    (124 on --batch-timeout). Combine with --batch-log/--batch-result to keep a
+    durable record, and --lock to prevent overlapping scheduled runs.
+
+MCP tools:
+  Skills such as dolphin-mcp / caps-llvm-nda-daily call external MCP tools.
+  Pass --mcp on to load servers from config.yaml mcp_servers and
+  ~/.codeagent/mcp.json. Without --mcp only config.yaml mcp_servers load.
+  Restrict the exposed tool set with --mcp-tools (recommended: some gateways
+  advertise 180+ tools). A per-server "tools: [...]" entry is honoured too.
 
 Session Management:
   Sessions persist your agent conversation context across restarts.
@@ -443,7 +644,7 @@ Config (searched in order):
 `);
 }
 
-function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 'off') {
+async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 'off', opts?: CLIOptions) {
 	const config = resolved.agentConfig;
 
 	if (!config.apiKey) {
@@ -466,6 +667,7 @@ function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 'off')
 	toolRegistry.register(new SearchFilesTool(searchService, workspaceRoot));
 	toolRegistry.registerAlias('search_content', 'search_text');
 	toolRegistry.register(new RunTerminalTool(terminalService, process.cwd()));
+	toolRegistry.register(new PollTool(terminalService, process.cwd()));
 
 	// ---- Skill management ("Skills of Skills"): catalog / create / update ----
 	// Ports dsh-run2skill's skill packaging logic so the agent can manage its own
@@ -498,7 +700,28 @@ function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 'off')
 
 	const checkpointManager = new AgentCheckpointManager(fileService);
 
-	return { config, llmProvider, toolRegistry, checkpointManager, memoryClient };
+	// ---- MCP servers (opt-in via --mcp) ----
+	// Exposes external MCP tools (dolphin pipeline/gerrit/gitlab, opendisplay …)
+	// so skills that reference them work in the CLI exactly as in the IDE host.
+	let mcpTransports: unknown[] = [];
+	if (opts) {
+		const specs = resolveMcpSpecs(resolved, opts);
+		if (specs.length > 0) {
+			try {
+				const { count, transports } = await registerMcpTools(
+					toolRegistry, specs,
+					msg => console.log(`${C.cyan}${msg}${C.reset}`),
+					{ allowTools: mcpAllowTools(opts), skipServers: ['tdai_agent_mem'] },
+				);
+				mcpTransports = transports;
+				console.log(`${C.green}[MCP]${C.reset} ${count} tool(s) registered from ${specs.length} server(s)`);
+			} catch (e) {
+				console.log(`${C.yellow}[MCP]${C.reset} failed to load MCP servers: ${(e as Error).message}`);
+			}
+		}
+	}
+
+	return { config, llmProvider, toolRegistry, checkpointManager, memoryClient, mcpTransports };
 }
 
 function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
@@ -536,8 +759,8 @@ function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
 	agentLoop.onDidComplete(() => console.log(`\n${C.dim}--- Task completed ---${C.reset}\n`));
 }
 
-async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memoryOverride?: 'on' | 'off') {
-	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = createServices(resolved, memoryOverride);
+async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memoryOverride?: 'on' | 'off', opts?: CLIOptions) {
+	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = await createServices(resolved, memoryOverride, opts);
 
 	console.log(`\n${C.bold}${C.magenta}=== Parallel Agent Mode ===${C.reset}`);
 	console.log(`${C.dim}Running ${tasks.length} tasks concurrently (max 4)${C.reset}\n`);
@@ -581,8 +804,128 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memory
 	manager.dispose();
 }
 
+/**
+ * Headless batch mode (--batch): run one task without the interactive REPL and
+ * exit with a deterministic status code. Designed for cron / CI jobs:
+ *   0   success
+ *   1   task failed
+ *   2   usage error (no task, bad --cwd)
+ *   124 timed out (--batch-timeout)
+ * A held --lock exits 0 (skip) so overlapping cron runs don't spam errors.
+ *
+ * All console output is tee'd to --batch-log, a JSON summary is written to
+ * --batch-result, and the session + task log are saved exactly like a normal
+ * run so the job can be inspected afterwards.
+ */
+async function runBatchMode(opts: CLIOptions, resolved: ResolvedConfig, skillsLoader: SkillsLoader) {
+	const teardownLog = installBatchLog(opts.batchLog);
+
+	const releaseLock = opts.lockFile ? acquireLock(opts.lockFile) : undefined;
+	if (opts.lockFile && !releaseLock) {
+		console.log(`${C.yellow}[BATCH]${C.reset} lock "${opts.lockFile}" is held by another run — skipping (exit 0)`);
+		teardownLog();
+		process.exit(0);
+	}
+
+	const task = opts.tasks.join(' ').trim();
+	if (!task) {
+		console.error(`${C.red}[BATCH]${C.reset} no task provided; usage: code-agent --batch "task"`);
+		releaseLock?.();
+		teardownLog();
+		process.exit(2);
+	}
+
+	const modeLabel = opts.mode === AgentMode.Plan ? 'plan' : opts.mode === AgentMode.Ask ? 'ask' : 'agent';
+	const startedAt = Date.now();
+	console.log(`${C.green}[BATCH]${C.reset} start pid=${process.pid} mode=${modeLabel} cwd=${process.cwd()}`);
+	console.log(`${C.dim}${task.length > 400 ? task.slice(0, 400) + '…' : task}${C.reset}`);
+
+	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } =
+		await createServices(resolved, opts.memory, opts);
+	if (opts.stepTimeout && opts.stepTimeout > 0) config.stepTimeout = opts.stepTimeout;
+
+	const modeManager = new AgentModeManager();
+	modeManager.switchMode(opts.mode);
+	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient);
+	agentLoop.setExtraSystemPrompt(buildSkillsContext(skillsLoader, opts.useSkill, task));
+	attachAgentListeners(agentLoop, opts);
+
+	let timedOut = false;
+	const timer = opts.batchTimeout && opts.batchTimeout > 0
+		? setTimeout(() => {
+			timedOut = true;
+			console.log(`\n${C.red}[BATCH]${C.reset} batch-timeout of ${opts.batchTimeout}s reached — cancelling task`);
+			agentLoop.cancel();
+		}, opts.batchTimeout * 1000)
+		: undefined;
+
+	const onSignal = (sig: string) => {
+		console.log(`\n${C.yellow}[BATCH]${C.reset} received ${sig} — cancelling task`);
+		agentLoop.cancel();
+	};
+	process.on('SIGINT', () => onSignal('SIGINT'));
+	process.on('SIGTERM', () => onSignal('SIGTERM'));
+
+	let thrown: string | undefined;
+	try {
+		await agentLoop.run(task);
+	} catch (e) {
+		thrown = (e as Error).message || String(e);
+	}
+	if (timer) clearTimeout(timer);
+
+	const status: 'completed' | 'failed' | 'cancelled' =
+		timedOut ? 'cancelled' : (thrown || agentLoop.lastTaskError) ? 'failed' : 'completed';
+	const success = status === 'completed';
+
+	let taskLogId = '';
+	try {
+		const taskLog = agentLoop.exportTaskLog(status, thrown || agentLoop.lastTaskError);
+		taskLogId = taskLog.id;
+		new TaskLogManager().saveTaskLog(taskLog);
+	} catch (e) {
+		console.log(`${C.yellow}[BATCH]${C.reset} failed to save task log: ${(e as Error).message}`);
+	}
+
+	const lastAssistant = [...agentLoop.context.messages]
+		.reverse()
+		.find(m => m.role === MessageRole.Assistant && m.content && m.content.trim())?.content || '';
+
+	const durationMs = Date.now() - startedAt;
+	const result = {
+		status,
+		task,
+		mode: modeLabel,
+		pid: process.pid,
+		cwd: process.cwd(),
+		startedAt: new Date(startedAt).toISOString(),
+		finishedAt: new Date().toISOString(),
+		durationMs,
+		durationSec: Math.round(durationMs / 1000),
+		taskLogId,
+		error: thrown || agentLoop.lastTaskError || undefined,
+		lastAssistant: lastAssistant.slice(0, 8000),
+	};
+	if (opts.batchResult) writeJsonFile(opts.batchResult, result);
+
+	const tag = success ? `${C.green}SUCCESS` : `${C.red}${status.toUpperCase()}`;
+	console.log(`\n${C.bold}[BATCH]${C.reset} ${tag}${C.reset} in ${result.durationSec}s (task log: ${taskLogId || 'n/a'})`);
+
+	agentLoop.dispose();
+	releaseLock?.();
+	teardownLog();
+	process.exit(success ? 0 : timedOut ? 124 : 1);
+}
+
 async function main() {
 	const opts = parseArgs();
+
+	// --cwd: change directory before any service resolves paths (cron-friendly).
+	if (opts.cwd) {
+		try { process.chdir(expandHomePath(opts.cwd)); }
+		catch (e) { console.error(`${C.red}[BATCH]${C.reset} cannot chdir to ${opts.cwd}: ${(e as Error).message}`); process.exit(2); }
+	}
+
 	const sessionManager = new AgentSessionManager(process.cwd());
 	const taskLogManager = new TaskLogManager();
 
@@ -746,11 +1089,17 @@ async function main() {
 	console.log('');
 
 	if (opts.parallel && opts.tasks.length > 1) {
-		await runParallelMode(opts.tasks, resolved, opts.memory);
+		await runParallelMode(opts.tasks, resolved, opts.memory, opts);
 		return;
 	}
 
-	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = createServices(resolved, opts.memory);
+	// ---- Headless batch mode (--batch): no REPL, deterministic exit code ----
+	if (opts.batch) {
+		await runBatchMode(opts, resolved, skillsLoader);
+		return;
+	}
+
+	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = await createServices(resolved, opts.memory, opts);
 	const modeManager = new AgentModeManager();
 	modeManager.switchMode(opts.mode);
 

@@ -52,6 +52,8 @@ interface McpServerConfig {
 	url?: string;
 	type?: string;
 	headers?: Record<string, string>;
+	/** Optional allowlist of MCP tool names to expose from this server. */
+	tools?: string[];
 }
 
 interface ConfigFile {
@@ -104,6 +106,7 @@ function parseYaml(text: string): ConfigFile {
 	let inList = false;
 	let listKey = '';
 	let inRoutingScenarios = false;
+	let inMcpTools = false;
 
 	for (const line of lines) {
 		const trimmed = line.trimEnd();
@@ -202,12 +205,17 @@ function parseYaml(text: string): ConfigFile {
 			const val = rest.join(':').trim();
 			const k = key.trim();
 			const srv = result.mcp_servers![currentProfile];
+			inMcpTools = (k === 'tools');
 			if (k === 'command') srv.command = val;
 			else if (k === 'url') srv.url = val;
 			else if (k === 'type') srv.type = val;
 			else if (k === 'headers') {
 				if (!srv.headers) srv.headers = {};
 				// headers section starts
+			}
+			else if (k === 'tools') {
+				if (!srv.tools) srv.tools = [];
+				// tools allowlist starts
 			}
 			else if (k === 'args') {
 				// single-line shorthand: args: --port 8080
@@ -218,7 +226,11 @@ function parseYaml(text: string): ConfigFile {
 
 		if (currentSection === 'mcp_servers' && indent === 6 && currentProfile) {
 			const srv = result.mcp_servers?.[currentProfile];
-			if (srv && trimmed.trimStart().startsWith('- ')) {
+			if (srv && inMcpTools && trimmed.trimStart().startsWith('- ')) {
+				// tools allowlist item
+				if (!srv.tools) srv.tools = [];
+				srv.tools.push(trimmed.trimStart().slice(2).trim());
+			} else if (srv && trimmed.trimStart().startsWith('- ')) {
 				// args list item
 				const val = trimmed.trimStart().slice(2).trim();
 				if (!srv.args) srv.args = [];
@@ -321,6 +333,8 @@ export interface McpServerEntry {
 	url?: string;
 	type?: string;
 	headers?: Record<string, string>;
+	/** Optional allowlist of MCP tool names to expose from this server. */
+	tools?: string[];
 }
 
 export interface ResolvedConfig {
