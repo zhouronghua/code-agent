@@ -173,6 +173,7 @@ agent-cli --profile local "explain this function"
 model_routing:
   enabled: true
   default: deepseek-v4-flash          # 未命中场景时的兜底模型
+  fallback: hy3                       # 保底模型：场景/default 模型访问超时时自动切换并重试
   scenarios:
     reasoning: deepseek-v4-pro        # 复杂任务
     vision: deepseek-v4-flash-vision-exp  # 视觉任务
@@ -182,6 +183,11 @@ model_routing:
 `scenarios` 的取值可以是 `models.json` 里的模型 id，也可以是 `config.yaml` 里定义的
 profile 名。存在 `model_routing` 配置段即默认启用（`enabled: false` 可关闭）。
 模型切换会保留当前 session 的上下文历史。
+
+`fallback` 是**保底模型**（默认推荐 `hy3`）：当某个场景/default 选中的模型在调用时
+发生**访问超时**（request timeout / ETIMEDOUT / `UND_ERR_*_TIMEOUT`）时，agent 会
+自动切换到保底模型并对**同一请求**重试，而不是让整个任务失败。每次请求最多回退一次，
+避免在两个模型间来回切换；下一个新任务会重新按场景选择模型。
 
 ```bash
 # 无需任何额外参数，agent 会根据任务自动选择模型

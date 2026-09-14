@@ -805,6 +805,22 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memory
 }
 
 /**
+ * Wire the 保底 (guaranteed fallback) model into an agent loop. When the
+ * scenario/default model times out, the agent swaps to this model and retries
+ * the same request. Configured via config.yaml `model_routing.fallback`.
+ */
+function wireModelFallback(agentLoop: AgentLoop, modelRouter: ModelRouter): void {
+	const fb = modelRouter.fallbackConfig();
+	if (!fb) return;
+	try {
+		agentLoop.setFallback(fb, LLMProviderFactory.create(fb));
+		console.log(`${C.dim}Model fallback: ON | 保底模型: ${fb.model} (auto-switch on API access timeout)${C.reset}`);
+	} catch (err: any) {
+		console.log(`${C.yellow}Model fallback: failed to init provider for "${fb.model}": ${err.message}${C.reset}`);
+	}
+}
+
+/**
  * Headless batch mode (--batch): run one task without the interactive REPL and
  * exit with a deterministic status code. Designed for cron / CI jobs:
  *   0   success
@@ -848,6 +864,11 @@ async function runBatchMode(opts: CLIOptions, resolved: ResolvedConfig, skillsLo
 	modeManager.switchMode(opts.mode);
 	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient);
 	agentLoop.setExtraSystemPrompt(buildSkillsContext(skillsLoader, opts.useSkill, task));
+
+	// Wire the 保底 (guaranteed fallback) model: batch/cron runs must survive an
+	// access timeout on the primary model by switching to the fallback model.
+	wireModelFallback(agentLoop, new ModelRouter(resolved.modelRouting, resolved.profiles, config));
+
 	attachAgentListeners(agentLoop, opts);
 
 	let timedOut = false;
@@ -1067,6 +1088,9 @@ async function main() {
 			.map(([s, m]) => `${s}→${m}`)
 			.join(', ');
 		console.log(`${C.dim}Model routing: ON | startup: ${cfg.model} | default: ${routingDefault}${scenarioEntries ? ` | ${scenarioEntries}` : ''}${C.reset}`);
+		if (resolved.modelRouting.fallbackModel) {
+			console.log(`${C.dim}Model fallback: ${resolved.modelRouting.fallbackModel} (保底模型, auto-switch on API access timeout)${C.reset}`);
+		}
 	} else if (resolved.profileExplicit) {
 		// A profile was pinned via --profile: the model is fixed and must never
 		// be swapped at runtime.
@@ -1112,12 +1136,18 @@ async function main() {
 	let modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
 	let currentModel = config.model;
 
+	// Register the 保底 (guaranteed fallback) model: on an API access timeout
+	// the agent transparently switches to it and retries the same request.
+	wireModelFallback(agentLoop, modelRouter);
+
 	const applyModelRouting = (task: string): void => {
 		if (!modelRouter.enabled) return;
 		const selected = modelRouter.selectConfig(task);
-		if (selected.model === currentModel) return;
+		// Compare against the model the agent is actually using — after a
+		// fallback swap the agent may differ from the last routed model.
+		if (selected.model === agentLoop.activeModel) return;
 
-		const previousModel = currentModel;
+		const previousModel = agentLoop.activeModel;
 		try {
 			const newProvider = LLMProviderFactory.create(selected);
 			agentLoop.swapProvider(selected, newProvider);
@@ -1493,6 +1523,8 @@ async function main() {
 					setResolvedSkillDirs(newResolved.skillsDirs);
 					modelRouter = new ModelRouter(newResolved.modelRouting, newResolved.profiles, newResolved.agentConfig);
 					currentModel = newResolved.agentConfig.model;
+					// Re-register the 保底 model for the new profile's routing config.
+					wireModelFallback(agentLoop, modelRouter);
 					const nc = newResolved.agentConfig;
 					log(C.magenta, 'PROFILE', `Switched ${previousProfile} (${previousModel}) → ${newProfileName} (${nc.provider}/${nc.model})`);
 				} catch (err: any) {

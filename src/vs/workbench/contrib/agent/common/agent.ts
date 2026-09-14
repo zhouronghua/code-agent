@@ -62,6 +62,33 @@ const COMPLEX_TASK_KEYWORDS = [
 	'optimize', '优化', 'redesign', 'overhaul', 'rewrite', '重写',
 ];
 
+/**
+ * Detect an API "access timeout" error, used to trigger the 保底 (fallback)
+ * model. Covers:
+ *   - the provider's own AbortError / "request timed out" message,
+ *   - Node/undici socket timeouts (ETIMEDOUT, UND_ERR_*_TIMEOUT, ESOCKETTIMEDOUT),
+ *   - axios-style ECONNABORTED timeouts.
+ * Generic network errors (ECONNRESET / ECONNREFUSED) are intentionally NOT
+ * treated as timeouts so a transient reset does not needlessly burn the
+ * fallback model.
+ */
+export function isApiTimeoutError(err: unknown): boolean {
+	if (!err) return false;
+	const e = err as { name?: string; message?: string; code?: string; cause?: unknown };
+	if (e.name === 'AbortError') return true;
+
+	const parts: string[] = [];
+	if (e.message) parts.push(e.message);
+	if (e.code) parts.push(String(e.code));
+	const cause = e.cause as { message?: string; code?: string } | undefined;
+	if (cause) {
+		if (cause.message) parts.push(cause.message);
+		if (cause.code) parts.push(String(cause.code));
+	}
+	const hay = parts.join(' ').toLowerCase();
+	return /timed?\s*out|timeout|etimedout|esockettimedout|econnaborted|und_err_connect_timeout|und_err_headers_timeout|und_err_body_timeout/.test(hay);
+}
+
 export class AgentLoop {
 	private _isRunning = false;
 	private _cancellation: CancellationTokenSource | undefined;
@@ -95,6 +122,14 @@ export class AgentLoop {
 	/** AbortController for the currently executing tool, if any. Allows /btw cancel. */
 	private _currentToolController: AbortController | undefined;
 
+	// ---- Model fallback (保底模型) ----
+	// When the active scenario/default model times out, the agent swaps to this
+	// model and retries the same request. Configured via config.yaml
+	// `model_routing.fallback`.
+	private _fallbackConfig: IAgentConfig | undefined;
+	private _fallbackProvider: ILLMProvider | undefined;
+	private _usingFallback = false;
+
 	// ---- Per-task execution tracing ----
 	private _stepRecords: IStepRecord[] = [];
 	private _taskStartTime = 0;
@@ -120,6 +155,29 @@ export class AgentLoop {
 		this._llmProvider = provider;
 		this._context.swapTokenCounter(provider);
 		this._planner.swapProvider(provider);
+		// Any explicit provider swap (e.g. per-task scenario routing) resets the
+		// fallback state so the new model gets a fresh chance before falling back.
+		this._usingFallback = false;
+	}
+
+	/**
+	 * Register the 保底 (guaranteed fallback) model. When the active model's API
+	 * call times out, the agent automatically switches to this model and retries
+	 * the same request instead of failing the task.
+	 */
+	setFallback(config: IAgentConfig, provider: ILLMProvider): void {
+		this._fallbackConfig = config;
+		this._fallbackProvider = provider;
+	}
+
+	/** The model id currently used by the agent (changes after a fallback swap). */
+	get activeModel(): string {
+		return this._config.model;
+	}
+
+	/** Whether the agent is currently running on the fallback (保底) model. */
+	get usingFallback(): boolean {
+		return this._usingFallback;
 	}
 
 	setStreaming(enabled: boolean): void {
@@ -549,14 +607,6 @@ export class AgentLoop {
 
 			let messages = this._context.getContextWindow();
 
-			// Check if the current context uses reasoning_content (thinking mode).
-			// Reasoning models require special handling:
-			//   - Streaming is incompatible because it doesn't capture reasoning_content
-			//   - Message filtering is needed to maintain API compatibility
-			const hasThinking = messages.some(m => m.role === MessageRole.Assistant && m.reasoningContent);
-			const providerSupportsStreaming = this._llmProvider.supportsStreaming?.() ?? true;
-			const isReasoningModel = this._llmProvider.supportsReasoning?.() ?? false;
-
 			let response: IAgentMessage;
 
 			// ---- Step tracing: record LLM request metadata ----
@@ -573,6 +623,16 @@ export class AgentLoop {
 			const MAX_OVERFLOW_RETRIES = 3;
 			for (;;) {
 				messages = this._context.getContextWindow();
+
+				// Check if the current context uses reasoning_content (thinking mode).
+				// Reasoning models require special handling:
+				//   - Streaming is incompatible because it doesn't capture reasoning_content
+				//   - Message filtering is needed to maintain API compatibility
+				// Recomputed inside the loop so a fallback provider swap is reflected.
+				const hasThinking = messages.some(m => m.role === MessageRole.Assistant && m.reasoningContent);
+				const providerSupportsStreaming = this._llmProvider.supportsStreaming?.() ?? true;
+				const isReasoningModel = this._llmProvider.supportsReasoning?.() ?? false;
+
 				const tools = this._modeManager.isReadOnly
 					? this._toolRegistry.getReadOnlySchemas()
 					: this._toolRegistry.listSchemas();
@@ -620,6 +680,19 @@ export class AgentLoop {
 					}
 					break;
 				} catch (err) {
+					// ---- Model fallback (保底模型) on API access timeout ----
+					// When the active scenario/default model times out, transparently
+					// switch to the configured fallback model and retry the SAME
+					// request instead of failing the whole task. Only one fallback
+					// attempt is made per request (no ping-pong between models).
+					if (isApiTimeoutError(err) && this._fallbackProvider && this._fallbackConfig && !this._usingFallback) {
+						const fromModel = this._config.model;
+						const toModel = this._fallbackConfig.model;
+						console.warn(`\n[FALLBACK] Model "${fromModel}" timed out (${(err as Error).message}) — switching to fallback model "${toModel}" and retrying.`);
+						this.swapProvider(this._fallbackConfig, this._fallbackProvider);
+						this._usingFallback = true;
+						continue;
+					}
 					if (err instanceof ContextOverflowError && overflowRetries < MAX_OVERFLOW_RETRIES) {
 						overflowRetries++;
 						console.warn(`[Context Overflow] Conversation history too large — compacting and retrying (${overflowRetries}/${MAX_OVERFLOW_RETRIES}): ${(err as Error).message}`);

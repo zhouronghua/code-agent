@@ -48,6 +48,14 @@ export class ModelRouter {
 	}
 
 	/**
+	 * The 保底 (guaranteed fallback) model id, resolved from
+	 * `model_routing.fallback` in config.yaml. Undefined when unset.
+	 */
+	get fallbackModelId(): string | undefined {
+		return this._routing.fallbackModel;
+	}
+
+	/**
 	 * Detect the scenario of a prompt. Returns one of the built-in scenario keys:
 	 * 'vision' | 'reasoning' | 'fast'.
 	 */
@@ -85,6 +93,19 @@ export class ModelRouter {
 		const scenario = this.detectScenario(prompt);
 		const modelId = this._routing.scenarios?.[scenario] ?? this._routing.defaultModel;
 		return this.resolveModel(modelId) ?? this._fallback;
+	}
+
+	/**
+	 * Resolve the 保底 (guaranteed fallback) model config used when the
+	 * scenario/default model times out. Returns undefined when no fallback is
+	 * configured, when routing is disabled, or when the fallback id cannot be
+	 * resolved to a known model.
+	 */
+	fallbackConfig(): IAgentConfig | undefined {
+		if (!this.enabled) return undefined;
+		const id = this._routing.fallbackModel;
+		if (!id) return undefined;
+		return this.resolveModel(id);
 	}
 
 	/** Returns the scenario and selected model name for a prompt (used for logging). */

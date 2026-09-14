@@ -124,6 +124,15 @@ export class ParallelAgentManager extends Disposable {
 			this._memory,
 		);
 
+		// Wire the 保底 (guaranteed fallback) model so a per-task scenario model
+		// that times out automatically falls back instead of failing the task.
+		const fallback = this._modelRouter?.fallbackConfig();
+		if (fallback && fallback.model !== config.model) {
+			try {
+				agentLoop.setFallback(fallback, LLMProviderFactory.create(fallback));
+			} catch { /* fallback provider init failure is non-fatal */ }
+		}
+
 		const messages: IAgentMessage[] = [];
 
 		agentLoop.onDidReceiveMessage(msg => {

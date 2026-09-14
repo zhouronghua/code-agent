@@ -108,6 +108,9 @@ function isReasoningModel(model: string): boolean {
 	if (lower.includes('reasoner') || lower.includes('deepseek-r')) return true;
 	// DeepSeek v4-pro has deep thinking capabilities (explicitly enabled via thinking param)
 	if (lower.includes('deepseek-v4-pro')) return true;
+	// Tencent Hunyuan 3 (hy3) is a hybrid-thinking model that always returns
+	// reasoning_content and accepts {"thinking":{"type":"enabled"}}.
+	if (lower === 'hy3' || lower.startsWith('hy3-') || lower.includes('hunyuan')) return true;
 	// OpenAI o-series reasoning models
 	if (lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4')) return true;
 	return false;

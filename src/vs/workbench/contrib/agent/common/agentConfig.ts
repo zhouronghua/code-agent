@@ -42,6 +42,13 @@ interface ConfigProfile {
 export interface ModelRoutingConfig {
 	enabled: boolean;
 	defaultModel?: string;
+	/**
+	 * 保底模型 (guaranteed fallback). When the scenario/default model selected
+	 * for a prompt times out (API access timeout), the agent automatically
+	 * switches to this model and retries. Resolved from
+	 * `model_routing.fallback` (a models.json id / profile name).
+	 */
+	fallbackModel?: string;
 	scenarios?: Record<string, string>;
 }
 
@@ -73,6 +80,7 @@ interface ConfigFile {
 	model_routing?: {
 		enabled?: boolean;
 		default?: string;
+		fallback?: string;
 		scenarios?: Record<string, string>;
 	};
 }
@@ -181,6 +189,7 @@ function parseYaml(text: string): ConfigFile {
 				const k = key.trim();
 				if (k === 'enabled') result.model_routing.enabled = val === 'true' || val === '1' || val === 'yes';
 				else if (k === 'default') result.model_routing.default = val;
+				else if (k === 'fallback') result.model_routing.fallback = val;
 				continue;
 			}
 			if (indent === 4 && inRoutingScenarios) {
@@ -494,6 +503,7 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 	const modelRouting: ModelRoutingConfig = {
 		enabled: hasRouting && fileConfig.model_routing?.enabled !== false && !profileExplicit,
 		defaultModel: fileConfig.model_routing?.default,
+		fallbackModel: fileConfig.model_routing?.fallback,
 		scenarios: fileConfig.model_routing?.scenarios || {},
 	};
 

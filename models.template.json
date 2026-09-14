@@ -27,6 +27,20 @@
       "supportsReasoning": false
     },
     {
+      "id": "hy3",
+      "name": "custom",
+      "vendor": "enflameapi",
+      "apiKey": "your-api-key-here",
+      "url": "https://api.enflame.cn/v1/chat/completions",
+      "maxInputTokens": 256000,
+      "maxOutputTokens": 32768,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "supportsReasoning": true,
+      "thinking": {"type": "enabled"},
+      "maxTokens": 32768
+    },
+    {
       "id": "gpt-4o",
       "name": "custom",
       "vendor": "openai",
@@ -42,6 +56,7 @@
   "availableModels": [
     "deepseek-v4-pro",
     "deepseek-v4-flash",
+    "hy3",
     "gpt-4o"
   ]
 }
