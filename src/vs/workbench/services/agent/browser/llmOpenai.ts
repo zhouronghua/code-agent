@@ -34,6 +34,13 @@ const MIN_COMPLETION_TOKENS = 2048;
 /** Fraction of the context window reserved as a hard safety margin in max_tokens clamps. */
 const CONTEXT_RESERVE_RATIO = 0.05;
 
+/**
+ * Completion budget used by the reachability probe. Must stay above the
+ * gateway's accepted floor: the GPT-5.x family rejects max_tokens: 1 with a 400,
+ * which would make a healthy model look unreachable and block the switch-back.
+ */
+const HEALTH_CHECK_MAX_TOKENS = 8;
+
 /** Minimum safety reserve (never let a tiny model's whole window become reserve). */
 const MIN_CONTEXT_RESERVE = 1024;
 
@@ -631,6 +638,52 @@ export class OpenAIProvider implements ILLMProvider {
 	 */
 	supportsReasoning(): boolean {
 		return this._isReasoning;
+	}
+
+	/**
+	 * Minimal reachability probe for the 保底-model supervisor: one tiny
+	 * completion with its own short timeout (tens of times cheaper and faster
+	 * than a real turn, and unlike a `GET /models` call it exercises the exact
+	 * chat endpoint that timed out). Never throws.
+	 *
+	 * Evidence (api.enflame.cn gateway, measured):
+	 *   - max_tokens: 1   → 400 "max_tokens ... limit was reached" for the GPT-5.x
+	 *     family, i.e. a FALSE "unreachable". 4 is the smallest accepted value.
+	 *   - unknown model   → 503 model_not_found (genuinely unreachable).
+	 *   - reachable model → 200.
+	 * So: any answer from the model server counts as reachable (2xx/400/429 —
+	 * a rejected or throttled probe still proves the model is back), while 5xx,
+	 * auth failures and timeouts count as unreachable.
+	 */
+	async healthCheck(timeoutMs = 8000): Promise<boolean> {
+		if (!this._apiKey) return false;
+		const abortController = new AbortController();
+		const timer = setTimeout(() => abortController.abort(), timeoutMs);
+		try {
+			const response = await fetch(`${this._apiBase}/chat/completions`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${this._apiKey}`,
+				},
+				body: JSON.stringify({
+					model: this._model,
+					messages: [{ role: 'user', content: 'ping' }],
+					max_tokens: HEALTH_CHECK_MAX_TOKENS,
+					stream: false,
+				}),
+				signal: abortController.signal,
+			});
+			if (response.ok) return true;
+			// 400 = the model answered but disliked the probe (e.g. a stricter
+			// max_tokens floor); 429 = reachable but throttled. Both mean the model
+			// is back. 401/403/404/5xx mean we must stay on the 保底 model.
+			return response.status === 400 || response.status === 429;
+		} catch {
+			return false;
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	private _convertMessages(messages: IAgentMessage[]): OpenAIChatMessage[] {

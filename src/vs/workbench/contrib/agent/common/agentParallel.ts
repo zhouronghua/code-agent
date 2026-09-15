@@ -10,7 +10,7 @@ import { ILLMProvider, LLMProviderFactory } from 'vs/workbench/services/agent/br
 import { ToolRegistry } from './agentTools';
 import { AgentModeManager } from './agentModes';
 import { AgentCheckpointManager } from './agentCheckpoint';
-import { AgentLoop } from './agent';
+import { AgentLoop, formatModelSwitch } from './agent';
 import { ModelRouter } from './agentModelRouter';
 import { IMemoryIntegration } from './agentMemory';
 
@@ -134,6 +134,10 @@ export class ParallelAgentManager extends Disposable {
 		}
 
 		const messages: IAgentMessage[] = [];
+
+		// Model switches are announced (a silent swap to the 保底 model is
+		// indistinguishable from the primary model misbehaving).
+		agentLoop.setModelSwitchLogger(e => console.log(formatModelSwitch(e)));
 
 		agentLoop.onDidReceiveMessage(msg => {
 			messages.push(msg);

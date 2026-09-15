@@ -172,22 +172,71 @@ agent-cli --profile local "explain this function"
 ```yaml
 model_routing:
   enabled: true
-  default: deepseek-v4-flash          # 未命中场景时的兜底模型
-  fallback: hy3                       # 保底模型：场景/default 模型访问超时时自动切换并重试
+  default: deepseek-flash             # 未命中场景时的兜底模型
+  fallback: gpt-5.6-luna              # 保底模型：场景/default 模型访问超时时自动切换并重试
   scenarios:
     reasoning: deepseek-v4-pro        # 复杂任务
     vision: deepseek-v4-flash-vision-exp  # 视觉任务
-    fast: deepseek-v4-flash           # 简单任务
+    fast: deepseek-flash              # 简单任务
 ```
 
 `scenarios` 的取值可以是 `models.json` 里的模型 id，也可以是 `config.yaml` 里定义的
 profile 名。存在 `model_routing` 配置段即默认启用（`enabled: false` 可关闭）。
 模型切换会保留当前 session 的上下文历史。
 
-`fallback` 是**保底模型**（默认推荐 `hy3`）：当某个场景/default 选中的模型在调用时
-发生**访问超时**（request timeout / ETIMEDOUT / `UND_ERR_*_TIMEOUT`）时，agent 会
-自动切换到保底模型并对**同一请求**重试，而不是让整个任务失败。每次请求最多回退一次，
-避免在两个模型间来回切换；下一个新任务会重新按场景选择模型。
+`fallback` 是**保底模型**（当前默认 `gpt-5.6-luna`）：当某个场景/default 选中的模型在
+调用时发生**访问超时**（request timeout / ETIMEDOUT / `UND_ERR_*_TIMEOUT`）时，agent 会
+自动切换到保底模型并对**同一请求**重试，而不是让整个任务失败。
+
+保底模型建议使用**非 thinking（不支持 reasoning_content）**的模型。历史教训：hy3 作为
+保底模型时，会接着「上一轮回答」的上下文反复重放同一段推理（实测 98k 字符里
+`Let me do it.` 重复 1617 次），把整个输出预算烧光后**一个字的答案都没给**。
+
+#### 模型切换是可见的
+
+任何切换都会打印一行 `[MODEL] ...`，避免「换了个模型导致答案变差」却无从察觉：
+
+```
+[MODEL] ↪ routed deepseek-flash → deepseek-v4-pro          # 场景路由
+[MODEL] ⚠ deepseek-flash unreachable → switched to 保底模型 gpt-5.6-luna, retrying the same request (timeout: request timed out)
+[MODEL] ✓ deepseek-flash reachable again → switched back from 保底模型 gpt-5.6-luna
+```
+
+切换的完整记录也会写入 task log 的 `modelSwitches` 字段（`~/.codeagent/tasks/task_*.json`），
+便于事后定位「当时到底是哪个模型在回答」。
+
+#### 保底模型的后台探活
+
+切到保底模型后，agent 会在后台以**闲时探针**持续检测默认模型是否恢复
+（30s 起步，失败后指数退避到 120s；每次探测只发一个极小的 completion）：
+
+- 探针一旦成功，**立即切回默认模型**，不必等下一个任务或下一次超时；
+- 探针定时器 `unref()`，不会阻止 CLI 退出；
+- 进行中的请求不会被中途打断（在下一个 step 切回），保证日志里每条回复的模型归属正确。
+
+健康判定（实测 api.enflame.cn 网关）：`2xx/400/429` 视为可达（400 说明模型只是不喜欢
+探针请求、429 说明只是限流），`5xx`、`401/403/404`、超时、网络错误视为不可达。
+注意不能用 `max_tokens: 1` 探测——GPT-5.x 系列会返回 400 `max_tokens ... limit was
+reached`，会把健康模型误判成不可达。探针节奏可用 `model_routing.fallback_probe_interval_s`
+（秒，默认 30，失败退避至 120）配置，或调用 `AgentLoop.setProbeSchedule(initialMs, maxMs)`。
+
+#### 切换模型时的上下文一致性
+
+切换模型时上下文必须一起「搬家」，否则会出现「模型一换，上下文就不对了」：
+
+1. **窗口预算跟随新模型**：`AgentContext` 的 `maxTokens/maxOutputTokens` 会更新为新模型的窗口。
+   否则用大窗口模型的预算去装小窗口模型（如 500k tokens 历史 → hy3 的 256k 窗口），滑动窗口会
+   继续保留超出新模型上限的历史，新模型把 completion 预算压到近乎 0 后直接
+   `ContextOverflowError`，agent 只能强制压缩历史——用户看到的就是「上下文突然被吃掉了」。
+2. **切换时丢弃「上一个模型的 `reasoning_content`」**：思维链是模型的私有状态，把 A 模型的思考喂给
+   B 模型既会让 B 顺着别人的计划继续念，也会触发 thinking 模式的「要么全有、要么全无」约束
+   （provider 会给每条 assistant 消息补空 `reasoning_content`）。因此**切到不支持 thinking 的模型时
+   会清掉历史里的 `reasoning_content`**；两个 thinking 模型之间切换则保留历史（provider 已有的
+   归一化逻辑会处理，避免引入新风险）。只清 `reasoning_content`，`content` 与 `tool_calls`
+   保持不变，不会产生孤儿 tool 消息。
+
+另外，控制台打印的 `THINKING` 内容超过 4000 字符时会做首尾截断并标注省略量，不会再把
+一个 98k 字符的死循环思考整段刷到终端上。
 
 ```bash
 # 无需任何额外参数，agent 会根据任务自动选择模型

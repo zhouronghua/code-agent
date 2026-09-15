@@ -1,6 +1,6 @@
 {
   "name": "code-agent",
-  "version": "0.3.35",
+  "version": "0.3.36",
   "description": "AI coding agent CLI with multi-provider LLM support, Cursor-compatible skills, and VS Code architecture",
   "main": "build/agent-cli.js",
   "bin": {
@@ -34,6 +34,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node build/agent-cli.js",
     "start:mock": "MOCK_LLM=1 node standalone-demo/agent.mjs",
+    "test:model-switch": "esbuild tests/model-switch.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/model-switch.test.mjs --tsconfig=tsconfig.json && node build/model-switch.test.mjs",
     "clean": "rm -rf build",
     "pack": "npm run build:release && npm pack",
     "link": "npm run build && npm link",

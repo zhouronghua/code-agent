@@ -56,6 +56,15 @@ export class ModelRouter {
 	}
 
 	/**
+	 * Optional override for how often the background probe re-checks the primary
+	 * model while the agent runs on the 保底 model (ms). From
+	 * `model_routing.fallback_probe_interval_s`. Undefined = built-in schedule.
+	 */
+	get probeIntervalMs(): number | undefined {
+		return this._routing.probeIntervalMs;
+	}
+
+	/**
 	 * Detect the scenario of a prompt. Returns one of the built-in scenario keys:
 	 * 'vision' | 'reasoning' | 'fast'.
 	 */

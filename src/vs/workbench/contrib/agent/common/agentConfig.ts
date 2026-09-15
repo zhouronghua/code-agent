@@ -49,6 +49,13 @@ export interface ModelRoutingConfig {
 	 * `model_routing.fallback` (a models.json id / profile name).
 	 */
 	fallbackModel?: string;
+	/**
+	 * How often the background probe re-checks the primary/scenario model while
+	 * the agent runs on the 保底 model (ms). Resolved from
+	 * `model_routing.fallback_probe_interval_s` (seconds). Undefined = built-in
+	 * schedule (30s, backing off to 120s).
+	 */
+	probeIntervalMs?: number;
 	scenarios?: Record<string, string>;
 }
 
@@ -81,6 +88,7 @@ interface ConfigFile {
 		enabled?: boolean;
 		default?: string;
 		fallback?: string;
+		fallback_probe_interval_s?: number;
 		scenarios?: Record<string, string>;
 	};
 }
@@ -190,6 +198,7 @@ function parseYaml(text: string): ConfigFile {
 				if (k === 'enabled') result.model_routing.enabled = val === 'true' || val === '1' || val === 'yes';
 				else if (k === 'default') result.model_routing.default = val;
 				else if (k === 'fallback') result.model_routing.fallback = val;
+				else if (k === 'fallback_probe_interval_s') result.model_routing.fallback_probe_interval_s = parseFloat(val);
 				continue;
 			}
 			if (indent === 4 && inRoutingScenarios) {
@@ -500,10 +509,12 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 	// user pins a profile (--profile / AGENT_PROFILE / active_profile) the model
 	// is fixed and must never be swapped at runtime.
 	const hasRouting = fileConfig.model_routing !== undefined;
+	const probeSeconds = fileConfig.model_routing?.fallback_probe_interval_s;
 	const modelRouting: ModelRoutingConfig = {
 		enabled: hasRouting && fileConfig.model_routing?.enabled !== false && !profileExplicit,
 		defaultModel: fileConfig.model_routing?.default,
 		fallbackModel: fileConfig.model_routing?.fallback,
+		probeIntervalMs: typeof probeSeconds === 'number' && probeSeconds > 0 ? probeSeconds * 1000 : undefined,
 		scenarios: fileConfig.model_routing?.scenarios || {},
 	};
 

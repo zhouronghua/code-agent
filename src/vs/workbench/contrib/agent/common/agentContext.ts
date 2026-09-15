@@ -28,13 +28,69 @@ export class AgentContext {
 	private _systemPrompt: IAgentMessage | undefined;
 
 	constructor(
-		private readonly _maxTokens: number,
-		private readonly _maxOutputTokens: number,
+		private _maxTokens: number,
+		private _maxOutputTokens: number,
 		private _llmProvider: ILLMProvider,
 	) { }
 
 	swapTokenCounter(provider: ILLMProvider): void {
 		this._llmProvider = provider;
+	}
+
+	/** Estimated total tokens held in the message history (incl. system prompt). */
+	get estimatedTokens(): number {
+		return this._estimateTotalTokens();
+	}
+
+	/** Token budget available for input messages under the ACTIVE model. */
+	get inputBudget(): number {
+		return this._inputBudget;
+	}
+
+	/** True when the history no longer fits the active model's input budget. */
+	get isOverBudget(): boolean {
+		return this._estimateTotalTokens() > this._inputBudget * WINDOW_UTILIZATION;
+	}
+
+	/**
+	 * Re-target the context to another model after a runtime model switch
+	 * (scenario routing, /profile, or the 保底 fallback).
+	 *
+	 * The window budgets MUST follow the new model. Keeping the previous model's
+	 * (usually larger) window after switching to a smaller one is a silent
+	 * context-corruption bug: the sliding window happily keeps more history than
+	 * the new model accepts, so its completion budget is clamped to ~0, the
+	 * request fails with ContextOverflowError, and the loop force-compacts —
+	 * collapsing the conversation the user was relying on.
+	 */
+	setModelBudget(maxTokens?: number, maxOutputTokens?: number): void {
+		if (maxTokens && maxTokens > 0) this._maxTokens = maxTokens;
+		if (maxOutputTokens && maxOutputTokens > 0) this._maxOutputTokens = maxOutputTokens;
+	}
+
+	/**
+	 * Drop reasoning_content produced by a PREVIOUS model.
+	 *
+	 * Chain-of-thought is model-private. Replaying one model's thinking into a
+	 * different one both breaks the thinking-mode API invariant (reasoning_content
+	 * must be present on ALL assistant messages, or on none) and is a known way to
+	 * derail the new model: it latches onto the foreign plan and re-emits it
+	 * (observed: hy3 repeating "Hmm — let me find lit. / Let me do it." 1600+ times
+	 * until it burned its whole output budget and answered nothing).
+	 *
+	 * `content` and `toolCalls` are preserved, so no tool-result message becomes
+	 * orphaned and no assistant message turns invalid.
+	 */
+	dropReasoningContent(predicate?: (msg: IAgentMessage) => boolean): number {
+		let dropped = 0;
+		for (let i = 0; i < this._messages.length; i++) {
+			const msg = this._messages[i];
+			if (msg.reasoningContent === undefined) continue;
+			if (predicate && !predicate(msg)) continue;
+			this._messages[i] = { ...msg, reasoningContent: undefined };
+			dropped++;
+		}
+		return dropped;
 	}
 
 	/**

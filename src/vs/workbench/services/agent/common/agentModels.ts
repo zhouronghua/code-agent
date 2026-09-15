@@ -120,6 +120,32 @@ export interface IAgentConfig {
 	taskTimeout: number;
 }
 
+/**
+ * Runtime model switch record (scenario routing, /profile, or the 保底 fallback).
+ * Fired by AgentLoop so the CLI/IDE can tell the user which model is answering —
+ * an invisible model swap makes a wrong/throttled answer impossible to diagnose.
+ */
+export interface IModelSwitchEvent {
+	/** Model id that was active before the switch. */
+	from: string;
+	/** Model id that is active after the switch. */
+	to: string;
+	/**
+	 * Why the switch happened:
+	 *   - 'fallback-timeout'  : the primary/scenario model timed out → 保底模型
+	 *   - 'primary-recovered' : the primary model is reachable again → switch back
+	 *   - 'routing'           : scenario-based routing before a new task
+	 *   - 'profile'           : the user switched profile via /profile
+	 */
+	reason: 'fallback-timeout' | 'primary-recovered' | 'routing' | 'profile';
+	/** True when the switch moves TO the 保底 (fallback) model. */
+	toFallback: boolean;
+	/** Optional human-readable detail (e.g. the timeout error message). */
+	detail?: string;
+	/** Epoch ms when the switch happened (set when recorded in a task log). */
+	at?: number;
+}
+
 /** Per-step tool execution record for task log tracing. */
 export interface IToolExecutionRecord {
 	readonly toolCallId: string;
@@ -163,6 +189,8 @@ export interface IAgentTaskLog {
 	};
 	readonly systemPrompt: string;
 	readonly extraSystemPrompt?: string;
+	/** Runtime model switches that happened during this task (routing / 保底 / recovery). */
+	readonly modelSwitches?: IModelSwitchEvent[];
 	readonly steps: IStepRecord[];
 	readonly totalSteps: number;
 	readonly totalToolCalls: number;

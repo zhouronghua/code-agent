@@ -41,6 +41,18 @@
       "maxTokens": 32768
     },
     {
+      "id": "gpt-5.6-luna",
+      "name": "custom",
+      "vendor": "enflameapi",
+      "apiKey": "your-api-key-here",
+      "url": "https://api.enflame.cn/v1/chat/completions",
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 65536,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "supportsReasoning": false
+    },
+    {
       "id": "gpt-4o",
       "name": "custom",
       "vendor": "openai",
@@ -57,6 +69,7 @@
     "deepseek-v4-pro",
     "deepseek-v4-flash",
     "hy3",
+    "gpt-5.6-luna",
     "gpt-4o"
   ]
 }

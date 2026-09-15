@@ -24,6 +24,7 @@ import {
 	IStepRecord,
 	IToolExecutionRecord,
 	IAgentTaskLog,
+	IModelSwitchEvent,
 	generateId,
 } from 'vs/workbench/services/agent/common/agentModels';
 import { ILLMProvider, ContextOverflowError } from 'vs/workbench/services/agent/browser/llmProvider';
@@ -50,6 +51,66 @@ const MAX_CONSECUTIVE_TOOL_ONLY_STEPS = 100;
 // prompt to ensure it has fully verified its work. After this many rounds, we
 // accept the conclusion to prevent infinite verify-loops.
 const MAX_VERIFICATION_ROUNDS = 2;
+
+// ---- 保底 (fallback) model supervision ----
+// After switching to the fallback model because the primary/scenario model timed
+// out, a background probe keeps checking whether the primary model is reachable
+// again so the agent can return to it without waiting for the next failure.
+const FALLBACK_PROBE_INITIAL_DELAY_MS = 30_000;
+const FALLBACK_PROBE_MAX_DELAY_MS = 120_000;
+/** Per-probe timeout — a model that needs longer than this is still unhealthy. */
+const FALLBACK_PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * Maximum characters of model reasoning_content shown in the console.
+ *
+ * Reasoning models can emit tens of thousands of characters of chain-of-thought,
+ * and a degenerate repetition loop can emit 100k+ (observed: 98k chars repeating
+ * "Hmm — let me find lit. / Let me do it."). Dumping that in full buries the
+ * actual answer, so we print a head/tail excerpt and say what was elided.
+ */
+const MAX_REASONING_CHARS_LOGGED = 4000;
+/** How much of the elided reasoning to show at each end of the excerpt. */
+const REASONING_EXCERPT_CHARS = 2000;
+
+// Maximum corrective rounds when a thinking model burns its whole output budget
+// repeating the same reasoning and answers nothing.
+const MAX_REASONING_CORRECTION_ROUNDS = 2;
+
+/**
+ * Number of duplicate lines beyond which a reasoning block counts as a loop.
+ * A stuck model repeats one line hundreds of times ("Let me do it." × 1617).
+ */
+const REASONING_LOOP_MIN_REPEATS = 20;
+/** A loop also has to dominate the block, not just appear often. */
+const REASONING_LOOP_MIN_SHARE = 0.2;
+/** Below this size, repeated lines are normal planning phrasing, not a loop. */
+const REASONING_LOOP_MIN_CHARS = 4000;
+
+/** How many times the most frequent non-empty line repeats in a reasoning block. */
+export function countRepeatedReasoningLines(reasoning: string): number {
+	const counts = new Map<string, number>();
+	for (const line of reasoning.split('\n')) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1);
+	}
+	let max = 0;
+	for (const c of counts.values()) if (c > max) max = c;
+	return max;
+}
+
+/**
+ * Detect a degenerate reasoning loop: the same line repeated so often that the
+ * model is clearly not progressing (it will just burn the output budget).
+ */
+export function isDegenerateReasoning(reasoning: string): boolean {
+	if (reasoning.length < REASONING_LOOP_MIN_CHARS) return false;
+	const lines = reasoning.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+	if (lines.length < REASONING_LOOP_MIN_REPEATS * 2) return false;
+	const repeats = countRepeatedReasoningLines(reasoning);
+	return repeats >= REASONING_LOOP_MIN_REPEATS && repeats / lines.length >= REASONING_LOOP_MIN_SHARE;
+}
 
 // Keywords that indicate a complex task — triggers deep thinking mode with
 // extra system prompt instructions.
@@ -87,6 +148,40 @@ export function isApiTimeoutError(err: unknown): boolean {
 	}
 	const hay = parts.join(' ').toLowerCase();
 	return /timed?\s*out|timeout|etimedout|esockettimedout|econnaborted|und_err_connect_timeout|und_err_headers_timeout|und_err_body_timeout/.test(hay);
+}
+
+/**
+ * Render a runtime model switch as one line, e.g.
+ *   [MODEL] ⚠ deepseek-flash unreachable → switched to 保底模型 gpt-5.6-luna, retrying the same request
+ *   [MODEL] ✓ deepseek-flash reachable again → switched back from 保底模型 gpt-5.6-luna
+ */
+export function formatModelSwitch(e: IModelSwitchEvent): string {
+	const detail = e.detail ? ` (${e.detail})` : '';
+	switch (e.reason) {
+		case 'fallback-timeout':
+			return `[MODEL] ⚠ ${e.from} unreachable → switched to 保底模型 ${e.to}, retrying the same request${detail}`;
+		case 'primary-recovered':
+			return `[MODEL] ✓ ${e.to} reachable again → switched back from 保底模型 ${e.from}${detail}`;
+		case 'profile':
+			return `[MODEL] ↪ profile switch ${e.from} → ${e.to}${detail}`;
+		default:
+			return `[MODEL] ↪ routed ${e.from} → ${e.to}${detail}`;
+	}
+}
+
+/**
+ * Bound the reasoning_content printed to the console. Chain-of-thought can be
+ * enormous (a repetition loop reached 98k chars), and printing it verbatim
+ * drowns out the actual answer — which is exactly how a stuck reasoning model
+ * looks like "a pile of filler" to the user.
+ */
+export function formatReasoningForLog(reasoning: string): string {
+	if (reasoning.length <= MAX_REASONING_CHARS_LOGGED) return reasoning;
+	const half = Math.floor(REASONING_EXCERPT_CHARS / 2);
+	const head = reasoning.slice(0, REASONING_EXCERPT_CHARS - half);
+	const tail = reasoning.slice(-half);
+	const elided = reasoning.length - head.length - tail.length;
+	return `${head}\n... [${elided} chars of reasoning elided] ...\n${tail}`;
 }
 
 export class AgentLoop {
@@ -130,8 +225,34 @@ export class AgentLoop {
 	private _fallbackProvider: ILLMProvider | undefined;
 	private _usingFallback = false;
 
+	// ---- Model switch reporting + fallback supervision ----
+	// The model that was active before the fallback swap; the probe returns to it.
+	private _primaryConfig: IAgentConfig | undefined;
+	private _primaryProvider: ILLMProvider | undefined;
+	private _probeTimer: ReturnType<typeof setTimeout> | undefined;
+	private _probeDelayMs = FALLBACK_PROBE_INITIAL_DELAY_MS;
+	private _probeInitialDelayMs = FALLBACK_PROBE_INITIAL_DELAY_MS;
+	private _probeMaxDelayMs = FALLBACK_PROBE_MAX_DELAY_MS;
+	/** Set true while an LLM request is in flight on the current provider. */
+	private _llmRequestInFlight = false;
+	/** A background probe found the primary model healthy while a request was in flight. */
+	private _primaryRecovered = false;
+	/** Set by a model switch whose history no longer fits the new model's window. */
+	private _pendingForceCompact = false;
+
+	private readonly _onDidSwitchModel = new Emitter<IModelSwitchEvent>();
+	/** Fired on every runtime model switch (routing / fallback / recovery). */
+	readonly onDidSwitchModel: Event<IModelSwitchEvent> = this._onDidSwitchModel.event;
+
+	/**
+	 * Renders a model-switch message. Overridable so the CLI can colorize it;
+	 * defaults to a plain single line so a switch is never invisible in any host.
+	 */
+	private _modelSwitchLogger: (event: IModelSwitchEvent) => void = e => console.log(formatModelSwitch(e));
+
 	// ---- Per-task execution tracing ----
 	private _stepRecords: IStepRecord[] = [];
+	private _modelSwitches: IModelSwitchEvent[] = [];
 	private _taskStartTime = 0;
 	private _taskDescription = '';
 	private _taskError: string | undefined;
@@ -150,14 +271,90 @@ export class AgentLoop {
 		this._memory = memory?.enabled ? memory : undefined;
 	}
 
-	swapProvider(config: IAgentConfig, provider: ILLMProvider): void {
+	/**
+	 * Switch the agent onto another model (scenario routing, /profile, or an
+	 * explicit host action) and report it as a user-visible model switch.
+	 */
+	swapProvider(config: IAgentConfig, provider: ILLMProvider, reason: IModelSwitchEvent['reason'] = 'routing'): void {
+		const fromModel = this._config.model;
+		this._applyModelSwitch(config, provider);
+		// Any explicit provider swap (e.g. per-task scenario routing) resets the
+		// fallback state so the new model gets a fresh chance before falling back,
+		// and cancels any pending recovery probe for the old primary model.
+		this._usingFallback = false;
+		this._primaryRecovered = false;
+		this._stopRecoveryProbe();
+		if (config.model !== fromModel) {
+			this._reportModelSwitch({
+				from: fromModel,
+				to: config.model,
+				reason,
+				toFallback: false,
+			});
+		}
+	}
+
+	/**
+	 * Install the switch renderer used by hosts that want a colorized line.
+	 * The agent always fires `onDidSwitchModel`; this only controls the direct
+	 * console output, which keeps a switch visible even without a listener.
+	 */
+	setModelSwitchLogger(logger: (event: IModelSwitchEvent) => void): void {
+		this._modelSwitchLogger = logger;
+	}
+
+	/**
+	 * Move the agent onto another model, keeping the conversation usable.
+	 *
+	 * Everything the agent needs to answer correctly lives in the context, so a
+	 * switch must carry the model's budgets over AND drop chain-of-thought that
+	 * belongs to the previous model — otherwise the sliding window keeps more
+	 * history than the new model accepts (silent force-compaction) and the new
+	 * model is fed another model's thinking (incoherent continuation, repetition
+	 * loops). This is the fix for "模型一切换，上下文就不对了".
+	 */
+	private _applyModelSwitch(config: IAgentConfig, provider: ILLMProvider): void {
+		const modelChanged = config.model !== this._config.model;
 		this._config = config;
 		this._llmProvider = provider;
 		this._context.swapTokenCounter(provider);
+		if (modelChanged) {
+			this._context.setModelBudget(config.maxContextTokens, config.maxOutputTokens);
+			// Chain-of-thought is model-private, so carrying it across a switch is
+			// wrong two ways: the new model is fed another model's reasoning (which
+			// it may just continue verbatim), and the provider's thinking-mode rule
+			// ("all assistant messages carry reasoning_content, or none") would stamp
+			// an empty reasoning_content onto every assistant message.
+			// Only drop when the new model does NOT think: switching between two
+			// thinking models keeps the history as-is, which is exactly what the
+			// provider already normalizes today (no new failure mode).
+			const newModelThinks = provider.supportsReasoning?.() ?? false;
+			const dropped = newModelThinks ? 0 : this._context.dropReasoningContent();
+			// A smaller window may no longer hold the history the previous model
+			// allowed. Flag it for compaction at the top of the next loop iteration
+			// (never compact here: this can be called from a background probe while
+			// the loop is mid-step, and compacting concurrently would lose messages).
+			if (this._context.isOverBudget) {
+				this._pendingForceCompact = true;
+				console.warn(
+					`[MODEL] history (~${this._context.estimatedTokens} tokens) exceeds ${config.model}'s ` +
+					`input budget (${this._context.inputBudget} tokens) — compacting conversation`
+				);
+			}
+			if (dropped > 0) {
+				console.warn(`[MODEL] dropped reasoning_content from ${dropped} message(s) belonging to the previous model`);
+			}
+		}
 		this._planner.swapProvider(provider);
-		// Any explicit provider swap (e.g. per-task scenario routing) resets the
-		// fallback state so the new model gets a fresh chance before falling back.
-		this._usingFallback = false;
+	}
+
+	/** Fire the switch event and render it (host logger or plain console). */
+	private _reportModelSwitch(event: IModelSwitchEvent): void {
+		this._modelSwitches.push({ ...event, at: Date.now() });
+		this._onDidSwitchModel.fire(event);
+		try {
+			this._modelSwitchLogger(event);
+		} catch { /* reporting must never break the agent */ }
 	}
 
 	/**
@@ -168,6 +365,128 @@ export class AgentLoop {
 	setFallback(config: IAgentConfig, provider: ILLMProvider): void {
 		this._fallbackConfig = config;
 		this._fallbackProvider = provider;
+	}
+
+	/** Whether a 保底 (fallback) model is registered. */
+	get hasFallback(): boolean {
+		return !!this._fallbackConfig && !!this._fallbackProvider;
+	}
+
+	/**
+	 * Switch to the 保底 model after the primary/scenario model became
+	 * unreachable, retry the same request, and start supervising the primary
+	 * model so the agent returns to it as soon as it answers again.
+	 */
+	private _enterFallback(err: unknown, fromConfig: IAgentConfig, fromProvider: ILLMProvider): void {
+		const to = this._fallbackConfig!;
+		this._primaryConfig = fromConfig;
+		this._primaryProvider = fromProvider;
+		this._applyModelSwitch(to, this._fallbackProvider!);
+		this._usingFallback = true;
+		this._reportModelSwitch({
+			from: fromConfig.model,
+			to: to.model,
+			reason: 'fallback-timeout',
+			toFallback: true,
+			detail: `timeout: ${(err as Error).message}`,
+		});
+		this._startRecoveryProbe();
+	}
+
+	/**
+	 * Background supervision of the primary model while running on the 保底
+	 * model: probe it with a cheap health check (backing off 30s → 120s) and
+	 * switch back the moment it responds. The timer is unref'd so a pending probe
+	 * never keeps the CLI process alive.
+	 */
+	private _startRecoveryProbe(): void {
+		if (this._probeTimer) return;
+		if (!this._primaryProvider || !this._primaryProvider.healthCheck) return;
+		this._probeDelayMs = this._probeInitialDelayMs;
+		this._scheduleProbe();
+	}
+
+	/**
+	 * Override the recovery-probe schedule (default 30s, backing off to 120s).
+	 * Exposed so a host can probe more or less aggressively, and so the
+	 * switch-back path is testable without waiting a minute.
+	 */
+	setProbeSchedule(initialDelayMs: number, maxDelayMs = initialDelayMs): void {
+		this._probeInitialDelayMs = Math.max(50, initialDelayMs);
+		this._probeMaxDelayMs = Math.max(this._probeInitialDelayMs, maxDelayMs);
+	}
+
+	private _scheduleProbe(): void {
+		if (!this._primaryProvider || !this._usingFallback) return;
+		this._probeTimer = setTimeout(() => {
+			this._probeTimer = undefined;
+			void this._runProbe();
+		}, this._probeDelayMs);
+		// Never hold the event loop open just to probe.
+		(this._probeTimer as unknown as { unref?: () => void }).unref?.();
+	}
+
+	private async _runProbe(): Promise<void> {
+		const provider = this._primaryProvider;
+		const config = this._primaryConfig;
+		if (!this._usingFallback || !provider || !config) return;
+
+		let reachable = false;
+		try {
+			reachable = (await provider.healthCheck!(FALLBACK_PROBE_TIMEOUT_MS)) === true;
+		} catch {
+			reachable = false;
+		}
+
+		if (!this._usingFallback || this._primaryProvider !== provider) return;
+
+		if (reachable) {
+			// Prefer an immediate switch-back; if a request is in flight, defer to
+			// the next loop iteration so the recorded response keeps its provenance.
+			this._clearProbeTimer();
+			if (this._llmRequestInFlight) {
+				this._primaryRecovered = true;
+				console.warn('[MODEL] primary model reachable again — switching back at the next step');
+			} else {
+				this._switchBackToPrimary('primary model answered a health probe');
+			}
+			return;
+		}
+
+		this._probeDelayMs = Math.min(this._probeDelayMs * 2, this._probeMaxDelayMs);
+		this._scheduleProbe();
+	}
+
+	/** Return to the primary/scenario model after it recovered. */
+	private _switchBackToPrimary(detail: string): void {
+		const config = this._primaryConfig;
+		const provider = this._primaryProvider;
+		if (!config || !provider) return;
+
+		const fromModel = this._config.model;
+		this._applyModelSwitch(config, provider);
+		this._usingFallback = false;
+		this._stopRecoveryProbe();
+		this._reportModelSwitch({
+			from: fromModel,
+			to: config.model,
+			reason: 'primary-recovered',
+			toFallback: false,
+			detail,
+		});
+	}
+
+	private _stopRecoveryProbe(): void {
+		this._clearProbeTimer();
+		this._primaryConfig = undefined;
+		this._primaryProvider = undefined;
+	}
+
+	private _clearProbeTimer(): void {
+		if (this._probeTimer) {
+			clearTimeout(this._probeTimer);
+			this._probeTimer = undefined;
+		}
 	}
 
 	/** The model id currently used by the agent (changes after a fallback swap). */
@@ -332,6 +651,7 @@ export class AgentLoop {
 			},
 			systemPrompt: this._context.systemPromptContent,
 			extraSystemPrompt: this._extraSystemPrompt || undefined,
+			modelSwitches: this._modelSwitches.length > 0 ? [...this._modelSwitches] : undefined,
 			steps: [...this._stepRecords],
 			totalSteps: this._stepRecords.length,
 			totalToolCalls,
@@ -359,9 +679,12 @@ export class AgentLoop {
 
 		// Initialize per-task execution tracing
 		this._stepRecords = [];
+		this._modelSwitches = [];
 		this._taskStartTime = Date.now();
 		this._taskDescription = userMessage;
 		this._taskError = undefined;
+		// A previous run may have aborted mid-request; never leave the probe blocked.
+		this._llmRequestInFlight = false;
 
 		try {
 			// Recall shared memory (tdai_agent_mem) for this task, if enabled.
@@ -460,6 +783,7 @@ export class AgentLoop {
 
 		// Initialize per-task execution tracing
 		this._stepRecords = [];
+		this._modelSwitches = [];
 		this._taskStartTime = Date.now();
 		this._taskDescription = '(continue previous session)';
 		this._taskError = undefined;
@@ -506,6 +830,7 @@ export class AgentLoop {
 
 		// Initialize per-task execution tracing
 		this._stepRecords = [];
+		this._modelSwitches = [];
 		this._taskStartTime = Date.now();
 		this._taskDescription = plan?.task || '(execute plan)';
 		this._taskError = undefined;
@@ -570,6 +895,8 @@ export class AgentLoop {
 		let stepCount = 0;
 		let consecutiveToolOnlySteps = 0;
 		let verificationRounds = 0;
+		// Corrective rounds used after a degenerate reasoning loop produced no answer.
+		let reasoningCorrectionRounds = 0;
 		// Whether any tool has actually been executed this run. Used to keep the
 		// self-verification safety net for simple tasks that would otherwise
 		// declare "done" without doing any work at all.
@@ -591,6 +918,14 @@ export class AgentLoop {
 				this._onDidReceiveMessage.fire(btwMsg);
 			}
 
+			// ---- Return to the primary model as soon as it recovers ----
+			// A background probe (started when the agent fell back) may have found
+			// the primary/scenario model healthy while a request was in flight.
+			if (this._usingFallback && this._primaryRecovered) {
+				this._primaryRecovered = false;
+				this._switchBackToPrimary('primary model answered a health probe');
+			}
+
 			// Guard: if agent calls tools repeatedly without producing any text content
 			// for too many consecutive steps, it's likely stuck in a loop.
 			if (consecutiveToolOnlySteps >= MAX_CONSECUTIVE_TOOL_ONLY_STEPS) {
@@ -603,7 +938,10 @@ export class AgentLoop {
 				break;
 			}
 
-			await this._context.compactIfNeeded();
+			// A model switch whose history no longer fits the new model's window
+			// (e.g. 保底模型 with a smaller context) must compact before the call.
+			await this._context.compactIfNeeded(this._pendingForceCompact);
+			this._pendingForceCompact = false;
 
 			let messages = this._context.getContextWindow();
 
@@ -621,6 +959,7 @@ export class AgentLoop {
 			let llmRequestMeta = { messageCount: 0, estimatedTokens: 0 };
 			let overflowRetries = 0;
 			const MAX_OVERFLOW_RETRIES = 3;
+			this._llmRequestInFlight = true;
 			for (;;) {
 				messages = this._context.getContextWindow();
 
@@ -684,13 +1023,18 @@ export class AgentLoop {
 					// When the active scenario/default model times out, transparently
 					// switch to the configured fallback model and retry the SAME
 					// request instead of failing the whole task. Only one fallback
-					// attempt is made per request (no ping-pong between models).
+					// attempt is made per request (no ping-pong between models); a
+					// background probe then watches the primary model and returns to
+					// it as soon as it answers again.
 					if (isApiTimeoutError(err) && this._fallbackProvider && this._fallbackConfig && !this._usingFallback) {
-						const fromModel = this._config.model;
-						const toModel = this._fallbackConfig.model;
-						console.warn(`\n[FALLBACK] Model "${fromModel}" timed out (${(err as Error).message}) — switching to fallback model "${toModel}" and retrying.`);
-						this.swapProvider(this._fallbackConfig, this._fallbackProvider);
-						this._usingFallback = true;
+						this._enterFallback(err, this._config, this._llmProvider);
+						// The 保底 model may have a much smaller window than the model
+						// that just timed out — compact now instead of burning another
+						// (possibly slow) request against an overflowing context.
+						if (this._pendingForceCompact) {
+							this._pendingForceCompact = false;
+							await this._context.compactIfNeeded(true);
+						}
 						continue;
 					}
 					if (err instanceof ContextOverflowError && overflowRetries < MAX_OVERFLOW_RETRIES) {
@@ -702,6 +1046,8 @@ export class AgentLoop {
 					throw err;
 				}
 			}
+			// The request finished — a recovery probe may swap providers again.
+			this._llmRequestInFlight = false;
 
 			this._context.addMessage(response);
 			this._onDidReceiveMessage.fire(response);
@@ -723,12 +1069,44 @@ export class AgentLoop {
 
 			if (!response.toolCalls || response.toolCalls.length === 0) {
 				// No tool calls — agent thinks it's done.
+				//
+				// Degenerate reasoning loop: a thinking model can repeat the same
+				// plan line until it exhausts its whole output budget, producing no
+				// answer and no action (observed: hy3 emitting "Hmm — let me find
+				// lit. / Let me do it." 1617 times in 98k chars, then answering
+				// nothing). Left alone, that gets accepted as the final answer and
+				// the user sees a wall of filler plus an empty reply.
+				const reasoning = response.reasoningContent || '';
+				if (isDegenerateReasoning(reasoning) && reasoningCorrectionRounds < MAX_REASONING_CORRECTION_ROUNDS) {
+					reasoningCorrectionRounds++;
+					console.warn(
+						`[Reasoning Loop] ${this._config.model} repeated the same reasoning ` +
+						`(${reasoning.length} chars, ${countRepeatedReasoningLines(reasoning)} repeats) and produced no ` +
+						`answer — discarding that thinking and asking it to act (${reasoningCorrectionRounds}/${MAX_REASONING_CORRECTION_ROUNDS}).`
+					);
+					// Drop the runaway thinking so it neither bloats the context nor
+					// invites the next request to continue the loop.
+					this._context.dropReasoningContent(m => m.id === response.id);
+					const loopMsg = createMessage(MessageRole.User,
+						`[System note] Your previous turn produced NO answer and repeated the same reasoning over and over. ` +
+						`Stop repeating yourself. Either take the next concrete action (call a tool) or, if the work is ` +
+						`actually finished, reply with your final summary now.`
+					);
+					this._context.addMessage(loopMsg);
+					this._onDidReceiveMessage.fire(loopMsg);
+					this._stepRecords.push(stepRecord);
+					stepCount++;
+					continue;
+				}
+
 				// Inject a verification round to make sure it has actually verified.
 				// Simple tasks skip this once they have already performed work: the
 				// extra LLM round-trips add latency but rarely change the outcome
 				// for trivial file operations (mirrors deepseek-harness's
 				// latency-sensitive reasoning-effort approach).
-				const shouldVerify = !(skipSelfVerification && hasExecutedTool);
+				// An empty answer is never accepted — it always gets a retry.
+				const hasAnswer = !!response.content.trim();
+				const shouldVerify = !hasAnswer || !(skipSelfVerification && hasExecutedTool);
 				if (shouldVerify && verificationRounds < MAX_VERIFICATION_ROUNDS) {
 					verificationRounds++;
 					const verifyMsg = createMessage(MessageRole.User,
@@ -921,10 +1299,12 @@ export class AgentLoop {
 
 	dispose(): void {
 		this.cancel();
+		this._stopRecoveryProbe();
 		this._onDidReceiveMessage.dispose();
 		this._onDidStreamToken.dispose();
 		this._onDidComplete.dispose();
 		this._onDidError.dispose();
+		this._onDidSwitchModel.dispose();
 		this._planner.dispose();
 		this._modeManager.dispose();
 	}

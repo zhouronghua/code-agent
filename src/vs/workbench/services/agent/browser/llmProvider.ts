@@ -27,6 +27,15 @@ export interface ILLMProvider {
 
 	/** Does this model use reasoning_content (thinking/chain-of-thought)? */
 	supportsReasoning?(): boolean;
+
+	/**
+	 * Cheap reachability probe used by the 保底-model supervisor: returns true
+	 * when the model answers a minimal request within `timeoutMs`. MUST never
+	 * throw — an unreachable model is reported as `false`. Providers that cannot
+	 * probe a model cheaply may omit this method (the supervisor then treats the
+	 * primary model as still unreachable).
+	 */
+	healthCheck?(timeoutMs?: number): Promise<boolean>;
 }
 
 /**

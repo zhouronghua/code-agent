@@ -26,9 +26,16 @@ active_profile: openai
 # model_routing:
 #   enabled: true
 #   default: deepseek-v4-flash          # fallback model for unmatched scenarios
-#   fallback: hy3                       # 保底模型 (guaranteed model): auto-switched
+#   fallback: gpt-5.6-luna               # 保底模型 (guaranteed model): auto-switched
 #                                        # when the scenario/default model hits an API
-#                                        # access timeout, then the request is retried
+#                                        # access timeout, then the request is retried.
+#                                        # A background probe switches back to the
+#                                        # primary model as soon as it answers again.
+#                                        # Use a NON-thinking model here: a thinking
+#                                        # 保底 model can loop on its own reasoning and
+#                                        # answer nothing (observed with hy3).
+#   fallback_probe_interval_s: 30        # how often the background probe re-checks the
+#                                        # primary model (default: 30s, backing off to 120s)
 #   scenarios:
 #     reasoning: deepseek-v4-pro        # complex refactor/debug/architecture tasks
 #     vision: deepseek-v4-flash-vision-exp  # image/screenshot understanding

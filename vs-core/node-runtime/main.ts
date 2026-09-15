@@ -32,7 +32,7 @@ import '../../src/vs/workbench/services/agent/browser/llmOpenai';
 import { ToolRegistry } from '../../src/vs/workbench/contrib/agent/common/agentTools';
 import { AgentModeManager } from '../../src/vs/workbench/contrib/agent/common/agentModes';
 import { AgentCheckpointManager } from '../../src/vs/workbench/contrib/agent/common/agentCheckpoint';
-import { AgentLoop } from '../../src/vs/workbench/contrib/agent/common/agent';
+import { AgentLoop, formatModelSwitch, formatReasoningForLog } from '../../src/vs/workbench/contrib/agent/common/agent';
 import { ParallelAgentManager } from '../../src/vs/workbench/contrib/agent/common/agentParallel';
 import { IMemoryIntegration } from '../../src/vs/workbench/contrib/agent/common/agentMemory';
 import { ReadFileTool } from '../../src/vs/workbench/contrib/agent/common/tools/readFile';
@@ -734,7 +734,7 @@ function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
 	agentLoop.onDidReceiveMessage(msg => {
 		if (msg.role === MessageRole.Assistant) {
 			if (msg.reasoningContent) {
-				log(C.dim, 'THINKING', msg.reasoningContent);
+				log(C.dim, 'THINKING', formatReasoningForLog(msg.reasoningContent));
 			}
 			if (msg.toolCalls && msg.toolCalls.length > 0) {
 				for (const tc of msg.toolCalls) {
@@ -755,10 +755,16 @@ function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
 		}
 	});
 
+	// Model switches must never be silent: an answer produced by the 保底 model
+	// (or by a scenario-routed model) looks wrong for reasons the user cannot see.
+	agentLoop.setModelSwitchLogger(e => {
+		const color = e.reason === 'primary-recovered' ? C.green : e.toFallback ? C.yellow : C.magenta;
+		console.log(`${color}${C.bold}${formatModelSwitch(e)}${C.reset}`);
+	});
+
 	agentLoop.onDidError(err => log(C.red, 'ERROR', err.message));
 	agentLoop.onDidComplete(() => console.log(`\n${C.dim}--- Task completed ---${C.reset}\n`));
 }
-
 async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memoryOverride?: 'on' | 'off', opts?: CLIOptions) {
 	const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = await createServices(resolved, memoryOverride, opts);
 
@@ -810,11 +816,15 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memory
  * the same request. Configured via config.yaml `model_routing.fallback`.
  */
 function wireModelFallback(agentLoop: AgentLoop, modelRouter: ModelRouter): void {
+	// Optional probe cadence override (model_routing.fallback_probe_interval_s).
+	if (modelRouter.probeIntervalMs) {
+		agentLoop.setProbeSchedule(modelRouter.probeIntervalMs);
+	}
 	const fb = modelRouter.fallbackConfig();
 	if (!fb) return;
 	try {
 		agentLoop.setFallback(fb, LLMProviderFactory.create(fb));
-		console.log(`${C.dim}Model fallback: ON | 保底模型: ${fb.model} (auto-switch on API access timeout)${C.reset}`);
+		console.log(`${C.dim}Model fallback: ON | 保底模型: ${fb.model} (auto-switch on API access timeout; background probe switches back on recovery)${C.reset}`);
 	} catch (err: any) {
 		console.log(`${C.yellow}Model fallback: failed to init provider for "${fb.model}": ${err.message}${C.reset}`);
 	}
@@ -1150,10 +1160,10 @@ async function main() {
 		const previousModel = agentLoop.activeModel;
 		try {
 			const newProvider = LLMProviderFactory.create(selected);
-			agentLoop.swapProvider(selected, newProvider);
+			// swapProvider reports the switch (scenario included) as a MODEL line.
+			agentLoop.swapProvider(selected, newProvider, 'routing');
 			currentModel = selected.model;
-			const scenario = modelRouter.detectScenario(task);
-			log(C.magenta, 'ROUTE', `${scenario}: ${previousModel} → ${selected.model}`);
+			log(C.dim, 'ROUTE', `scenario ${modelRouter.detectScenario(task)} → ${selected.model}`);
 		} catch (err: any) {
 			log(C.red, 'ROUTE', `Failed to switch model from ${previousModel} to ${selected.model}: ${err.message}`);
 		}
@@ -1518,7 +1528,7 @@ async function main() {
 						processingLock = false; displayPrompt(); return;
 					}
 					const newProvider = LLMProviderFactory.create(newResolved.agentConfig);
-					agentLoop.swapProvider(newResolved.agentConfig, newProvider);
+					agentLoop.swapProvider(newResolved.agentConfig, newProvider, 'profile');
 					resolved = newResolved;
 					setResolvedSkillDirs(newResolved.skillsDirs);
 					modelRouter = new ModelRouter(newResolved.modelRouting, newResolved.profiles, newResolved.agentConfig);
