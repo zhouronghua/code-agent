@@ -8,8 +8,8 @@
 
 ```bash
 # 从 GitHub Release 下载 tgz 包
-curl -LO https://github.com/zhouronghua/code-agent/releases/latest/download/code-agent-0.2.4.tgz
-npm install -g code-agent-0.2.4.tgz
+curl -LO https://github.com/zhouronghua/code-agent/releases/latest/download/zhouronghua-code-agent-0.3.36.tgz
+npm install -g zhouronghua-code-agent-0.3.36.tgz
 
 # 验证安装
 code-agent --help
@@ -18,10 +18,15 @@ agent-cli --help    # 同一个程序，两个命令名都可以
 
 安装后会注册两个全局命令：`code-agent` 和 `agent-cli`。
 
-### 方法二：从 npm 安装
+### 方法二：从 GitHub Packages 安装（GitHub registry.npm.pkg）
 
 ```bash
-npm install -g code-agent
+# 指向本仓库的 npm registry（包名作用域 @zhouronghua）
+npm config set @zhouronghua:registry https://npm.pkg.github.com
+# 需要具备 read:packages 权限的 GitHub PAT
+npm config set //npm.pkg.github.com/:_authToken <YOUR_GITHUB_PAT>
+
+npm install -g @zhouronghua/code-agent
 ```
 
 ### 方法三：从源码安装
@@ -47,7 +52,7 @@ node agent-cli.js --help
 或者从 tgz 解压：
 
 ```bash
-tar xzf code-agent-x.y.z.tgz
+tar xzf zhouronghua-code-agent-x.y.z.tgz
 cp package/build/agent-cli.js ./agent-cli.js
 
 # 直接运行（需要 Node.js >= 18）
@@ -557,15 +562,26 @@ npm version patch   # 0.2.0 -> 0.2.1（修复）
 git push origin --tags
 ```
 
-CI 自动完成：构建 -> 打包 tgz -> 创建 GitHub Release -> 发布到 npm。
+CI 自动完成：构建 -> 打包 tgz -> 创建 GitHub Release -> 发布到 GitHub Packages (npm)。
 
-用户安装：`npm install -g https://github.com/zhouronghua/code-agent/releases/latest/download/code-agent-x.y.z.tgz`
+用户安装：`npm install -g https://github.com/zhouronghua/code-agent/releases/latest/download/zhouronghua-code-agent-x.y.z.tgz`
 
-### 通过 npm registry 分发
+### 通过 GitHub Packages (npm registry) 分发
+
+包名作用域 `@zhouronghua`，registry 为 `https://npm.pkg.github.com`：
 
 ```bash
-npm publish --access public
+# 本地手发（需要 write:packages 权限的 PAT）
+export NODE_AUTH_TOKEN=<YOUR_GITHUB_PAT>
+npm publish
+
+# 安装
+npm config set @zhouronghua:registry https://npm.pkg.github.com
+npm install -g @zhouronghua/code-agent
 ```
+
+> 推 tag 时 `release.yml` 的 `publish-github-packages` job 会自动发布，无需手工执行。
+> 如需同时发布到公共 npmjs.com，需在仓库 Secrets 中配置 `NPM_TOKEN` 并恢复对应 job。
 
 ### 单文件分发
 
@@ -586,14 +602,14 @@ node agent-cli.js "your task"
 ## 快速上手（收到安装包后）
 
 ```bash
-# 1. 安装（从 GitHub Releases 或 npm）
-npm install -g code-agent
+# 1. 安装（从 GitHub Releases 或 GitHub Packages）
+npm install -g @zhouronghua/code-agent
 
 # 2. 创建配置（全局，只需一次）
 mkdir -p ~/.codeagent
 code-agent --help   # 查看模板位置
 # 从安装包复制模板：
-cp $(npm root -g)/code-agent/config.template.yaml ~/.codeagent/config.yaml
+cp $(npm root -g)/@zhouronghua/code-agent/config.template.yaml ~/.codeagent/config.yaml
 
 # 3. 编辑配置，填入你的 API key
 vi ~/.codeagent/config.yaml

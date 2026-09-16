@@ -1,6 +1,9 @@
 {
-  "name": "code-agent",
+  "name": "@zhouronghua/code-agent",
   "version": "0.3.36",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "description": "AI coding agent CLI with multi-provider LLM support, Cursor-compatible skills, and VS Code architecture",
   "main": "build/agent-cli.js",
   "bin": {

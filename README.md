@@ -18,14 +18,15 @@ AI coding agent CLI, built on VS Code architecture with multi-provider LLM suppo
 
 ```bash
 # Install from GitHub Releases
-npm install -g https://github.com/zhouronghua/code-agent/releases/latest/download/code-agent-0.3.10.tgz
+npm install -g https://github.com/zhouronghua/code-agent/releases/latest/download/zhouronghua-code-agent-0.3.36.tgz
 
-# Or install from npm (if published)
-npm install -g code-agent
+# Or install from GitHub Packages (this repo's npm registry)
+npm config set @zhouronghua:registry https://npm.pkg.github.com
+npm install -g @zhouronghua/code-agent   # requires a PAT with read:packages
 
 # Create config
 mkdir -p ~/.codeagent
-cp $(npm root -g)/code-agent/config.template.yaml ~/.codeagent/config.yaml
+cp $(npm root -g)/@zhouronghua/code-agent/config.template.yaml ~/.codeagent/config.yaml
 # Edit config.yaml: fill in your API key
 
 # Run
