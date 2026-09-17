@@ -89,7 +89,7 @@ chmod +x code-agent-portable-linux-x64
   若目标机器系统更老（glibc 更低），请用 `NODE_SRC_BIN` 指定一个与目标机兼容的
   node 再构建（建议先在一台与目标机同代的机器上验证 `node --version` 可运行）。
 - 使用方法三/方法四一致的配置方式：把 `config.template.yaml` 复制为
-  `~/.codeagent/config.yaml` 并填入 API key 即可。
+  `~/.agent/config.yaml` 并填入 API key 即可。
 
 ## 配置
 
@@ -104,8 +104,8 @@ CodeAgent 通过 YAML 配置文件管理 LLM 提供商和参数，**不需要每
 cp config.template.yaml config.yaml
 
 # 或者全局配置（所有项目共享）
-mkdir -p ~/.codeagent
-cp config.template.yaml ~/.codeagent/config.yaml
+mkdir -p ~/.agent
+cp config.template.yaml ~/.agent/config.yaml
 ```
 
 ### 第二步：填入 API 密钥
@@ -130,8 +130,36 @@ profiles:
 1. CLI 参数（`--profile`、`--mode` 等）
 2. 环境变量（`OPENAI_API_KEY`、`LLM_MODEL`、`LLM_PROVIDER`、`LLM_API_BASE`）
 3. 项目目录下的 `config.yaml`
-4. `~/.codeagent/config.yaml`
+4. `~/.agent/config.yaml`
 5. 内置默认值
+
+### 配置目录（`~/.agent`）与全局规则 `agent.md`
+
+自 v0.3.37 起，全局配置目录从 `~/.codeagent` 调整为 **`~/.agent`**（对齐 Claude 的
+`~/.claude` 布局）。旧目录仍会被读取，且在首次启动时**自动迁移**：
+
+| 内容 | 迁移方式 |
+| --- | --- |
+| `config.yaml` / `config.json` / `models.json` / `mcp.json` / `agent.md` / `rules/` | 复制 |
+| `skills/` / `sessions/` / `tasks/`（可能很大） | 符号链接（不支持软链时退回复制） |
+
+旧目录 `~/.codeagent` **不会被删除**，作为兜底与回滚点；也可用环境变量
+`AGENT_HOME=<dir>` 覆盖全局配置目录（便携版 / 隔离测试）。
+
+全局/项目规则支持 Claude 风格的**单文件** `agent.md`（内容始终生效）：
+
+```
+~/.agent/agent.md              # 全局规则（本文档推荐的单一来源）
+<项目根>/.agent/agent.md        # 项目级规则，后加载，可覆盖/补充全局
+~/.agent/rules/*.mdc           # 兼容保留：Cursor 风格多文件规则
+```
+
+`agent.md` 无需 frontmatter；若写了 frontmatter，可用 `description` 覆盖展示名，
+`alwaysApply: false` 可把它降级为“按需匹配”。查看加载结果：
+
+```bash
+code-agent --show-skills    # 列出已加载的 skills 与 rules（含 agent.md）
+```
 
 即使没有配置文件，设置环境变量也能正常工作：
 
@@ -207,7 +235,7 @@ profile 名。存在 `model_routing` 配置段即默认启用（`enabled: false`
 [MODEL] ✓ deepseek-flash reachable again → switched back from 保底模型 gpt-5.6-luna
 ```
 
-切换的完整记录也会写入 task log 的 `modelSwitches` 字段（`~/.codeagent/tasks/task_*.json`），
+切换的完整记录也会写入 task log 的 `modelSwitches` 字段（`~/.agent/tasks/task_*.json`），
 便于事后定位「当时到底是哪个模型在回答」。
 
 #### 保底模型的后台探活
@@ -239,6 +267,20 @@ reached`，会把健康模型误判成不可达。探针节奏可用 `model_rout
    会清掉历史里的 `reasoning_content`**；两个 thinking 模型之间切换则保留历史（provider 已有的
    归一化逻辑会处理，避免引入新风险）。只清 `reasoning_content`，`content` 与 `tool_calls`
    保持不变，不会产生孤儿 tool 消息。
+
+   > **注意（v0.3.37 修复）**：清空后必须保证「网关要求回传」的模型仍能收到该字段。
+   > 实测 `api.enflame.cn` 的 `deepseek-flash` / `deepseek-v4-pro` **本身就是 thinking 模式**
+   > （即使 `models.json` 标注 `supportsReasoning: false`、请求里也不带 `thinking` 参数，
+   > 返回依然带 `reasoning_content`），并且要求请求里**每条** assistant 消息都带
+   > `reasoning_content`（空串可以，缺字段报 400
+   > `The reasoning_content in the thinking mode must be passed back to the API`）。
+   > 只要请求以 tool 结果结尾（agent 循环的常态），缺字段就会让任务直接失败——这正是
+   > 「切回默认模型后立刻 400」的根因。现在 provider 会：
+   >
+   > 1. 记住该模型**实际**返回过 `reasoning_content`（以实测为准，而不是只看模型名/配置）；
+   > 2. 只要在 thinking 模式，就给每条 assistant 消息回填 `reasoning_content`（有则原值，无则空串）；
+   > 3. 若仍然收到该 400（例如新进程 resume 一个 reasoning 已被清掉的历史），自动补全字段**重发一次**，
+   >    并记住该模型处于 thinking 模式，后续请求不再失败。
 
 另外，控制台打印的 `THINKING` 内容超过 4000 字符时会做首尾截断并标注省略量，不会再把
 一个 98k 字符的死循环思考整段刷到终端上。
@@ -314,7 +356,7 @@ code-agent --batch \
   --mode agent \
   --use-skill caps-llvm-nda-daily \
   --mcp on --mcp-tools "add_gerrit_review,list_pipeline_runs,trigger_pipeline" \
-  --cwd /home/ronghua.zhou/.codeagent/skills/caps-llvm-nda-daily \
+  --cwd /home/ronghua.zhou/.agent/skills/caps-llvm-nda-daily \
   --batch-log   logs/daily.log \
   --batch-result logs/daily.result.json \
   --lock        logs/daily.lock \
@@ -331,7 +373,7 @@ code-agent --batch \
 | `--lock <file>` | 建议锁文件；已被其它进程持有时本次直接跳过（退出 0） |
 | `--cwd <dir>` | 运行前切换工作目录 |
 | `--step-timeout <ms>` | 覆盖单次工具调用超时（长任务可调大） |
-| `--mcp <off\|on\|a,b>` | 加载 MCP 服务器（`on` = config.yaml + ~/.codeagent/mcp.json） |
+| `--mcp <off\|on\|a,b>` | 加载 MCP 服务器（`on` = config.yaml + ~/.agent/mcp.json） |
 | `--mcp-tools <a,b,c>` | 只暴露这些 MCP 工具（全局白名单，强烈建议） |
 
 退出码：`0` 成功 / `1` 任务失败 / `2` 用法错误 / `124` 超时；`--lock` 被占用时跳过为 `0`。
@@ -351,7 +393,7 @@ code-agent --batch \
 `--mcp` 加载 MCP 服务器并把其工具注册为 agent 工具：
 
 - `--mcp off` / 不传：只加载 `config.yaml` 的 `mcp_servers`（默认行为）；
-- `--mcp on`：加载 `config.yaml` 的 `mcp_servers` **加上** `~/.codeagent/mcp.json`
+- `--mcp on`：加载 `config.yaml` 的 `mcp_servers` **加上** `~/.agent/mcp.json`
   的 `mcpServers`（dolphin / opendisplay 等）；
 - `--mcp dolphin,opendisplay`：只加载指定服务器。
 
@@ -520,9 +562,9 @@ memory:
   capture: true                       # 任务后自动捕获 L0（默认 true）
 ```
 
-### 配置方式二：MCP 配置（~/.codeagent/mcp.json）
+### 配置方式二：MCP 配置（~/.agent/mcp.json）
 
-用户名与凭据也可以写在 `~/.codeagent/mcp.json` 的 `mcpServers.tdai_agent_mem` 条目：
+用户名与凭据也可以写在 `~/.agent/mcp.json` 的 `mcpServers.tdai_agent_mem` 条目：
 
 ```json
 {
@@ -606,13 +648,13 @@ node agent-cli.js "your task"
 npm install -g @zhouronghua/code-agent
 
 # 2. 创建配置（全局，只需一次）
-mkdir -p ~/.codeagent
+mkdir -p ~/.agent
 code-agent --help   # 查看模板位置
 # 从安装包复制模板：
-cp $(npm root -g)/@zhouronghua/code-agent/config.template.yaml ~/.codeagent/config.yaml
+cp $(npm root -g)/@zhouronghua/code-agent/config.template.yaml ~/.agent/config.yaml
 
 # 3. 编辑配置，填入你的 API key
-vi ~/.codeagent/config.yaml
+vi ~/.agent/config.yaml
 # 修改 active_profile 和对应 profile 的 api_key
 
 # 4. 验证

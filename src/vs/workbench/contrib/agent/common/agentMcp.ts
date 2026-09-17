@@ -11,7 +11,7 @@
  *
  *  Servers are resolved from:
  *    1. config.yaml `mcp_servers:`   (ResolvedConfig.mcpServers)
- *    2. ~/.codeagent/mcp.json        (Cursor / VS Code compatible)
+ *    2. <agent home>/mcp.json        (Cursor / VS Code compatible, ~/.agent)
  *
  *  Per-server `tools: [..]` is an optional allowlist. This matters because some
  *  gateways (e.g. dolphin) advertise 180+ tools; without an allowlist the prompt
@@ -26,6 +26,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { IToolResult } from 'vs/workbench/services/agent/common/agentModels';
 import { AgentTool, ToolRegistry } from './agentTools';
+import { agentHomeFileCandidates } from './agentHome';
 
 export interface McpServerSpec {
 	name: string;
@@ -352,7 +353,7 @@ export class McpTool extends AgentTool {
 export function loadMcpServersFromJsonFile(file?: string): McpServerSpec[] {
 	const candidates = file
 		? [file]
-		: ['~/.codeagent/mcp.json', '~/.codeagent/.mcp.json'];
+		: [...agentHomeFileCandidates('mcp.json'), ...agentHomeFileCandidates('.mcp.json')];
 	for (const c of candidates) {
 		const p = expandHome(c);
 		try {

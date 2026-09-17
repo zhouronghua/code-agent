@@ -408,6 +408,81 @@ async function testReasoningLoopRecovery(): Promise<void> {
 	agent.dispose();
 }
 
+async function testThinkingEchoBackOnRecovery(): Promise<void> {
+	console.log('\n[8] thinking-mode echo-back survives a 保底-model recovery');
+
+	// Emulates the gateway rule measured on api.enflame.cn: a model that answers in
+	// thinking mode rejects any request whose assistant messages do NOT all carry
+	// reasoning_content (an EMPTY string is accepted) while the request itself ends
+	// with tool results. Verified requests against the real gateway:
+	//   assistant(tool_calls) + tool, no reasoning content on ANY assistant → 400
+	//   same history with reasoning_content:"" on ALL assistant messages   → 200
+	const http = await import('node:http');
+	type SentBody = { messages: Array<{ role: string; reasoning_content?: string }> };
+	const sent: SentBody[] = [];
+	const server = http.createServer((req, res) => {
+		let raw = '';
+		req.on('data', chunk => { raw += chunk; });
+		req.on('end', () => {
+			const body = JSON.parse(raw) as SentBody;
+			sent.push(body);
+			const msgs = body.messages || [];
+			const assistants = msgs.filter(m => m.role === 'assistant');
+			const endsWithToolResult = msgs.length > 0 && msgs[msgs.length - 1].role === 'tool';
+			const missingEcho = assistants.some(m => !('reasoning_content' in m));
+			if (endsWithToolResult && assistants.length > 0 && missingEcho) {
+				res.writeHead(400, { 'Content-Type': 'application/json' });
+				res.end(JSON.stringify({ error: {
+					message: 'The `reasoning_content` in the thinking mode must be passed back to the API.',
+					type: 'invalid_request_error', param: '', code: 'invalid_request_error',
+				} }));
+				return;
+			}
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({
+				choices: [{ message: { role: 'assistant', reasoning_content: 'thinking…', content: 'ok' } }],
+				usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+			}));
+		});
+	});
+	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
+
+	// The history a recovered session hands back to the primary model: the last
+	// turns belong to the non-thinking 保底 model, and the chain-of-thought of the
+	// earlier turns was dropped on the switch — so NO assistant message has it.
+	const recoveredHistory: IAgentMessage[] = [
+		createMessage(MessageRole.User, 'run ls'),
+		createMessage(MessageRole.Assistant, 'I ran ls and got three entries.', {
+			toolCalls: [{ id: 'call_1', name: 'run_terminal', arguments: { command: 'ls' } }],
+		}),
+		createMessage(MessageRole.Tool, 'a b c', { toolCallId: 'call_1' }),
+	];
+
+	// ---- (a) The model already answered in thinking mode before the swap ----
+	const primary = new OpenAIProvider(makeConfig('deepseek-flash', { apiBase: base }));
+	await primary.complete([createMessage(MessageRole.User, 'ping')]);
+	ok(primary.supportsReasoning(), 'a model that answered with reasoning_content is known to think');
+
+	sent.length = 0;
+	await primary.complete(recoveredHistory);
+	eq(sent.length, 1, 'no repair round-trip is needed once the model is known to think');
+	const echoed = sent[0].messages.filter(m => m.role === 'assistant');
+	ok(echoed.length > 0 && echoed.every(m => 'reasoning_content' in m),
+		'the request to the thinking model echoes reasoning_content on EVERY assistant message');
+
+	// ---- (b) Fresh process resuming a session whose reasoning was stripped ----
+	const resumed = new OpenAIProvider(makeConfig('deepseek-flash', { apiBase: base }));
+	ok(!resumed.supportsReasoning(), 'a fresh provider has no evidence yet');
+	sent.length = 0;
+	const answer = await resumed.complete(recoveredHistory);
+	eq(sent.length, 2, 'the rejected request is resent once with reasoning_content restored');
+	ok((answer.content || '') === 'ok' || !!answer, 'the retry succeeds instead of failing the task');
+	ok(resumed.supportsReasoning(), 'the model is remembered as a thinking model after the repair');
+
+	await new Promise<void>(resolve => server.close(() => resolve()));
+}
+
 async function main(): Promise<void> {
 	await testDegenerateReasoningDetection();
 	testReportFormatting();
@@ -416,6 +491,7 @@ async function main(): Promise<void> {
 	await testFallbackConfigResolution();
 	await testOpenAiHealthCheck();
 	await testReasoningLoopRecovery();
+	await testThinkingEchoBackOnRecovery();
 
 	console.log(`\n${failed === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED'}: ${passed} passed, ${failed} failed`);
 	process.exit(failed === 0 ? 0 : 1);

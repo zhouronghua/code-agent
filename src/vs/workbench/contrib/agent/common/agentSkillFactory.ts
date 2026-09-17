@@ -18,6 +18,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { agentHomeDir } from './agentHome';
 import * as os from 'node:os';
 
 /** Canonical skill input - same contract as dsh-run2skill CanonicalSkillInput. */
@@ -386,7 +387,7 @@ export function recallExistingSkills(
 
 /** Default skills directory used when none is configured. */
 export function defaultSkillsDir(): string {
-	return path.join(os.homedir(), '.codeagent', 'skills');
+	return path.join(agentHomeDir(), 'skills');
 }
 
 /**

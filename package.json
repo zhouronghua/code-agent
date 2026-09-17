@@ -1,6 +1,6 @@
 {
   "name": "@zhouronghua/code-agent",
-  "version": "0.3.36",
+  "version": "0.3.37",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
@@ -38,6 +38,8 @@
     "start": "node build/agent-cli.js",
     "start:mock": "MOCK_LLM=1 node standalone-demo/agent.mjs",
     "test:model-switch": "esbuild tests/model-switch.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/model-switch.test.mjs --tsconfig=tsconfig.json && node build/model-switch.test.mjs",
+    "test:agent-home": "esbuild tests/agent-home.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/agent-home.test.mjs --tsconfig=tsconfig.json && node build/agent-home.test.mjs",
+    "test": "npm run test:model-switch && npm run test:agent-home",
     "clean": "rm -rf build",
     "pack": "npm run build:release && npm pack",
     "link": "npm run build && npm link",

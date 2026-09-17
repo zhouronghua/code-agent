@@ -250,7 +250,7 @@ interface IAgentConfig {
 TypeScript 入口，负责：
 
 - **参数解析**：`--mode`, `--stream`, `--parallel`, `--profile`, `--profiles`, `--skills`, `--use-skill`
-- **配置加载**：CLI 参数 > 环境变量 > `config.yaml` > `~/.codeagent/config.yaml`
+- **配置加载**：CLI 参数 > 环境变量 > `config.yaml` > `~/.agent/config.yaml`
 - **服务创建**：实例化 LLM Provider、文件服务、搜索服务、终端服务、工具注册
 - **Agent 循环**：单次任务或交互式 REPL
 - **技能注入**：`buildSkillsContext()` 将 rules + skills 拼入 system prompt
@@ -415,7 +415,7 @@ MOCK_LLM=1 node agent.mjs   # Mock 模式，无需 API Key
 1. CLI 参数（`--profile`, `--mode` 等）
 2. 环境变量（`OPENAI_API_KEY`, `LLM_MODEL`, `LLM_PROVIDER`, `LLM_API_BASE`, `AGENT_PROFILE`）
 3. 项目目录 `./config.yaml`
-4. 全局配置 `~/.codeagent/config.yaml`
+4. 全局配置 `~/.agent/config.yaml`
 5. 内置默认值
 
 ### 配置结构

@@ -83,6 +83,22 @@ export class SkillsLoader {
 		}
 	}
 
+	/**
+	 * Load Claude-style instruction files (`agent.md`).
+	 *
+	 * A single Markdown file replaces a directory of `.mdc` rules for the
+	 * common case, and it is meant to be ALWAYS active: global instructions live
+	 * in `~/.agent/agent.md`, project instructions in `<project>/.agent/agent.md`
+	 * (see agentInstructionFiles()). Frontmatter is optional; `description`, when
+	 * absent, comes from the first non-empty line so the file renders like a rule.
+	 */
+	loadAgentMdFiles(paths: string[]): void {
+		for (const filePath of paths) {
+			if (!fs.existsSync(filePath)) continue;
+			this._loadAgentMd(filePath);
+		}
+	}
+
 	get skills(): readonly ISkill[] { return this._skills; }
 	get rules(): readonly IRule[] { return this._rules; }
 
@@ -138,18 +154,24 @@ export class SkillsLoader {
 		return lines.join('\n');
 	}
 
+	/**
+	 * Rules excluded from a host's prompt (e.g. the IDE-only AskQuestion rule in
+	 * the CLI). Matching is by rule IDENTITY — file name and description — never
+	 * by the rule body: a rule like `agent.md` may legitimately MENTION another
+	 * rule's topic, and a content match would then silently drop the whole file.
+	 */
+	private _filterRules(rules: IRule[], excludePatterns?: string[]): IRule[] {
+		if (!excludePatterns || excludePatterns.length === 0) return rules;
+		return rules.filter(rule => {
+			const identity = `${path.basename(rule.filePath)} ${rule.description}`.toLowerCase();
+			return !excludePatterns.some(p => identity.includes(p.toLowerCase()));
+		});
+	}
+
 	buildRulesPromptSection(excludePatterns?: string[]): string {
 		let alwaysRules = this.getAlwaysApplyRules();
 
-		if (excludePatterns && excludePatterns.length > 0) {
-			alwaysRules = alwaysRules.filter(r => {
-				const lowerDesc = r.description.toLowerCase();
-				const lowerContent = r.content.toLowerCase();
-				return !excludePatterns.some(p =>
-					lowerDesc.includes(p.toLowerCase()) || lowerContent.includes(p.toLowerCase())
-				);
-			});
-		}
+		alwaysRules = this._filterRules(alwaysRules, excludePatterns);
 
 		if (alwaysRules.length === 0) return '';
 
@@ -172,15 +194,7 @@ export class SkillsLoader {
 	buildPreloadRulesPromptSection(excludePatterns?: string[]): string {
 		let rules = [...this._rules];
 
-		if (excludePatterns && excludePatterns.length > 0) {
-			rules = rules.filter(r => {
-				const lowerDesc = r.description.toLowerCase();
-				const lowerContent = r.content.toLowerCase();
-				return !excludePatterns.some(p =>
-					lowerDesc.includes(p.toLowerCase()) || lowerContent.includes(p.toLowerCase())
-				);
-			});
-		}
+		rules = this._filterRules(rules, excludePatterns);
 
 		if (rules.length === 0) return '';
 
@@ -293,9 +307,9 @@ export class SkillsLoader {
 	 * tools/skillTools.ts (skill_catalog / create_skill / update_skill).
 	 */
 	buildMetaSkillPromptSection(skillsDirs: string[]): string {
-		const primaryDir = skillsDirs[0] || '~/.codeagent/skills';
+		const primaryDir = skillsDirs[0] || '~/.agent/skills';
 		return `\n## Skill Crafting (Meta-Skill: skills of skills)
-You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL.md\` files loaded from: ${skillsDirs.join(', ') || '~/.codeagent/skills'} (primary: ${primaryDir}).
+You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL.md\` files loaded from: ${skillsDirs.join(', ') || '~/.agent/skills'} (primary: ${primaryDir}).
 
 ### When to create or update a skill
 - The user explicitly asks to save a workflow/constraint as a reusable skill ("保存为skill", "save this as a skill").
@@ -418,6 +432,26 @@ You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL
 				filePath,
 				content: body,
 				alwaysApply: meta.alwaysApply === 'true',
+			});
+		} catch {
+			// skip
+		}
+	}
+
+	/** Load one `agent.md` instruction file as an always-apply rule. */
+	private _loadAgentMd(filePath: string): void {
+		try {
+			const raw = fs.readFileSync(filePath, 'utf-8');
+			const { meta, body } = parseFrontmatter(raw);
+			const heading = body.split('\n').map(l => l.trim()).find(l => l.length > 0) || '';
+			const fallback = heading.replace(/^#+\s*/, '').slice(0, 120) || path.basename(filePath);
+
+			this._rules.push({
+				description: meta.description || `agent.md instructions (${fallback})`,
+				filePath,
+				content: body,
+				// Instructions are active by default; opt out with `alwaysApply: false`.
+				alwaysApply: meta.alwaysApply !== 'false',
 			});
 		} catch {
 			// skip

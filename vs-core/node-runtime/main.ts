@@ -18,7 +18,7 @@
  *    1. CLI flags
  *    2. Environment variables (OPENAI_API_KEY, LLM_MODEL, etc.)
  *    3. ./config.yaml
- *    4. ~/.codeagent/config.yaml
+ *    4. ~/.agent/config.yaml (legacy ~/.codeagent still read)
  *--------------------------------------------------------------------------------------------*/
 
 import * as readline from 'node:readline';
@@ -47,6 +47,8 @@ import { loadMcpServersFromJsonFile, registerMcpTools, McpServerSpec } from '../
 import { loadConfig, loadConfigForProfile, listProfiles, ResolvedConfig } from '../../src/vs/workbench/contrib/agent/common/agentConfig';
 import { ModelRouter } from '../../src/vs/workbench/contrib/agent/common/agentModelRouter';
 import { SkillsLoader } from '../../src/vs/workbench/contrib/agent/common/agentSkills';
+import { defaultSkillsDir } from '../../src/vs/workbench/contrib/agent/common/agentSkillFactory';
+import { agentInstructionFiles, agentHomeDir, migrateLegacyAgentHome } from '../../src/vs/workbench/contrib/agent/common/agentHome';
 import { SkillCatalogTool, CreateSkillTool, UpdateSkillTool } from '../../src/vs/workbench/contrib/agent/common/tools/skillTools';
 import { loadMemoryConfig, MemoryClient, MemorySearchTool, ConversationSearchTool, MemoryReadTool, MemoryWriteTool } from '../../src/vs/workbench/contrib/agent/common/agentMemory';
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
@@ -165,7 +167,7 @@ function mergeMcpSpecs(primary: McpServerSpec[], secondary: McpServerSpec[]): Mc
 /**
  * Resolve which MCP servers to load:
  *   --mcp off            → none
- *   --mcp on             → config.yaml `mcp_servers` + ~/.codeagent/mcp.json
+ *   --mcp on             → config.yaml `mcp_servers` + ~/.agent/mcp.json
  *   --mcp a,b            → only the named servers from the merged set
  *   (no --mcp flag)      → config.yaml `mcp_servers` only (docs-compatible)
  */
@@ -607,7 +609,7 @@ Batch / Cron:
 MCP tools:
   Skills such as dolphin-mcp / caps-llvm-nda-daily call external MCP tools.
   Pass --mcp on to load servers from config.yaml mcp_servers and
-  ~/.codeagent/mcp.json. Without --mcp only config.yaml mcp_servers load.
+  ~/.agent/mcp.json. Without --mcp only config.yaml mcp_servers load.
   Restrict the exposed tool set with --mcp-tools (recommended: some gateways
   advertise 180+ tools). A per-server "tools: [...]" entry is honoured too.
 
@@ -616,13 +618,13 @@ Session Management:
   - Auto-save: after each run, the session is saved automatically.
   - REPL commands: /save, /sessions, /resume, /new, /auto-save
   - Tab-completion: press Tab to auto-complete /resume, /mode, /profile, /skill, etc.
-  - Storage: ~/.codeagent/sessions/
+  - Storage: ~/.agent/sessions/
 
 Task Logs (for troubleshooting):
   - Auto-save: after each task, a detailed execution log is saved automatically.
   - Includes: LLM requests/responses, tool calls with arguments and results, timings.
   - REPL commands: /tasks, /task <id>, /delete-task <id>
-  - Storage: ~/.codeagent/tasks/
+  - Storage: ~/.agent/tasks/
 
 Intervention:
   /btw <hint>    While the agent is running, inject a hint into its reasoning
@@ -640,7 +642,7 @@ Modes:
 Config (searched in order):
   1. CLI flags / env vars (OPENAI_API_KEY, LLM_MODEL, etc.)
   2. ./config.yaml
-  3. ~/.codeagent/config.yaml
+  3. ~/.agent/config.yaml
 `);
 }
 
@@ -648,7 +650,7 @@ async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 
 	const config = resolved.agentConfig;
 
 	if (!config.apiKey) {
-		console.error(`${C.red}No API key found. Set OPENAI_API_KEY, or configure apiKey in ~/.codeagent/models.json or config.yaml.${C.reset}`);
+		console.error(`${C.red}No API key found. Set OPENAI_API_KEY, or configure apiKey in ~/.agent/models.json or config.yaml.${C.reset}`);
 		process.exit(1);
 	}
 
@@ -674,14 +676,14 @@ async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 
 	// skill library using canonical SKILL.md files (see agentSkillFactory.ts).
 	const skillDirs = resolved.skillsDirs && resolved.skillsDirs.length > 0
 		? resolved.skillsDirs
-		: [nodePath.join(nodeOs.homedir(), '.codeagent', 'skills')];
+		: [defaultSkillsDir()];
 	toolRegistry.register(new SkillCatalogTool(skillDirs));
 	toolRegistry.register(new CreateSkillTool(skillDirs));
 	toolRegistry.register(new UpdateSkillTool(skillDirs));
 
 	// ---- Shared memory (tdai_agent_mem) ----
 	// Tools + auto recall/capture are enabled when config.yaml `memory:` or
-	// ~/.codeagent/mcp.json `mcpServers.tdai_agent_mem` is present.
+	// ~/.agent/mcp.json `mcpServers.tdai_agent_mem` is present.
 	// --memory off forces the feature off (deterministic benchmarks); --memory on
 	// forces it on when the config exists.
 	const memoryConfig = memoryOverride === 'off' ? undefined : loadMemoryConfig();
@@ -964,7 +966,7 @@ async function main() {
 	if (opts.showProfiles) {
 		const profiles = listProfiles();
 		if (profiles.length === 0) {
-			console.log(`${C.dim}No models.json or config.yaml found. Create ~/.codeagent/models.json or ~/.codeagent/config.yaml${C.reset}`);
+			console.log(`${C.dim}No models.json or config.yaml found. Create ~/.agent/models.json or ~/.agent/config.yaml${C.reset}`);
 		} else {
 			console.log(`\n${C.bold}Available profiles:${C.reset}`);
 			for (const p of profiles) {
@@ -1047,6 +1049,11 @@ async function main() {
 		return;
 	}
 
+	// Move an existing ~/.codeagent installation to ~/.agent (copy, never delete).
+	migrateLegacyAgentHome(message => console.log(`${C.dim}${message}${C.reset}`));
+	// Where global config/skills/sessions live — printed once so a path mistake is obvious.
+	console.log(`${C.dim}Config home: ${agentHomeDir()}${C.reset}`);
+
 	// Load config (merges config.yaml + env vars + CLI flags)
 	let resolved = loadConfig(opts.profile);
 
@@ -1059,6 +1066,8 @@ async function main() {
 	const skillsLoader = new SkillsLoader();
 	skillsLoader.loadSkillsFromDirs(resolved.skillsDirs);
 	skillsLoader.loadRulesFromDirs(resolved.rulesDirs);
+	// Claude-style instruction files: ~/.agent/agent.md then <project>/.agent/agent.md.
+	skillsLoader.loadAgentMdFiles(agentInstructionFiles(process.cwd()));
 	setResolvedSkillDirs(resolved.skillsDirs);
 
 	if (opts.showSkills) {
@@ -1682,7 +1691,7 @@ function getResolvedSkillDirs(): string[] {
 	return _resolvedSkillDirs;
 }
 function setResolvedSkillDirs(dirs: string[]): void {
-	_resolvedSkillDirs = dirs && dirs.length > 0 ? dirs : [nodePath.join(nodeOs.homedir(), '.codeagent', 'skills')];
+	_resolvedSkillDirs = dirs && dirs.length > 0 ? dirs : [defaultSkillsDir()];
 }
 
 main().catch(err => { console.error('Fatal:', err); process.exit(1); });

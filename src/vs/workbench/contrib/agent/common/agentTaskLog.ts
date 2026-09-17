@@ -5,15 +5,15 @@
  *  - Auto-save after each task execution (LLM calls, tool invocations, results)
  *  - List task logs with metadata (task summary, duration, status, timestamps)
  *  - View full task execution trace (step-by-step LLM interactions + tool results)
- *  - Storage: ~/.codeagent/tasks/ as JSON files
+ *  - Storage: <agent home>/tasks/ as JSON files (~/.agent)
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { IAgentTaskLog } from 'vs/workbench/services/agent/common/agentModels';
+import { agentHomeDir } from './agentHome';
 
-const TASKS_DIR = path.join(os.homedir(), '.codeagent', 'tasks');
+const TASKS_DIR = path.join(agentHomeDir(), 'tasks');
 const TASK_INDEX_FILE = '_index.json';
 
 interface TaskIndexEntry {

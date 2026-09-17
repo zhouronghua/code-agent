@@ -5,8 +5,8 @@
  *    1. CLI flags (--profile, --model, etc.)
  *    2. Environment variables (OPENAI_API_KEY, LLM_MODEL, etc.)
  *    3. Project config.yaml / config.json (in CWD)
- *    4. Global ~/.codeagent/config.yaml / config.json
- *    5. models.json (CodeBuddy-compatible, ~/.codeagent/models.json or ~/.codebuddy/models.json)
+ *    4. Global ~/.agent/config.yaml / config.json (legacy ~/.codeagent still read)
+ *    5. models.json (CodeBuddy-compatible, ~/.agent/models.json or ~/.codebuddy/models.json)
  *    6. Built-in defaults
  *--------------------------------------------------------------------------------------------*/
 
@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { IAgentConfig, DEFAULT_AGENT_CONFIG } from 'vs/workbench/services/agent/common/agentModels';
+import { agentHomeFileCandidates } from './agentHome';
 
 interface ConfigProfile {
 	provider: string;
@@ -289,8 +290,8 @@ function findConfigFile(): string | undefined {
 	const candidates = [
 		path.join(process.cwd(), 'config.yaml'),
 		path.join(process.cwd(), 'config.json'),
-		path.join(os.homedir(), '.codeagent', 'config.yaml'),
-		path.join(os.homedir(), '.codeagent', 'config.json'),
+		...agentHomeFileCandidates('config.yaml'),
+		...agentHomeFileCandidates('config.json'),
 	];
 	return candidates.find(p => fs.existsSync(p));
 }
@@ -298,7 +299,7 @@ function findConfigFile(): string | undefined {
 function findModelsJson(): string | undefined {
 	const candidates = [
 		path.join(process.cwd(), 'models.json'),
-		path.join(os.homedir(), '.codeagent', 'models.json'),
+		...agentHomeFileCandidates('models.json'),
 		path.join(os.homedir(), '.codebuddy', 'models.json'),  // shared compat
 	];
 	return candidates.find(p => fs.existsSync(p));
@@ -401,6 +402,14 @@ function profileToAgentConfig(profile: ConfigProfile, agent: ConfigFile['agent']
 const MIN_INPUT_BUDGET = 4096;
 
 /**
+ * Where skills/rules live when config.yaml does not say. `~/.agent` is the
+ * current home; `~/.codeagent` and `~/.cursor` stay supported so an existing
+ * installation keeps working without editing its config.
+ */
+const DEFAULT_SKILLS_DIRS = ['~/.agent/skills', '~/.codeagent/skills', '~/.cursor/skills'];
+const DEFAULT_RULES_DIRS = ['~/.agent/rules', '~/.codeagent/rules', '~/.cursor/rules'];
+
+/**
  * Normalize context/output token budgets so the completion reservation can never
  * consume the entire context window. Without this, maxOutputTokens >= maxInputTokens
  * leaves zero room for messages and triggers "maximum context length" API errors.
@@ -491,8 +500,8 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		taskTimeout: fileConfig.agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,
 	};
 
-	const skillsDirs = (fileConfig.skills || ['~/.cursor/skills']).map(resolveHomePath);
-	const rulesDirs = (fileConfig.rules || ['~/.cursor/rules']).map(resolveHomePath);
+	const skillsDirs = (fileConfig.skills || DEFAULT_SKILLS_DIRS).map(resolveHomePath);
+	const rulesDirs = (fileConfig.rules || DEFAULT_RULES_DIRS).map(resolveHomePath);
 
 	const mcpServers: McpServerEntry[] = Object.entries(fileConfig.mcp_servers || {}).map(
 		([name, srv]) => ({ name, ...srv })

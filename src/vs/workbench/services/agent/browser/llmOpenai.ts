@@ -123,6 +123,19 @@ function isReasoningModel(model: string): boolean {
 	return false;
 }
 
+/**
+ * Does this HTTP 400 come from the thinking-mode echo-back rule?
+ *
+ * Verified on api.enflame.cn (deepseek-flash / deepseek-v4-pro):
+ *   {"error":{"message":"The `reasoning_content` in the thinking mode must be
+ *    passed back to the API.","type":"invalid_request_error"}}
+ * It is raised when ANY assistant message in the request lacks the
+ * `reasoning_content` field while the model answers in thinking mode.
+ */
+function isReasoningEchoError(errorText: string): boolean {
+	return errorText.includes('reasoning_content') && errorText.includes('must be passed back');
+}
+
 export class OpenAIProvider implements ILLMProvider {
 	readonly name = 'openai';
 	private readonly _apiKey: string;
@@ -131,6 +144,27 @@ export class OpenAIProvider implements ILLMProvider {
 	private readonly _isReasoning: boolean;
 	private readonly _maxOutputTokens: number;
 	private readonly _maxContextTokens: number;
+
+	/**
+	 * Set as soon as this model has actually answered with `reasoning_content`.
+	 *
+	 * A gateway can run a model in thinking mode without announcing it: on
+	 * api.enflame.cn, `deepseek-flash` is declared `supportsReasoning: false`, no
+	 * `thinking` param is sent, yet every answer carries reasoning_content — and
+	 * any request that omits it is rejected with HTTP 400 ("The
+	 * `reasoning_content` in the thinking mode must be passed back to the API").
+	 * Trusting the observed behaviour instead of the model id is what keeps a
+	 * session alive after a 保底-model switch dropped the chain-of-thought.
+	 */
+	private _sawReasoning = false;
+
+	/**
+	 * Set when the API explicitly demanded the reasoning_content echo-back
+	 * (see `_doComplete`). Covers a model that has not answered yet in this
+	 * process — e.g. a fresh run resuming a session whose reasoning_content was
+	 * stripped, or a model this provider has never talked to.
+	 */
+	private _requiresReasoningEcho = false;
 
 	constructor(config: IAgentConfig) {
 		this._apiKey = config.apiKey;
@@ -238,6 +272,22 @@ export class OpenAIProvider implements ILLMProvider {
 						throw new ContextOverflowError(`Model context window exceeded: ${errorText}`);
 					}
 
+					// ---- Thinking-mode echo-back repair (保底 switch / resumed session) ----
+					// A thinking-mode model rejects the request when ANY assistant message lacks
+					// reasoning_content — including a history that legitimately has none (the 保底
+					// model owned the last turns, or the chain-of-thought was dropped when the model
+					// was switched). Restore the field once, then let this provider remember that the
+					// model answers in thinking mode.
+					if (allowRetry && response.status === 400 && !this._requiresReasoningEcho && isReasoningEchoError(errorText)) {
+						this._requiresReasoningEcho = true;
+						clearTimeout(apiTimeout);
+						console.warn(
+							`[LLM] ${this._model} answers in thinking mode — resending the request with ` +
+							`reasoning_content echoed back on every assistant message`
+						);
+						return this._doComplete(messages, tools, temperature, topK, false);
+					}
+
 					// Graceful recovery from DeepSeek-specific transient errors
 					if (this._isDeepSeekRecoverableError(response.status, errorText, attempt)) {
 						const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
@@ -283,6 +333,10 @@ export class OpenAIProvider implements ILLMProvider {
 						cachedTokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0,
 					}
 					: undefined;
+
+				// Remember that this model answers in thinking mode so every later
+				// request echoes reasoning_content back (see _convertMessages).
+				if (msg.reasoning_content) this._sawReasoning = true;
 
 				return createMessage(
 					MessageRole.Assistant,
@@ -635,9 +689,16 @@ export class OpenAIProvider implements ILLMProvider {
 
 	/**
 	 * Does this model use reasoning_content (thinking/chain-of-thought)?
+	 *
+	 * True when the model id looks like a reasoning model OR the API has shown
+	 * that it answers in thinking mode (it produced reasoning_content, or it
+	 * demanded the echo-back). The agent uses this to keep one model's
+	 * chain-of-thought out of another model, to avoid streaming (which loses
+	 * reasoning_content), and to decide whether a model switch has to preserve
+	 * the reasoning echo-back invariant.
 	 */
 	supportsReasoning(): boolean {
-		return this._isReasoning;
+		return this._isReasoning || this._sawReasoning || this._requiresReasoningEcho;
 	}
 
 	/**
@@ -687,13 +748,24 @@ export class OpenAIProvider implements ILLMProvider {
 	}
 
 	private _convertMessages(messages: IAgentMessage[]): OpenAIChatMessage[] {
-		// Reasoning model message handling:
-		// DeepSeek reasoner models require that if any assistant message contains
-		// reasoning_content, ALL assistant messages in the context must also have it.
-		// We filter out assistant messages without reasoning_content only in this case.
-		const hasThinking = messages.some(m =>
+		// Thinking-mode API contract (verified on the api.enflame.cn gateway):
+		// once a model answers in thinking mode, EVERY assistant message in the
+		// request must carry a `reasoning_content` field — an EMPTY string is
+		// accepted, a missing field is a hard 400 ("The `reasoning_content` in the
+		// thinking mode must be passed back to the API"). It is all-or-nothing:
+		// filling only the last assistant message still fails.
+		//
+		// The gate therefore cannot be "does THIS history contain reasoning?".
+		// After a 保底-model swap the chain-of-thought may have been dropped (or
+		// the last turns were produced by a non-thinking fallback model), yet the
+		// next request goes back to a thinking model and must restore the field.
+		// Verified failure: deepseek-flash → 保底 gpt-5.6-luna → recovered
+		// deepseek-flash, whose request already carried a tool result, failed with
+		// exactly that 400 and killed the task.
+		const historyHasThinking = messages.some(m =>
 			m.role === MessageRole.Assistant && m.reasoningContent
 		);
+		const thinkingMode = historyHasThinking || this.supportsReasoning();
 
 		// OpenAI API requires every assistant message to have EITHER non-null content
 		// OR non-empty tool_calls. Messages with only reasoning_content (thinking-only)
@@ -711,7 +783,7 @@ export class OpenAIProvider implements ILLMProvider {
 		// must have reasoning_content for API consistency.
 		// BUT: messages with tool_calls MUST be preserved even without reasoning_content,
 		// otherwise their tool result messages become orphaned and cause 400 errors.
-		if (hasThinking) {
+		if (thinkingMode) {
 			filtered = filtered.filter(m => {
 				if (m.role === MessageRole.Assistant) {
 					return !!m.reasoningContent || (!!m.toolCalls && m.toolCalls.length > 0);
@@ -749,7 +821,7 @@ export class OpenAIProvider implements ILLMProvider {
 
 			// In thinking mode, ALL assistant messages must have reasoning_content field
 			// If the original message had it, use it; otherwise use empty string
-			if (msg.role === MessageRole.Assistant && hasThinking) {
+			if (msg.role === MessageRole.Assistant && thinkingMode) {
 				converted.reasoning_content = msg.reasoningContent || '';
 			}
 

@@ -1,10 +1,15 @@
 # CodeAgent Configuration Template
 # Copy this file to one of the following locations:
 #   - ./config.yaml              (project-level, highest priority)
-#   - ~/.codeagent/config.yaml   (global, shared across projects)
+#   - ~/.agent/config.yaml       (global, shared across projects; legacy
+#                                 ~/.codeagent/config.yaml is auto-migrated on start)
+#
+# Global instructions / rules (Claude `CLAUDE.md` style, always active):
+#   - ~/.agent/agent.md              (global)
+#   - <project>/.agent/agent.md      (project-level, loaded after the global one)
 #
 # Model definitions are in models.json (CodeBuddy-compatible format).
-#   - ~/.codeagent/models.json   (global)
+#   - ~/.agent/models.json       (global)
 #   - ./models.json              (project-level)
 #
 # You can override specific model params in the profiles section below.
@@ -56,15 +61,17 @@ agent:
 # The agent scans these directories for skill definitions.
 # Each skill is a directory containing a SKILL.md file with frontmatter.
 skills:
-  - ~/.cursor/skills
-  - ~/.cursor/skills-cursor
-  - .cursor/skills
+  - ~/.agent/skills
+  - ~/.agent/skills-cursor
+  - .agent/skills
 
-# Rules directories (Cursor-compatible .mdc rule files)
+# Rules directories (Cursor-compatible .mdc rule files).
 # Rules with "alwaysApply: true" are automatically injected into every prompt.
+# NOTE: a single ~/.agent/agent.md (or <project>/.agent/agent.md) is the
+# recommended way to keep always-on instructions; .mdc dirs remain supported.
 rules:
-  - ~/.cursor/rules
-  - .cursor/rules
+  - ~/.agent/rules
+  - .agent/rules
 
 # MCP (Model Context Protocol) servers
 # Each server provides additional tools the agent can invoke.
@@ -100,7 +107,7 @@ rules:
 #   - registers tdai_memory_search / tdai_conversation_search / tdai_read_file /
 #     tdai_memory_write tools so the LLM can query/write memory directly.
 #
-# Credentials can also live in ~/.codeagent/mcp.json under
+# Credentials can also live in ~/.agent/mcp.json under
 # `mcpServers.tdai_agent_mem` (url + Authorization Bearer user key +
 # x-tdai-service-id header + username/teamId/agentId/userId).
 #

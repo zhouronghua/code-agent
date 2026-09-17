@@ -6,8 +6,8 @@
  *  the Memory hub (L0 conversation → L1 atom → L2 scenario → L3 persona).
  *
  *  Config resolution (highest priority first):
- *    1. config.yaml `memory:` section  (~/.codeagent/config.yaml or ./config.yaml)
- *    2. ~/.codeagent/mcp.json  `mcpServers.tdai_agent_mem` entry
+ *    1. config.yaml `memory:` section  (~/.agent/config.yaml or ./config.yaml)
+ *    2. <agent home>/mcp.json  `mcpServers.tdai_agent_mem` entry
  *
  *  mcp.json example:
  *    "tdai_agent_mem": {
@@ -25,10 +25,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { IToolResult } from 'vs/workbench/services/agent/common/agentModels';
 import { AgentTool } from './agentTools';
+import { agentHomeFileCandidates } from './agentHome';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -87,21 +87,16 @@ interface McpJsonFile {
 	}>;
 }
 
-function homePath(p: string): string {
-	if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
-	return p;
-}
-
 function env(headerKey: string, headers?: Record<string, string>): string | undefined {
 	if (!headers) return undefined;
 	return headers[headerKey] ?? headers[headerKey.toLowerCase()];
 }
 
-/** Load the tdai_agent_mem MCP entry from ~/.codeagent/mcp.json */
+/** Load the tdai_agent_mem MCP entry from <agent home>/mcp.json */
 function loadMcpMemoryEntry(): MemorySectionConfig | undefined {
 	const candidates = [
-		homePath('~/.codeagent/mcp.json'),
-		homePath('~/.codeagent/.mcp.json'),
+		...agentHomeFileCandidates('mcp.json'),
+		...agentHomeFileCandidates('.mcp.json'),
 	];
 	for (const file of candidates) {
 		try {
@@ -133,8 +128,8 @@ function loadYamlMemorySection(): MemorySectionConfig | undefined {
 	const candidates = [
 		path.resolve('config.yaml'),
 		path.resolve('config.json'),
-		homePath('~/.codeagent/config.yaml'),
-		homePath('~/.codeagent/config.json'),
+		...agentHomeFileCandidates('config.yaml'),
+		...agentHomeFileCandidates('config.json'),
 	];
 	for (const file of candidates) {
 		try {

@@ -7,15 +7,15 @@
  *  - List sessions with metadata (mode, message count, timestamps)
  *  - Resume a previous session with full context restoration
  *  - Delete sessions
- *  - Storage: ~/.codeagent/sessions/ as JSON files
+ *  - Storage: <agent home>/sessions/ as JSON files (~/.agent)
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { AgentMode, IAgentMessage, IAgentPlan, IAgentSession, MessageRole } from 'vs/workbench/services/agent/common/agentModels';
+import { agentHomeDir } from './agentHome';
 
-const SESSIONS_DIR = path.join(os.homedir(), '.codeagent', 'sessions');
+const SESSIONS_DIR = path.join(agentHomeDir(), 'sessions');
 const INDEX_FILE = '_index.json';
 
 interface SessionIndex {

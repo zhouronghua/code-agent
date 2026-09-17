@@ -25,8 +25,8 @@ npm config set @zhouronghua:registry https://npm.pkg.github.com
 npm install -g @zhouronghua/code-agent   # requires a PAT with read:packages
 
 # Create config
-mkdir -p ~/.codeagent
-cp $(npm root -g)/@zhouronghua/code-agent/config.template.yaml ~/.codeagent/config.yaml
+mkdir -p ~/.agent
+cp $(npm root -g)/@zhouronghua/code-agent/config.template.yaml ~/.agent/config.yaml
 # Edit config.yaml: fill in your API key
 
 # Run
