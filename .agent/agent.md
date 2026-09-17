@@ -47,7 +47,8 @@ docker run --rm code-agent:latest code-agent --help
 
 - 配置目录：全局 `~/.agent`（`config.yaml` / `models.json` / `mcp.json` / `agent.md` / `rules/`
   / `skills/` / `sessions/` / `tasks/`）；项目级 `<repo>/config.yaml`、`<repo>/.agent/agent.md`。
-- 旧路径 `~/.codeagent` 保留兼容：读写优先级为新目录优先，旧目录兜底。
+- `~/.agent` 是数据唯一所有者；旧 `~/.codeagent` 只保留软连接（首次启动自动迁移：配置文件复制、
+  数据目录移动、同伴软链接改指），确认无依赖后可 `rm -rf ~/.codeagent`。
 - LLM 网关行为以实测证据为准写进注释（如 `llmOpenai.ts` 里 `deepseek-flash` 实为 thinking 模式、
   `reasoning_content` 必须全量回传的 400 规则），不要把猜测当结论。
 - 涉及模型切换 / 上下文 / provider 的改动，必须补 `tests/` 单测（本地 HTTP mock 即可），

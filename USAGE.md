@@ -136,15 +136,23 @@ profiles:
 ### 配置目录（`~/.agent`）与全局规则 `agent.md`
 
 自 v0.3.37 起，全局配置目录从 `~/.codeagent` 调整为 **`~/.agent`**（对齐 Claude 的
-`~/.claude` 布局）。旧目录仍会被读取，且在首次启动时**自动迁移**：
+`~/.claude` 布局），且 **`~/.agent` 是数据的唯一所有者**：首次启动会把已有安装迁移过去，
+`~/.codeagent` 只留下软连接，确认无依赖后可以整目录删除。
 
-| 内容 | 迁移方式 |
-| --- | --- |
-| `config.yaml` / `config.json` / `models.json` / `mcp.json` / `agent.md` / `rules/` | 复制 |
-| `skills/` / `sessions/` / `tasks/`（可能很大） | 符号链接（不支持软链时退回复制） |
+| 内容 | 迁移方式 | 旧路径 `~/.codeagent/...` |
+| --- | --- | --- |
+| `config.yaml` / `config.json` / `models.json` / `mcp.json` / `agent.md` | 复制到 `~/.agent` | 保留副本（仅在 `~/.agent` 缺失时兜底） |
+| `rules/` / `skills/` / `sessions/` / `tasks/`（数据主体） | **移动到 `~/.agent`** | **软连接**指向 `~/.agent/...` |
 
-旧目录 `~/.codeagent` **不会被删除**，作为兜底与回滚点；也可用环境变量
-`AGENT_HOME=<dir>` 覆盖全局配置目录（便携版 / 隔离测试）。
+同时会把指向旧目录的**同伴软链接**（`~/.cursor/skills`、`~/.codebuddy/skills`、
+`~/.codebuddy/rules`）改指到 `~/.agent`，因此旧目录不再被任何路径依赖：
+
+```bash
+# 迁移完成后（旧路径全部是软连接 / 冗余副本），可安全删除：
+rm -rf ~/.codeagent
+```
+
+也可用环境变量 `AGENT_HOME=<dir>` 覆盖全局配置目录（便携版 / 隔离测试）。
 
 全局/项目规则支持 Claude 风格的**单文件** `agent.md`（内容始终生效）：
 

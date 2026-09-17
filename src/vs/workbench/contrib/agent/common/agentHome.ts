@@ -1,20 +1,26 @@
 /*---------------------------------------------------------------------------------------------
  *  Agent Home - user-level configuration & state directory
  *
- *  CodeAgent keeps its files in `~/.agent` (Claude-style). The previous location
- *  `~/.codeagent` is still READ, and an existing installation is migrated on
- *  first start (copy, never delete) so config, skills, sessions and task logs
- *  carry over.
+ *  CodeAgent keeps its files in `~/.agent` (Claude-style) — that directory OWNS
+ *  the configuration and the data (rules/skills/sessions/tasks). The previous
+ *  location `~/.codeagent` is still READ and, on first start, an existing
+ *  installation is migrated: config files are copied and the data directories
+ *  are MOVED into `~/.agent`, leaving a symlink behind at the old path (plus
+ *  companion links such as `~/.cursor/skills` re-pointed). Nothing is deleted,
+ *  so the legacy directory can simply be removed in a later release.
  *
  *  Layout:
  *    ~/.agent/config.yaml | config.json   global configuration
  *    ~/.agent/models.json                 model definitions (CodeBuddy format)
  *    ~/.agent/mcp.json                    MCP servers
  *    ~/.agent/agent.md                    global instructions/rules (`CLAUDE.md` style)
- *    ~/.agent/rules/*.mdc                 reusable rules
+ *    ~/.agent/rules/*.mdc                 reusable rules (may be a git repo)
  *    ~/.agent/skills/<name>/SKILL.md      reusable skills
  *    ~/.agent/sessions/, ~/.agent/tasks/  state
  *    <project>/.agent/agent.md            project instructions (loaded after the global one)
+ *
+ *  `~/.codeagent/<entry>` is kept only as a pointer to `~/.agent/<entry>`;
+ *  `AGENT_HOME=<dir>` overrides the whole home.
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'fs';
@@ -26,16 +32,25 @@ export const AGENT_HOME_NAME = '.agent';
 /** Previous user-level config directory name (`~/.codeagent`) — read + migrated. */
 export const LEGACY_AGENT_HOME_NAME = '.codeagent';
 
-/** Small configuration/knowledge entries: copied into the new home. */
-const COPIED_ENTRIES = [
-	'config.yaml', 'config.json', 'models.json', 'mcp.json', '.mcp.json', 'agent.md', 'rules',
-];
+/** Small configuration files: copied into the new home (`~/.agent`). */
+const COPIED_ENTRIES = ['config.yaml', 'config.json', 'models.json', 'mcp.json', '.mcp.json', 'agent.md'];
 /**
- * Potentially huge entries (skills / sessions / task logs). Linked instead of
- * copied so a 1 GB history is not duplicated; copied when linking is not
- * possible (e.g. a filesystem without symlink support).
+ * Directories that OWN real data. They are MOVED into the new home and the
+ * legacy path is replaced by a symlink pointing back, so:
+ *   - `~/.agent` is the single owner of the data (the only path that must
+ *     survive), and
+ *   - older code / other tools that still resolve `~/.codeagent/...` keep
+ *     working, which makes the legacy directory safe to delete in a later
+ *     version (`rm -rf ~/.codeagent`).
  */
-const LINKED_ENTRIES = ['skills', 'sessions', 'tasks'];
+const MOVED_ENTRIES = ['rules', 'skills', 'sessions', 'tasks'];
+/**
+ * Sibling tool directories that symlink into the agent home (Cursor /
+ * CodeBuddy compatible layouts). A link pointing at the legacy home is
+ * re-pointed at the new home so the legacy dir becomes deletable.
+ */
+const COMPANION_LINK_ROOTS = ['.cursor', '.codebuddy'];
+const COMPANION_LINK_ENTRIES = ['skills', 'skills-cursor', 'rules'];
 
 /** Explicit override (`AGENT_HOME` / `CODE_AGENT_HOME`) — portable builds + tests. */
 function agentHomeOverride(): string | undefined {
@@ -104,54 +119,138 @@ export function agentInstructionFiles(cwd: string = process.cwd()): string[] {
 /**
  * One-time, idempotent move to `~/.agent`.
  *
- * Configuration + rules are copied, the big state directories (skills,
- * sessions, tasks) are LINKED so a multi-hundred-MB history is not duplicated.
- * The legacy directory is never deleted — it stays as the fallback the code
- * still reads, and the links keep working as long as it exists. No-op when
- * `~/.agent` already exists or there is nothing to move.
+ * `~/.agent` becomes the OWNER of the data: the configuration files are copied
+ * and the data directories (`rules`, `skills`, `sessions`, `tasks`) are MOVED
+ * into it (a rename when possible — instant, no extra disk space). The legacy
+ * path is then left as a symlink pointing back at the new home, and companion
+ * links (`~/.cursor/skills`, `~/.codebuddy/rules`, …) are re-pointed, so
+ * `~/.codeagent` can simply be deleted in a later version.
+ *
+ * Also repairs the previous layout, where the new home itself was the symlink
+ * (flips it into a real directory). Nothing is ever deleted: on a filesystem
+ * that cannot rename across the two homes the data is copied and the legacy
+ * directory is kept as an extra copy.
  */
 export function migrateLegacyAgentHome(log: (message: string) => void): void {
 	if (agentHomeOverride()) return;
 	migrateAgentHome(legacyAgentHomeDir(), newAgentHomeDir(), log);
+	repointCompanionLinks(legacyAgentHomeDir(), newAgentHomeDir(), COMPANION_LINK_ROOTS.map(
+		root => path.join(os.homedir(), root)
+	), log);
 }
 
-/** Copy/link `legacy` → `fresh` (never deleting anything). Returns entries handled. */
+/** Copy/move/link `legacy` → `fresh` (never deleting data). Returns entries handled. */
 export function migrateAgentHome(legacy: string, fresh: string, log: (message: string) => void): number {
 	try {
-		if (fs.existsSync(fresh) || !fs.existsSync(legacy)) return 0;
-
+		if (!fs.existsSync(legacy)) return 0;
+		const freshExisted = fs.existsSync(fresh);
 		fs.mkdirSync(fresh, { recursive: true });
+
 		let copied = 0;
-		let linked = 0;
-		for (const entry of COPIED_ENTRIES) {
-			const from = path.join(legacy, entry);
-			if (!fs.existsSync(from)) continue;
-			const to = path.join(fresh, entry);
-			if (fs.existsSync(to)) continue;
-			fs.cpSync(from, to, { recursive: true });
-			copied++;
-		}
-		for (const entry of LINKED_ENTRIES) {
-			const from = path.join(legacy, entry);
-			if (!fs.existsSync(from)) continue;
-			const to = path.join(fresh, entry);
-			if (fs.existsSync(to)) continue;
-			try {
-				fs.symlinkSync(from, to, 'dir');
-				linked++;
-			} catch {
-				fs.cpSync(from, to, { recursive: true });   // symlinks unavailable → real copy
+		let moved = 0;
+		let flipped = 0;
+		let keptLegacy = 0;
+
+		if (!freshExisted) {
+			for (const entry of COPIED_ENTRIES) {
+				const from = path.join(legacy, entry);
+				if (!fs.existsSync(from) || isSymlink(from)) continue;
+				const to = path.join(fresh, entry);
+				if (fs.existsSync(to)) continue;
+				fs.cpSync(from, to, { recursive: true });
 				copied++;
 			}
 		}
-		log(
-			`Config home: migrated ${legacy} → ${fresh} ` +
-			`(${copied} copied, ${linked} linked — legacy kept as the fallback it links to)`
-		);
-		return copied + linked;
+
+		for (const entry of MOVED_ENTRIES) {
+			const legacyPath = path.join(legacy, entry);
+			const freshPath = path.join(fresh, entry);
+
+			// Previous version left the NEW home as the link (fresh → legacy): flip it.
+			if (isSymlink(freshPath)) {
+				const target = fs.readlinkSync(freshPath);
+				const resolved = path.resolve(path.dirname(freshPath), target);
+				if (resolved.startsWith(legacy + path.sep)) {
+					if (!fs.existsSync(legacyPath)) continue;      // broken link, nothing to flip
+					fs.unlinkSync(freshPath);
+					flipped++;
+				} else {
+					continue;                                       // linked elsewhere: leave it alone
+				}
+			}
+			if (fs.existsSync(freshPath)) continue;                  // new home already owns it
+			if (!fs.existsSync(legacyPath) || isSymlink(legacyPath)) continue;
+
+			try {
+				fs.renameSync(legacyPath, freshPath);                // same filesystem: instant
+				moved++;
+			} catch {
+				fs.cpSync(legacyPath, freshPath, { recursive: true });
+				copied++;
+				keptLegacy++;                                        // keep the original as a copy
+				continue;
+			}
+			try {
+				fs.symlinkSync(freshPath, legacyPath, 'dir');        // old path keeps working
+			} catch {
+				// Symlinks unavailable — the legacy dir stays gone; nothing to do.
+			}
+		}
+
+		const handled = copied + moved + flipped;
+		if (handled > 0 || freshExisted === false) {
+			log(
+				`Config home: ${fresh} now owns the configuration ` +
+				`(${moved} moved, ${copied} copied, ${flipped} links flipped` +
+				`${keptLegacy > 0 ? `, ${keptLegacy} kept in ${legacy}` : ''}) — ` +
+				`${legacy} is now a pointer and can be deleted`
+			);
+		}
+		return handled;
 	} catch (err) {
 		// Migration must never block startup.
 		log(`Config home: could not migrate ${legacy} → ${fresh}: ${(err as Error).message}`);
 		return 0;
 	}
+}
+
+function isSymlink(p: string): boolean {
+	try {
+		return fs.lstatSync(p).isSymbolicLink();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Re-point companion symlinks (`~/.cursor/skills` → `~/.codeagent/skills`,
+ * `~/.codebuddy/rules` → `~/.codeagent/rules`, …) at the new home, so nothing
+ * depends on the legacy directory any more.
+ */
+export function repointCompanionLinks(
+	legacy: string,
+	fresh: string,
+	roots: string[],
+	log: (message: string) => void,
+): number {
+	let repointed = 0;
+	for (const root of roots) {
+		for (const entry of COMPANION_LINK_ENTRIES) {
+			const linkPath = path.join(root, entry);
+			if (!isSymlink(linkPath)) continue;
+			try {
+				const resolved = path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath));
+				if (!resolved.startsWith(legacy + path.sep)) continue;   // already points elsewhere
+				const target = path.join(fresh, path.relative(legacy, resolved));
+				if (!fs.existsSync(target)) continue;                    // new home has no such entry
+				fs.unlinkSync(linkPath);
+				fs.symlinkSync(target, linkPath, 'dir');
+				repointed++;
+				log(`Config home: re-pointed ${linkPath} → ${target}`);
+			} catch {
+				// A broken/unreadable link must never block startup.
+			}
+		}
+	}
+	return repointed;
 }

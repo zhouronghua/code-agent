@@ -18,6 +18,7 @@ import {
 	agentHomeFileCandidates,
 	agentInstructionFiles,
 	migrateAgentHome,
+	repointCompanionLinks,
 	findAgentHomeFile,
 	newAgentHomeDir,
 } from 'vs/workbench/contrib/agent/common/agentHome';
@@ -71,7 +72,7 @@ function testHomeResolution(): void {
 }
 
 function testLegacyMigration(): void {
-	console.log('\n[2] legacy installation migration');
+	console.log('\n[2] legacy installation migration (the new home OWNS the data)');
 
 	const legacy = tmpDir('legacy');
 	const fresh = path.join(tmpDir('fresh-parent'), '.agent');
@@ -81,18 +82,55 @@ function testLegacyMigration(): void {
 	fs.writeFileSync(path.join(legacy, 'models.json'), '{"models":[]}');
 	fs.mkdirSync(path.join(legacy, 'rules'));
 	fs.writeFileSync(path.join(legacy, 'rules', 'a.mdc'), '# r');
+	fs.mkdirSync(path.join(legacy, 'skills', 'demo'), { recursive: true });
+	fs.writeFileSync(path.join(legacy, 'skills', 'demo', 'SKILL.md'), '# demo');
 
 	const logs: string[] = [];
 	const handled = migrateAgentHome(legacy, fresh, m => logs.push(m));
-	eq(handled, 4, 'config, models, rules and sessions are handled');
-	ok(fs.existsSync(path.join(fresh, 'config.yaml')), 'config.yaml moved to the new home');
-	ok(fs.existsSync(path.join(fresh, 'sessions', 'session_1.json')), 'sessions are reachable from the new home');
-	ok(fs.existsSync(path.join(legacy, 'config.yaml')), 'the legacy directory is left untouched');
-	ok(logs.some(l => l.includes('migrated')), 'the migration is reported to the user');
+	ok(handled === 5, `config, models and the 3 data dirs are handled (${handled})`);
+
+	// The new home owns REAL directories, the legacy path is only a pointer.
+	for (const entry of ['rules', 'skills', 'sessions']) {
+		ok(fs.existsSync(path.join(fresh, entry)), `${entry} lives in the new home`);
+		ok(fs.lstatSync(path.join(fresh, entry)).isSymbolicLink() === false, `${entry} is a real directory there`);
+		ok(fs.lstatSync(path.join(legacy, entry)).isSymbolicLink(), `${entry} in the legacy home is a symlink`);
+	}
+	eq(fs.readlinkSync(path.join(legacy, 'skills')), path.join(fresh, 'skills'), 'the legacy link points at the new home');
+	ok(fs.existsSync(path.join(legacy, 'sessions', 'session_1.json')), 'old paths still resolve');
+	ok(!fs.lstatSync(path.join(fresh, 'config.yaml')).isSymbolicLink(), 'config files are copied, not linked');
+	ok(logs.some(l => l.includes('owns the configuration')), 'the migration is reported to the user');
 
 	eq(migrateAgentHome(legacy, fresh, () => { /* noop */ }), 0, 'the migration is idempotent');
+
+	// A home migrated by the PREVIOUS release (new home was the symlink) is flipped.
+	const legacy2 = tmpDir('legacy2');
+	const fresh2 = path.join(tmpDir('fresh2-parent'), '.agent');
+	fs.mkdirSync(path.join(legacy2, 'sessions'), { recursive: true });
+	fs.writeFileSync(path.join(legacy2, 'sessions', 's2.json'), '{}');
+	fs.mkdirSync(fresh2, { recursive: true });
+	fs.symlinkSync(path.join(legacy2, 'sessions'), path.join(fresh2, 'sessions'), 'dir');
+	eq(migrateAgentHome(legacy2, fresh2, () => { /* noop */ }), 2, 'the old forward link is flipped (flip + move)');
+	ok(!fs.lstatSync(path.join(fresh2, 'sessions')).isSymbolicLink(), 'the new home now owns the real directory');
+	ok(fs.lstatSync(path.join(legacy2, 'sessions')).isSymbolicLink(), 'the legacy path became the pointer');
+	ok(fs.existsSync(path.join(legacy2, 'sessions', 's2.json')), 'the flipped directory kept its data');
+
+	// Companion links (Cursor / CodeBuddy layouts) follow the new home.
+	const cwd = tmpDir('companions');
+	const cursorDir = path.join(cwd, '.cursor');
+	fs.mkdirSync(cursorDir, { recursive: true });
+	fs.symlinkSync(path.join(legacy, 'skills'), path.join(cursorDir, 'skills'), 'dir');
+	fs.writeFileSync(path.join(cursorDir, 'keep.txt'), 'untouched');
+	const repointed = repointCompanionLinks(legacy, fresh, [cursorDir], () => { /* noop */ });
+	eq(repointed, 1, 'a companion link into the legacy home is re-pointed');
+	eq(fs.readlinkSync(path.join(cursorDir, 'skills')), path.join(fresh, 'skills'), 'it now points at the new home');
+	ok(fs.existsSync(path.join(cursorDir, 'skills', 'demo', 'SKILL.md')), 'the skill is reachable through the link');
+	eq(repointCompanionLinks(legacy, fresh, [cursorDir], () => { /* noop */ }), 0, 're-pointing is idempotent');
+
+	fs.rmSync(cwd, { recursive: true, force: true });
 	fs.rmSync(legacy, { recursive: true, force: true });
+	fs.rmSync(legacy2, { recursive: true, force: true });
 	fs.rmSync(path.dirname(fresh), { recursive: true, force: true });
+	fs.rmSync(path.dirname(fresh2), { recursive: true, force: true });
 }
 
 function testAgentMdRules(): void {
