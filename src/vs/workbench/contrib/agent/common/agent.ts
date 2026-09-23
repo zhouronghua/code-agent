@@ -719,6 +719,13 @@ export class AgentLoop {
 			this._context.addMessage(msg);
 		}
 
+		// Re-pin the restored session's original task (its first user turn) so a
+		// compaction after resuming cannot summarize the goal away.
+		const firstUser = messages.find(m => m.role === MessageRole.User && m.content && m.content.trim());
+		if (firstUser) {
+			this._context.setTaskAnchor(firstUser.content);
+		}
+
 		// Also populate the continue history
 		this._contextHistoryForContinue = [...messages];
 	}
@@ -873,6 +880,11 @@ export class AgentLoop {
 			this._context.addMessage(userMsg);
 			this._onDidReceiveMessage.fire(userMsg);
 
+			// Pin the task statement so a later compaction cannot summarize the
+			// user's actual goal away (the sliding window drops the oldest
+			// messages first, and the task message is always the oldest).
+			this._context.setTaskAnchor(userMessage);
+
 			// Complexity detection: complex tasks get deep-thinking instructions
 			// AND self-verification rounds; simple tasks skip both to avoid
 			// burning extra LLM round-trips on trivial work (mirrors the
@@ -949,8 +961,14 @@ export class AgentLoop {
 		this._taskError = undefined;
 
 		try {
-			// Restore conversation context from the previous session
+			// Restore conversation context from the previous session.
+			// `clear()` also drops the pinned task, and the continuation must not
+			// lose the goal the rest of the conversation was about — keep it.
+			const pinnedTask = this._context.taskAnchorContent;
 			this._context.clear();
+			if (pinnedTask) {
+				this._context.setTaskAnchor(pinnedTask);
+			}
 			this._context.setSystemPrompt(
 				getSystemPrompt(this._modeManager.currentMode, this._workingDirectory) + this._extraSystemPrompt
 			);
@@ -1022,6 +1040,13 @@ export class AgentLoop {
 
 		this._modeManager.switchMode(AgentMode.Agent);
 		this._context.setSystemPrompt(getSystemPrompt(AgentMode.Agent, this._workingDirectory) + this._extraSystemPrompt);
+
+		// The plan already carries the task; pin it when this is the entry point
+		// (executePlan without a preceding run()). When the plan was produced by
+		// run(), the user's own wording is already pinned and is kept.
+		if (this._context.taskAnchorContent === undefined && existingPlan.task) {
+			this._context.setTaskAnchor(existingPlan.task);
+		}
 
 		const planSteps = existingPlan.steps
 			.map((s, i) => `${i + 1}. ${s.description}`)

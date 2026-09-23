@@ -23,9 +23,27 @@ import { ILLMProvider, TOKENS_PER_MESSAGE_OVERHEAD } from 'vs/workbench/services
  */
 const WINDOW_UTILIZATION = 0.75;
 
+/**
+ * Marker prefix for the pinned task statement. Kept short and explicit so the
+ * model can tell the pinned goal apart from the replayed conversation.
+ */
+const TASK_ANCHOR_PREFIX = '[Pinned original task — always in context]';
+
 export class AgentContext {
 	private readonly _messages: IAgentMessage[] = [];
 	private _systemPrompt: IAgentMessage | undefined;
+	/**
+	 * The original task statement, pinned OUTSIDE the sliding window.
+	 *
+	 * The sliding window drops the OLDEST messages first and compaction
+	 * summarizes the older half away — both of them drop the statement the user
+	 * actually asked for, so a long run can end up optimizing a half-remembered
+	 * goal. The reference harness guards against exactly this by rebuilding its
+	 * post-overflow prompt as "original_instruction + current state"; here the
+	 * anchor is simply re-sent verbatim on every request instead of being
+	 * summarized.
+	 */
+	private _taskAnchor: IAgentMessage | undefined;
 
 	constructor(
 		private _maxTokens: number,
@@ -119,6 +137,27 @@ export class AgentContext {
 		this._systemPrompt = createMessage(MessageRole.System, content);
 	}
 
+	/**
+	 * Pin the original task statement so neither the sliding window nor
+	 * compaction can lose it. Called once per task, with the user's own words.
+	 */
+	setTaskAnchor(content: string): void {
+		const trimmed = (content || '').trim();
+		if (!trimmed) return;
+		this._taskAnchor = createMessage(MessageRole.User, `${TASK_ANCHOR_PREFIX}\n${trimmed}`);
+	}
+
+	/** The pinned task text as the user wrote it, or undefined when nothing is pinned. */
+	get taskAnchorContent(): string | undefined {
+		if (!this._taskAnchor) return undefined;
+		return this._taskAnchor.content.slice(TASK_ANCHOR_PREFIX.length + 1);
+	}
+
+	/** Forget the pinned task (used when a new conversation replaces this one). */
+	clearTaskAnchor(): void {
+		this._taskAnchor = undefined;
+	}
+
 	addMessage(message: IAgentMessage): void {
 		this._messages.push(message);
 	}
@@ -126,13 +165,19 @@ export class AgentContext {
 	getContextWindow(): IAgentMessage[] {
 		const result: IAgentMessage[] = [];
 
+		let tokenCount = 0;
+
 		if (this._systemPrompt) {
 			result.push(this._systemPrompt);
+			tokenCount += this._estimateTokens(this._systemPrompt);
 		}
 
-		let tokenCount = this._systemPrompt
-			? this._estimateTokens(this._systemPrompt)
-			: 0;
+		// The pinned task is never evicted: it is the one message whose loss
+		// silently changes what the agent is working on.
+		if (this._taskAnchor) {
+			result.push(this._taskAnchor);
+			tokenCount += this._estimateTokens(this._taskAnchor);
+		}
 
 		const contextMessages: IAgentMessage[] = [];
 
@@ -190,8 +235,21 @@ export class AgentContext {
 			})
 			.join('\n');
 
+		// A compaction is a HANDOFF: the model that continues has never seen the
+		// transcript, so the prompt asks for the task, the decisions, the evidence
+		// and the next step instead of a generic "summarize this". The pinned task
+		// is repeated verbatim in case the older half no longer states it.
+		const anchorContent = this.taskAnchorContent;
 		const summaryPrompt = createMessage(MessageRole.User,
-			`Summarize the following conversation context concisely, preserving key decisions, file changes made, and current task status:\n\n${summaryContent}`
+			`Write a HANDOFF summary of the conversation below so that work can continue ` +
+			`without the original transcript. Preserve, in this order:\n` +
+			`1. the original task and every explicit requirement (verbatim where wording matters),\n` +
+			`2. decisions already made and files created or changed,\n` +
+			`3. commands or tests already run and their results,\n` +
+			`4. what is still unfinished or unverified, and the next concrete step.\n` +
+			`Do not invent progress that did not happen.\n\n` +
+			(anchorContent ? `Pinned original task:\n${anchorContent}\n\n` : '') +
+			`Conversation to summarize:\n\n${summaryContent}`
 		);
 
 		// Retry summarization up to 2 times before falling back to truncation
@@ -242,6 +300,7 @@ export class AgentContext {
 	clear(): void {
 		this._messages.length = 0;
 		this._systemPrompt = undefined;
+		this._taskAnchor = undefined;
 	}
 
 	private _estimateTokens(message: IAgentMessage): number {
@@ -256,6 +315,9 @@ export class AgentContext {
 
 	private _estimateTotalTokens(): number {
 		let total = this._systemPrompt ? this._estimateTokens(this._systemPrompt) : 0;
+		if (this._taskAnchor) {
+			total += this._estimateTokens(this._taskAnchor);
+		}
 		for (const msg of this._messages) {
 			total += this._estimateTokens(msg);
 		}

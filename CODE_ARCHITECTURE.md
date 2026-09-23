@@ -278,9 +278,15 @@ AgentLoop.run() → _runAgentLoop()
 
 ### 5.3 上下文管理 (`agentContext.ts` - `AgentContext`)
 
-- **滑动窗口**：从最新消息向前填充，不超过 `maxTokens * 0.8`
-- **自动压缩**：超限时将前半消息用 LLM 压缩为摘要
-- **System Prompt 优先**：始终保留在上下文首位
+- **滑动窗口**：从最新消息向前填充，不超过 `maxTokens * 0.75`
+- **任务锚点（pinned task）**：`setTaskAnchor()` 把用户原始任务语句钉在滑动窗口**之外**，
+  每次请求都原样重发。滑动窗口先丢最老的消息、压缩又把前半段摘要掉，二者都会丢掉任务
+  陈述本身，长任务于是可能去优化一个"记了一半"的目标；锚点让目标永不丢失，并计入 token
+  预算（见 `agent-harness` 测试）。
+- **自动压缩（handoff）**：超限时把前半消息交给 LLM 压缩为**交接摘要**，提示词要求按
+  顺序保留：①原始任务与显式要求 ②已做的决策与改动的文件 ③已跑过的命令/测试及结果
+  ④未完成项与下一步；摘要 prompt 中再次内联锚点。摘要失败时回退截断，锚点仍然保留。
+- **System Prompt 优先**：始终保留在上下文首位（锚点紧随其后）
 
 ### 5.4 LLM Provider 层
 
@@ -302,7 +308,7 @@ class LLMProviderFactory {
 | Provider | 注册名 | API 端点 | 特性 |
 |----------|--------|----------|------|
 | `OpenAIProvider` | `openai` | `/v1/chat/completions` | Function calling + streaming + reasoning_content (DeepSeek 兼容) |
-| `AnthropicProvider` | `anthropic` | `/v1/messages` | tool_use blocks + streaming |
+| `AnthropicProvider` | `anthropic` | `/v1/messages` | tool_use blocks + streaming + prompt caching |
 | `OllamaProvider` | `ollama` | `/api/chat` | 本地模型 + tool 支持 |
 
 ### 5.5 工具系统 (`agentTools.ts`)

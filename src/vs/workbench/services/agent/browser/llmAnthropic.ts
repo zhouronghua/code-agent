@@ -20,16 +20,160 @@ interface AnthropicContentBlock {
 	input?: Record<string, unknown>;
 }
 
+/** A raw Anthropic request/message content block (cache_control lives here). */
+type AnthropicRequestBlock = Record<string, unknown>;
+
+/**
+ * Prompt caching — borrowed from meta-harness's `anthropic_caching.py`.
+ *
+ * The harness re-sends the same prefix on every ReAct turn: the system prompt
+ * and the growing conversation. Anthropic bills that repeated prefix at full
+ * price unless it is marked with a `cache_control` breakpoint, which turns the
+ * re-send into a cache READ (~10% of input price) and also cuts time-to-first
+ * token. Two placement rules matter:
+ *
+ *  - the SYSTEM prompt is the most stable prefix of all → always cache it;
+ *  - the conversation grows at the tail, so the newest messages are marked too,
+ *    which extends the cached prefix turn by turn.
+ *
+ * Anthropic allows at most 4 breakpoints per request, so system + the last
+ * CACHE_TAIL_MESSAGES stays well under the limit.
+ */
+const CACHE_TAIL_MESSAGES = 2;
+/** Anthropic's hard limit on `cache_control` breakpoints per request. */
+const MAX_CACHE_BREAKPOINTS = 4;
+
+function cacheControl(): { type: 'ephemeral' } {
+	return { type: 'ephemeral' };
+}
+
+/** The system prompt as one cacheable content block. */
+export function systemBlocksForCaching(content: string): AnthropicRequestBlock[] {
+	return [{ type: 'text', text: content, cache_control: cacheControl() }];
+}
+
+/**
+ * Mark the END of a message as the end of a cacheable prefix (mutates it).
+ * Returns true when a breakpoint was actually placed.
+ */
+export function markCacheBreakpoint(message: Record<string, unknown>): boolean {
+	const content = message.content;
+	if (typeof content === 'string') {
+		if (!content) return false;
+		message.content = [{ type: 'text', text: content, cache_control: cacheControl() }];
+		return true;
+	}
+	if (Array.isArray(content) && content.length > 0) {
+		const last = content[content.length - 1] as Record<string, unknown> | undefined;
+		if (last && typeof last === 'object' && !last.cache_control) {
+			last.cache_control = cacheControl();
+			return true;
+		}
+	}
+	return false;
+}
+
 export class AnthropicProvider implements ILLMProvider {
 	readonly name = 'anthropic';
 	private readonly _apiKey: string;
 	private readonly _apiBase: string;
 	private readonly _model: string;
+	/**
+	 * Set once the endpoint rejected a cache_control breakpoint (e.g. a gateway
+	 * proxy that does not implement the prompt-caching extension). Caching is an
+	 * optimization, never a requirement, so after the first rejection every
+	 * later request is sent with no breakpoints.
+	 */
+	private _cachingDisabled = false;
+	private _cachingDisabledReason: string | undefined;
 
 	constructor(config: IAgentConfig) {
 		this._apiKey = config.apiKey;
 		this._apiBase = config.apiBase || 'https://api.anthropic.com';
 		this._model = config.model || 'claude-sonnet-4-20250514';
+	}
+
+	/** True when prompt caching was rejected by this endpoint and switched off. */
+	get promptCachingDisabled(): boolean {
+		return this._cachingDisabled;
+	}
+
+	/** Why caching was switched off (kept for logs/diagnostics). */
+	get promptCachingDisabledReason(): string | undefined {
+		return this._cachingDisabledReason;
+	}
+
+	/** Build the request payload. `cache` toggles the prompt-caching breakpoints. */
+	private _buildBody(
+		options: {
+			messages: IAgentMessage[];
+			systemMessage?: IAgentMessage;
+			tools?: IToolSchema[];
+			temperature: number;
+			stream?: boolean;
+		},
+		cache: boolean,
+	): Record<string, unknown> {
+		const { messages, systemMessage, tools, temperature, stream } = options;
+		const body: Record<string, unknown> = {
+			model: this._model,
+			max_tokens: 4096,
+			temperature,
+			messages: this._convertMessages(messages, cache),
+		};
+
+		if (systemMessage) {
+			body.system = cache
+				? systemBlocksForCaching(systemMessage.content)
+				: systemMessage.content;
+		}
+
+		if (tools && tools.length > 0) {
+			body.tools = tools.map(t => ({
+				name: t.function.name,
+				description: t.function.description,
+				input_schema: t.function.parameters,
+			}));
+		}
+
+		if (stream) body.stream = true;
+		return body;
+	}
+
+	/**
+	 * Send one /v1/messages request, degrading transparently to a cache-free
+	 * payload when the endpoint rejects the cache breakpoints.
+	 */
+	private async _request(
+		build: (cache: boolean) => Record<string, unknown>,
+		useCache: boolean,
+	): Promise<Response> {
+		const send = (cache: boolean) => fetch(`${this._apiBase}/v1/messages`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'x-api-key': this._apiKey,
+				'anthropic-version': '2023-06-01',
+			},
+			body: JSON.stringify(build(cache)),
+		});
+
+		const response = await send(useCache);
+		if (response.ok) return response;
+
+		const errorText = await response.text();
+		if (useCache && response.status === 400 && /cache_control|cache-control/i.test(errorText)) {
+			this._cachingDisabled = true;
+			this._cachingDisabledReason = errorText.slice(0, 300);
+			console.warn(
+				`[Anthropic] endpoint rejected prompt caching (400) — retrying without ` +
+				`cache breakpoints: ${errorText.slice(0, 200)}`
+			);
+			const retry = await send(false);
+			if (retry.ok) return retry;
+			throw new Error(`Anthropic API error ${retry.status}: ${await retry.text()}`);
+		}
+		throw new Error(`Anthropic API error ${response.status}: ${errorText}`);
 	}
 
 	async complete(
@@ -41,39 +185,13 @@ export class AnthropicProvider implements ILLMProvider {
 		const systemMessage = messages.find(m => m.role === MessageRole.System);
 		const nonSystemMessages = messages.filter(m => m.role !== MessageRole.System);
 
-		const body: Record<string, unknown> = {
-			model: this._model,
-			max_tokens: 4096,
-			temperature,
-			messages: this._convertMessages(nonSystemMessages),
-		};
-
-		if (systemMessage) {
-			body.system = systemMessage.content;
-		}
-
-		if (tools && tools.length > 0) {
-			body.tools = tools.map(t => ({
-				name: t.function.name,
-				description: t.function.description,
-				input_schema: t.function.parameters,
-			}));
-		}
-
-		const response = await fetch(`${this._apiBase}/v1/messages`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				'x-api-key': this._apiKey,
-				'anthropic-version': '2023-06-01',
-			},
-			body: JSON.stringify(body),
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			throw new Error(`Anthropic API error ${response.status}: ${errorText}`);
-		}
+		const response = await this._request(
+			cache => this._buildBody(
+				{ messages: nonSystemMessages, systemMessage, tools, temperature },
+				cache,
+			),
+			!this._cachingDisabled,
+		);
 
 		const data = await response.json();
 
@@ -102,40 +220,13 @@ export class AnthropicProvider implements ILLMProvider {
 		const systemMessage = messages.find(m => m.role === MessageRole.System);
 		const nonSystemMessages = messages.filter(m => m.role !== MessageRole.System);
 
-		const body: Record<string, unknown> = {
-			model: this._model,
-			max_tokens: 4096,
-			temperature,
-			stream: true,
-			messages: this._convertMessages(nonSystemMessages),
-		};
-
-		if (systemMessage) {
-			body.system = systemMessage.content;
-		}
-
-		if (tools && tools.length > 0) {
-			body.tools = tools.map(t => ({
-				name: t.function.name,
-				description: t.function.description,
-				input_schema: t.function.parameters,
-			}));
-		}
-
-		const response = await fetch(`${this._apiBase}/v1/messages`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				'x-api-key': this._apiKey,
-				'anthropic-version': '2023-06-01',
-			},
-			body: JSON.stringify(body),
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			throw new Error(`Anthropic API error ${response.status}: ${errorText}`);
-		}
+		const response = await this._request(
+			cache => this._buildBody(
+				{ messages: nonSystemMessages, systemMessage, tools, temperature, stream: true },
+				cache,
+			),
+			!this._cachingDisabled,
+		);
 
 		const reader = response.body!.getReader();
 		const decoder = new TextDecoder();
@@ -192,8 +283,11 @@ export class AnthropicProvider implements ILLMProvider {
 		});
 	}
 
-	private _convertMessages(messages: IAgentMessage[]): Array<Record<string, unknown>> {
-		return messages.map(msg => {
+	private _convertMessages(
+		messages: IAgentMessage[],
+		cache = false,
+	): Array<Record<string, unknown>> {
+		const converted = messages.map(msg => {
 			if (msg.role === MessageRole.Tool) {
 				return {
 					role: 'user',
@@ -226,6 +320,19 @@ export class AnthropicProvider implements ILLMProvider {
 				content: msg.content,
 			};
 		});
+
+		if (cache && converted.length > 0) {
+			// A cache breakpoint marks the END of a reusable prefix. Marking the
+			// newest message(s) makes "everything up to here" a cache read on the
+			// next turn — exactly how a ReAct loop re-sends its history.
+			const tail = Math.min(CACHE_TAIL_MESSAGES, MAX_CACHE_BREAKPOINTS - 1);
+			let placed = 0;
+			for (let i = converted.length - 1; i >= 0 && placed < tail; i--) {
+				if (markCacheBreakpoint(converted[i])) placed++;
+			}
+		}
+
+		return converted;
 	}
 }
 

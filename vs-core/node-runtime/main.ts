@@ -29,6 +29,12 @@ import { URI } from '../base/common/uri';
 import { AgentMode, MessageRole } from '../../src/vs/workbench/services/agent/common/agentModels';
 import { LLMProviderFactory } from '../../src/vs/workbench/services/agent/browser/llmProvider';
 import '../../src/vs/workbench/services/agent/browser/llmOpenai';
+// Register both providers the config schema accepts (`provider: openai |
+// anthropic | ollama`). The Anthropic path also carries prompt caching
+// (cache_control breakpoints); without this import a profile with
+// `provider: anthropic` failed with "Unknown LLM provider: anthropic".
+import '../../src/vs/workbench/services/agent/browser/llmAnthropic';
+import '../../src/vs/workbench/services/agent/browser/llmOllama';
 import { ToolRegistry } from '../../src/vs/workbench/contrib/agent/common/agentTools';
 import { AgentModeManager } from '../../src/vs/workbench/contrib/agent/common/agentModes';
 import { AgentCheckpointManager } from '../../src/vs/workbench/contrib/agent/common/agentCheckpoint';
