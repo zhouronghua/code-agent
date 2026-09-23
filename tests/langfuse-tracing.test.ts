@@ -35,6 +35,7 @@ import {
 	redactDeep,
 	redactSecrets,
 	stringifyMeta,
+	stripYamlComment,
 } from 'vs/workbench/contrib/agent/common/agentTracing';
 import {
 	createMessage,
@@ -165,6 +166,32 @@ function testConfigResolution(): void {
 	eq(yaml?.tags?.join(','), 'code-agent,local', 'tags are parsed as a list');
 	ok(yaml?.enabled === true, 'enabled is parsed as a boolean');
 	eq(parseTracingYaml('agent:\n  max_steps: 10\n')?.enabled, undefined, 'a config without a tracing section yields undefined');
+
+	// Inline comments are the normal way this file is documented by hand.
+	const commented = parseTracingYaml([
+		'tracing:',
+		'  enabled: true            # on by default',
+		'  public_key: "pk-lf-yaml"   # from Settings -> API Keys',
+		'  secret_key:   # left blank on purpose',
+		'  base_url: https://langfuse.internal   # self-hosted',
+		'  capture_content: false # metadata only',
+		'  tags:',
+		'    - code-agent         # feature tag',
+		'    - local',
+	].join('\n'));
+	eq(commented?.enabled, true, 'an inline comment after a boolean is stripped');
+	eq(commented?.public_key, 'pk-lf-yaml', 'an inline comment after a quoted value is stripped');
+	eq(commented?.secret_key, '', 'a value that is only a comment becomes empty');
+	eq(commented?.base_url, 'https://langfuse.internal', 'the base URL keeps no trailing comment');
+	eq(commented?.capture_content, false, 'an inline comment after a boolean flag is stripped');
+	eq(commented?.tags?.join(','), 'code-agent,local', 'inline comments in a block list are stripped');
+
+	// A '#' that is part of the value must survive.
+	const hash = parseTracingYaml('tracing:\n  base_url: http://host/#frag\n  secret_key: "sk-#1"\n');
+	eq(hash?.base_url, 'http://host/#frag', "a '#' inside a URL is NOT treated as a comment");
+	eq(hash?.secret_key, 'sk-#1', "a '#' inside quotes is NOT treated as a comment");
+	eq(stripYamlComment('# whole line'), '', 'a comment-only value strips to empty');
+	eq(stripYamlComment('no comment here'), 'no comment here', 'a plain value is unchanged');
 
 	// env beats the file
 	withEnv({

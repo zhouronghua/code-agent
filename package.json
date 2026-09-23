@@ -1,6 +1,6 @@
 {
   "name": "@zhouronghua/code-agent",
-  "version": "0.3.39",
+  "version": "0.3.40",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },

@@ -139,6 +139,38 @@ function stripQuotes(v: string): string {
 }
 
 /**
+ * Remove a trailing YAML comment from a scalar value.
+ *
+ * A `#` starts a comment only at the start of the value or after whitespace, and
+ * never inside quotes — so `base_url: http://host/#frag` and `secret_key: "sk-#1"`
+ * survive, while `enabled: true  # on by default` does not keep the comment.
+ *
+ * Users document their config inline (as config.template.yaml does), and feeding
+ * `"https://cloud.langfuse.com   # 自建部署改成对应地址"` straight into the SDK
+ * fails with "Could not parse user-provided export URL".
+ */
+export function stripYamlComment(value: string): string {
+	let quote = '';
+	for (let i = 0; i < value.length; i++) {
+		const ch = value[i];
+		if (quote) {
+			if (ch === quote) quote = '';
+			continue;
+		}
+		if (ch === '"' || ch === "'") { quote = ch; continue; }
+		if (ch === '#' && (i === 0 || /\s/.test(value[i - 1]))) {
+			return value.slice(0, i);
+		}
+	}
+	return value;
+}
+
+/** Parse a `key: value` scalar the way the config file is written by hand. */
+function parseScalarValue(raw: string): string {
+	return stripQuotes(stripYamlComment(raw).trim());
+}
+
+/**
  * Minimal parser for the top-level `tracing:` section (flat key: value pairs
  * plus a `tags:` block list) — same approach as the `memory:` section parser,
  * because the shared YAML reader in agentConfig only models its own sections.
@@ -163,7 +195,7 @@ export function parseTracingYaml(text: string): TracingYamlSection | undefined {
 		if (indent === 2 && trimmed.startsWith('- ')) {
 			if (inTags) {
 				section.tags = section.tags || [];
-				section.tags.push(stripQuotes(trimmed.slice(2).trim()));
+				section.tags.push(parseScalarValue(trimmed.slice(2)));
 			}
 			continue;
 		}
@@ -171,7 +203,7 @@ export function parseTracingYaml(text: string): TracingYamlSection | undefined {
 		if (indent > 2 && trimmed.startsWith('- ')) {
 			if (inTags) {
 				section.tags = section.tags || [];
-				section.tags.push(stripQuotes(trimmed.slice(2).trim()));
+				section.tags.push(parseScalarValue(trimmed.slice(2)));
 			}
 			continue;
 		}
@@ -180,7 +212,8 @@ export function parseTracingYaml(text: string): TracingYamlSection | undefined {
 		const idx = trimmed.indexOf(':');
 		if (idx <= 0) continue;
 		const key = trimmed.slice(0, idx).trim();
-		const rawVal = stripQuotes(trimmed.slice(idx + 1).trim());
+		// Strip an inline `# comment` — the config file is documented in place.
+		const rawVal = parseScalarValue(trimmed.slice(idx + 1));
 		inTags = key === 'tags';
 
 		if (key === 'enabled') section.enabled = toBool(rawVal);
