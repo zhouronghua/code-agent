@@ -8,6 +8,7 @@
  *  [5] release pipeline end-to-end against a REAL temp git repo + local remote
  *  [6] issue signals recorded by the ReAct loop (unknown tool)
  *  [7] the methodology prompt section
+ *  [8] the poll tool's own waiting budget vs the generic step timeout
  *
  *  Run:
  *    npx esbuild tests/self-improve.test.ts --bundle --platform=node --target=node18 \
@@ -39,6 +40,9 @@ import { AgentLoop } from 'vs/workbench/contrib/agent/common/agent';
 import { AgentModeManager } from 'vs/workbench/contrib/agent/common/agentModes';
 import { AgentCheckpointManager } from 'vs/workbench/contrib/agent/common/agentCheckpoint';
 import { ToolRegistry } from 'vs/workbench/contrib/agent/common/agentTools';
+import { PollTool, pollBudgetMs } from 'vs/workbench/contrib/agent/common/tools/poll';
+import { ITerminalInstance, ITerminalService } from 'vs/workbench/contrib/terminal/browser/terminal';
+import { Emitter } from 'vs/base/common/event';
 import { createMessage, MessageRole, IAgentConfig, IAgentMessage, IAgentTaskLog } from 'vs/workbench/services/agent/common/agentModels';
 import { ILLMProvider } from 'vs/workbench/services/agent/browser/llmProvider';
 
@@ -622,6 +626,105 @@ function testPromptSection(): void {
 	ok(releasable.includes('aborts at the first failure'), 'the prompt states the gate aborts on failure');
 }
 
+// ---------------------------------------------------------------------------
+// [8] poll owns its waiting budget
+// ---------------------------------------------------------------------------
+
+/**
+ * Terminal stub: the Nth attempt exits with `codes[N-1]` (last code repeats)
+ * after `delayMs`. Mirrors a check command that is slow but not hung.
+ */
+class ScriptedTerminalService implements ITerminalService {
+	readonly _serviceBrand: undefined;
+	attempts = 0;
+	constructor(private readonly _codes: number[], private readonly _delayMs: number) { }
+	createTerminal(): ITerminalInstance {
+		const data = new Emitter<string>();
+		const exit = new Emitter<{ code?: number } | undefined>();
+		return {
+			onData: data.event,
+			onExit: exit.event,
+			sendText: () => {
+				const code = this._codes[Math.min(this.attempts++, this._codes.length - 1)];
+				setTimeout(() => {
+					data.fire(`check #${this.attempts}\n`);
+					exit.fire({ code });
+				}, this._delayMs);
+			},
+			dispose: () => { data.dispose(); exit.dispose(); },
+		};
+	}
+}
+
+class PollToolProvider implements ILLMProvider {
+	readonly name = 'scripted';
+	private _turn = 0;
+	constructor(private readonly _args: Record<string, unknown>) { }
+	async complete(): Promise<IAgentMessage> {
+		this._turn++;
+		if (this._turn === 1) {
+			return createMessage(MessageRole.Assistant, 'waiting for the check to pass', {
+				toolCalls: [{ id: 'c1', name: 'poll', arguments: this._args }],
+			});
+		}
+		return createMessage(MessageRole.Assistant, 'done');
+	}
+	async *stream(): AsyncIterableIterator<string> { yield ''; }
+	countTokens(): number { return 1; }
+	supportsStreaming(): boolean { return false; }
+}
+
+async function testPollBudget(): Promise<void> {
+	console.log('\n[8] poll owns its waiting budget');
+
+	// Arithmetic: every attempt may burn its command timeout and every attempt but
+	// the last may sleep — the declared budget has to cover BOTH.
+	const args = { max_attempts: 3, initial_delay: 2, max_delay: 10, command_timeout: 1000 };
+	ok(pollBudgetMs(args) >= 3 * 1000 + (2 + 4) * 1000,
+		`the budget covers 3 command timeouts plus the 2s+4s backoff (${pollBudgetMs(args)}ms)`);
+	ok(pollBudgetMs({ ...args, max_attempts: 6 }) > pollBudgetMs(args),
+		'more attempts means a strictly larger budget');
+	ok(pollBudgetMs({ max_attempts: 1, initial_delay: 0, max_delay: 0, command_timeout: 1000 }) >= 1000,
+		'a single attempt still covers its command timeout');
+
+	// The declared budget must extend the generic step timeout, and must stay
+	// inside the agent's configured task budget even for an absurd request.
+	const tool = new PollTool(new ScriptedTerminalService([0], 1), '/tmp');
+	const cfg = { stepTimeout: 60000, taskTimeout: 600000 } as IAgentConfig;
+	ok(tool.timeoutFor({}, cfg)! > cfg.stepTimeout,
+		`the default poll budget extends past the 60s step timeout (${tool.timeoutFor({}, cfg)}ms)`);
+	eq(
+		tool.timeoutFor({ max_attempts: 60, initial_delay: 240, max_delay: 300, command_timeout: 180000 }, cfg),
+		cfg.taskTimeout,
+		'an absurd poll budget is still bounded by the task budget');
+	eq(tool.timeoutFor({ max_attempts: 1, command_timeout: 100 }, cfg), cfg.stepTimeout,
+		'a poll that needs less than the step timeout still gets the step timeout');
+
+	// Behavioural: with a step timeout of 500ms, a poll that legitimately needs
+	// ~3s must still complete. Waiting is the tool's whole purpose; the generic
+	// step timeout killing it is the failure the logs show 43 times in 14 days.
+	const config: IAgentConfig = {
+		provider: 'openai', model: 'm', apiKey: 'k', apiBase: 'http://127.0.0.1:9/v1',
+		maxSteps: 10, maxContextTokens: 100000, maxOutputTokens: 1000,
+		temperature: 0, stepTimeout: 500, taskTimeout: 60000,
+	};
+	const registry = new ToolRegistry();
+	registry.register(new PollTool(new ScriptedTerminalService([1, 1, 0], 300), '/tmp'));
+	const agent = new AgentLoop(config,
+		new PollToolProvider({ command: 'check', max_attempts: 4, initial_delay: 1, max_delay: 1, command_timeout: 600 }),
+		registry, new AgentModeManager(), new AgentCheckpointManager({} as never), '/tmp');
+	await agent.run('poll until the check passes');
+	const log = agent.exportTaskLog('completed');
+	agent.dispose();
+
+	const exec = log.steps.flatMap(s => s.toolExecutions).find(e => e.toolName === 'poll');
+	ok(!!exec, 'the poll tool really ran in the ReAct loop');
+	ok(!!exec && exec.success,
+		`the slow poll finished instead of dying on the step timeout (error=${exec?.error ?? 'none'})`);
+	ok(!!exec && /Success/.test(String(exec.result)),
+		`the successful poll reports its attempts (${String(exec?.result).slice(-70)})`);
+}
+
 async function main(): Promise<void> {
 	console.log(`self-evolution tests — node ${process.version}`);
 	testConfig();
@@ -632,6 +735,7 @@ async function main(): Promise<void> {
 	await testPipelineRealGit();
 	await testIssueSignals();
 	testPromptSection();
+	await testPollBudget();
 
 	console.log(`\n${failed === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED'}: ${passed} passed, ${failed} failed`);
 	process.exit(failed === 0 ? 0 : 1);

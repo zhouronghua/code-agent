@@ -21,6 +21,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as http from 'node:http';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import { AgentLoop } from 'vs/workbench/contrib/agent/common/agent';
 import { AgentModeManager } from 'vs/workbench/contrib/agent/common/agentModes';
@@ -97,9 +100,38 @@ function clearLangfuseEnv(): Record<string, undefined> {
 	return cleared;
 }
 
+/**
+ * Run `fn` with the ambient configuration out of the way (a temp cwd + an empty
+ * agent home).
+ *
+ * `loadTracingConfig()` reads `./config.yaml` and the agent home, so on a machine
+ * whose config.yaml carries a `tracing:` section the cases below would assert
+ * facts about that machine ("no keys" is simply false there) instead of facts
+ * about the loader. The assertions are unchanged — only the ambient input is.
+ */
+function withIsolatedConfig(fn: () => void): void {
+	const savedCwd = process.cwd();
+	const savedHome = process.env.AGENT_HOME;
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'code-agent-tracing-cfg-'));
+	process.chdir(dir);
+	process.env.AGENT_HOME = dir;
+	try {
+		fn();
+	} finally {
+		process.chdir(savedCwd);
+		if (savedHome === undefined) { delete process.env.AGENT_HOME; }
+		else { process.env.AGENT_HOME = savedHome; }
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
 function testConfigResolution(): void {
 	console.log('\n[1] tracing configuration resolution');
+	withIsolatedConfig(testConfigResolutionCases);
+}
 
+/** The [1] cases, run against a config that names no Langfuse keys. */
+function testConfigResolutionCases(): void {
 	withEnv(clearLangfuseEnv(), () => {
 		const off = loadTracingConfig();
 		ok(!off.enabled, 'no keys → tracing disabled');
