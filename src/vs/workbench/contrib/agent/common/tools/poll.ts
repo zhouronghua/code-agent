@@ -12,8 +12,35 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ITerminalService } from 'vs/workbench/contrib/terminal/browser/terminal';
-import { IToolResult } from 'vs/workbench/services/agent/common/agentModels';
+import { IAgentConfig, IToolResult } from 'vs/workbench/services/agent/common/agentModels';
 import { AgentTool } from '../agentTools';
+
+/** Terminal create/dispose overhead per attempt, which the loop itself does not measure. */
+const POLL_ATTEMPT_OVERHEAD_MS = 1000;
+
+/**
+ * Worst-case wall clock (ms) one poll call with these arguments can occupy its caller.
+ *
+ * Mirrors `execute()` exactly: every attempt may burn its full `command_timeout`,
+ * and every attempt but the last may sleep its backoff delay. Keeping this in sync
+ * with the loop is what stops the harness timeout from cutting the last attempt off
+ * mid-flight.
+ */
+export function pollBudgetMs(args: Record<string, unknown>): number {
+	const maxAttempts = Math.max(1, (args.max_attempts as number) || 30);
+	const initialDelay = (args.initial_delay as number) || 2;
+	const maxDelay = (args.max_delay as number) || 60;
+	const commandTimeout = (args.command_timeout as number) || 30000;
+
+	let total = maxAttempts * POLL_ATTEMPT_OVERHEAD_MS;
+	for (let i = 0; i < maxAttempts; i++) {
+		total += commandTimeout;
+		if (i < maxAttempts - 1) {
+			total += Math.min(initialDelay * Math.pow(2, i), maxDelay) * 1000;
+		}
+	}
+	return total;
+}
 
 export class PollTool extends AgentTool {
 	readonly name = 'poll';
@@ -69,6 +96,18 @@ export class PollTool extends AgentTool {
 		private readonly _defaultCwd: string,
 	) {
 		super();
+	}
+
+	/**
+	 * A poll is a deliberate wait: the generic step timeout (60s in the shipped
+	 * config) is shorter than any real CI wait, so being killed by it is a
+	 * guaranteed failure rather than a safety net. Declare the loop's own
+	 * worst case instead — never shorter than the step timeout, never longer than
+	 * the agent's configured task budget.
+	 */
+	override timeoutFor(args: Record<string, unknown>, config: IAgentConfig): number {
+		const outerBound = Math.max(config.stepTimeout, config.taskTimeout);
+		return Math.min(Math.max(pollBudgetMs(args), config.stepTimeout), outerBound);
 	}
 
 	async execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult> {

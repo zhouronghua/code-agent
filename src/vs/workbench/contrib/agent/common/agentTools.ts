@@ -2,7 +2,7 @@
  *  Agent Tool System - Abstract base class + registry
  *--------------------------------------------------------------------------------------------*/
 
-import { IToolResult, IToolSchema } from 'vs/workbench/services/agent/common/agentModels';
+import { IAgentConfig, IToolResult, IToolSchema } from 'vs/workbench/services/agent/common/agentModels';
 
 export abstract class AgentTool {
 	abstract readonly name: string;
@@ -10,6 +10,19 @@ export abstract class AgentTool {
 	abstract readonly parameters: Record<string, unknown>;
 
 	abstract execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<IToolResult>;
+
+	/**
+	 * Optional tool-declared execution budget (ms) for a single call.
+	 *
+	 * `AgentLoop` races every tool call against the generic `step_timeout`. A tool
+	 * whose whole purpose is waiting (poll) declares its own budget here, so that
+	 * generic timeout stays the outer bound instead of becoming a hard cap that
+	 * kills the tool mid-wait. Returning `undefined` keeps the default behaviour;
+	 * an explicit `timeout` argument always wins over this.
+	 */
+	timeoutFor(_args: Record<string, unknown>, _config: IAgentConfig): number | undefined {
+		return undefined;
+	}
 
 	toSchema(): IToolSchema {
 		return {
