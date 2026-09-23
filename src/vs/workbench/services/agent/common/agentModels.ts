@@ -177,6 +177,24 @@ export interface IStepRecord {
 	readonly timestamp: number;
 }
 
+/**
+ * Something that went wrong (or nearly did) during a task, recorded in the task
+ * log so self-evolution evidence is a first-class fact instead of prose that has
+ * to be re-parsed from the transcript later.
+ */
+export interface IIssueSignal {
+	readonly kind:
+		| 'user-intervention'      // the user had to steer the agent mid-task (/btw)
+		| 'step-limit'            // the task ran out of steps
+		| 'reasoning-loop'         // the model repeated itself and produced no answer
+		| 'context-overflow'       // history had to be compacted and the call retried
+		| 'model-fallback'         // the primary model timed out and the 保底 model took over
+		| 'verification-round'     // a self-verification round had to be injected
+		| 'unknown-tool';          // the model called a tool that does not exist
+	readonly detail?: string;
+	readonly stepIndex?: number;
+}
+
 /** Complete execution log for a single task, persisted for troubleshooting. */
 export interface IAgentTaskLog {
 	readonly id: string;
@@ -191,6 +209,12 @@ export interface IAgentTaskLog {
 	readonly extraSystemPrompt?: string;
 	/** Runtime model switches that happened during this task (routing / 保底 / recovery). */
 	readonly modelSwitches?: IModelSwitchEvent[];
+	/**
+	 * Problems observed during the task (loop corrections, compactions, forced
+	 * fallbacks, user interventions, unknown tools). Read by the self-evolution
+	 * evidence scan so a defect can be traced back to the runs that hit it.
+	 */
+	readonly issueSignals?: IIssueSignal[];
 	readonly steps: IStepRecord[];
 	readonly totalSteps: number;
 	readonly totalToolCalls: number;

@@ -25,6 +25,7 @@ import {
 	IToolExecutionRecord,
 	IAgentTaskLog,
 	IModelSwitchEvent,
+	IIssueSignal,
 	ILlmUsage,
 	generateId,
 } from 'vs/workbench/services/agent/common/agentModels';
@@ -261,6 +262,22 @@ export class AgentLoop {
 	// ---- Per-task execution tracing ----
 	private _stepRecords: IStepRecord[] = [];
 	private _modelSwitches: IModelSwitchEvent[] = [];
+
+	/**
+	 * Problems observed during this task, recorded so the self-evolution evidence
+	 * scan can tie a defect to the runs that actually hit it. Kept separate from
+	 * `modelSwitches` because these are failure modes, not routing decisions.
+	 */
+	private _issueSignals: IIssueSignal[] = [];
+
+	/** Record one issue signal, de-duplicated per (kind, step, detail). */
+	private _noteSignal(kind: IIssueSignal['kind'], detail?: string, stepIndex?: number): void {
+		const last = this._issueSignals[this._issueSignals.length - 1];
+		if (last && last.kind === kind && last.stepIndex === stepIndex && last.detail === detail) {
+			return; // the same signal repeated inside one step is still one event
+		}
+		this._issueSignals.push({ kind, detail: detail ? detail.slice(0, 200) : undefined, stepIndex });
+	}
 	private _taskStartTime = 0;
 	private _taskDescription = '';
 	private _taskError: string | undefined;
@@ -393,6 +410,7 @@ export class AgentLoop {
 		this._primaryProvider = fromProvider;
 		this._applyModelSwitch(to, this._fallbackProvider!);
 		this._usingFallback = true;
+		this._noteSignal('model-fallback', `${fromConfig.model} → ${to.model}: ${(err as Error).message}`);
 		this._reportModelSwitch({
 			from: fromConfig.model,
 			to: to.model,
@@ -662,6 +680,7 @@ export class AgentLoop {
 			systemPrompt: this._context.systemPromptContent,
 			extraSystemPrompt: this._extraSystemPrompt || undefined,
 			modelSwitches: this._modelSwitches.length > 0 ? [...this._modelSwitches] : undefined,
+			issueSignals: this._issueSignals.length > 0 ? [...this._issueSignals] : undefined,
 			steps: [...this._stepRecords],
 			totalSteps: this._stepRecords.length,
 			totalToolCalls,
@@ -690,6 +709,7 @@ export class AgentLoop {
 		// Initialize per-task execution tracing
 		this._stepRecords = [];
 		this._modelSwitches = [];
+		this._issueSignals = [];
 		this._taskStartTime = Date.now();
 		this._taskDescription = userMessage;
 		this._taskError = undefined;
@@ -845,6 +865,7 @@ export class AgentLoop {
 		// Initialize per-task execution tracing
 		this._stepRecords = [];
 		this._modelSwitches = [];
+		this._issueSignals = [];
 		this._taskStartTime = Date.now();
 		this._taskDescription = '(continue previous session)';
 		this._taskError = undefined;
@@ -892,6 +913,7 @@ export class AgentLoop {
 		// Initialize per-task execution tracing
 		this._stepRecords = [];
 		this._modelSwitches = [];
+		this._issueSignals = [];
 		this._taskStartTime = Date.now();
 		this._taskDescription = plan?.task || '(execute plan)';
 		this._taskError = undefined;
@@ -982,6 +1004,9 @@ export class AgentLoop {
 			// ---- Inject any /btw hints received during agent execution ----
 			while (this._pendingBtwHints.length > 0) {
 				const hint = this._pendingBtwHints.shift()!;
+				// A hint means the agent's own reasoning was not good enough to
+				// continue unattended — the strongest signal in this evidence base.
+				this._noteSignal('user-intervention', hint, stepCount);
 				const btwMsg = createMessage(MessageRole.User,
 					`[User intervention via /btw]: ${hint}\n` +
 					`(This is a hint from the user to adjust your reasoning. Follow it in subsequent steps.)`
@@ -1007,6 +1032,7 @@ export class AgentLoop {
 				);
 				this._context.addMessage(warnMsg);
 				this._onDidReceiveMessage.fire(warnMsg);
+				this._noteSignal('step-limit', `${consecutiveToolOnlySteps} consecutive tool-only steps`, stepCount);
 				break;
 			}
 
@@ -1142,6 +1168,7 @@ export class AgentLoop {
 					}
 					if (err instanceof ContextOverflowError && overflowRetries < MAX_OVERFLOW_RETRIES) {
 						overflowRetries++;
+						this._noteSignal('context-overflow', `retry ${overflowRetries}/${MAX_OVERFLOW_RETRIES}: ${(err as Error).message}`, stepCount);
 						console.warn(`[Context Overflow] Conversation history too large — compacting and retrying (${overflowRetries}/${MAX_OVERFLOW_RETRIES}): ${(err as Error).message}`);
 						await this._context.compactIfNeeded(true);
 						continue;
@@ -1192,6 +1219,7 @@ export class AgentLoop {
 				const reasoning = response.reasoningContent || '';
 				if (isDegenerateReasoning(reasoning) && reasoningCorrectionRounds < MAX_REASONING_CORRECTION_ROUNDS) {
 					reasoningCorrectionRounds++;
+					this._noteSignal('reasoning-loop', `${reasoning.length} chars, ${countRepeatedReasoningLines(reasoning)} repeats`, stepCount);
 					console.warn(
 						`[Reasoning Loop] ${this._config.model} repeated the same reasoning ` +
 						`(${reasoning.length} chars, ${countRepeatedReasoningLines(reasoning)} repeats) and produced no ` +
@@ -1222,6 +1250,7 @@ export class AgentLoop {
 				const shouldVerify = !hasAnswer || !(skipSelfVerification && hasExecutedTool);
 				if (shouldVerify && verificationRounds < MAX_VERIFICATION_ROUNDS) {
 					verificationRounds++;
+					this._noteSignal('verification-round', `round ${verificationRounds}/${MAX_VERIFICATION_ROUNDS}`, stepCount);
 					const verifyMsg = createMessage(MessageRole.User,
 						`[System verification round ${verificationRounds}/${MAX_VERIFICATION_ROUNDS}]\n` +
 						`Before concluding, please verify: (1) Have you run tests or build to confirm correctness? ` +
@@ -1402,6 +1431,9 @@ export class AgentLoop {
 		const tool = this._toolRegistry.get(toolName);
 
 		if (!tool) {
+			// The model called something that does not exist — either its schema
+			// list is missing the tool, or the name drifted between steps.
+			this._noteSignal('unknown-tool', toolName);
 			return {
 				toolCallId,
 				success: false,

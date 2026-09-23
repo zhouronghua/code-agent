@@ -14,6 +14,10 @@ AI coding agent CLI, built on VS Code architecture with multi-provider LLM suppo
 - **MCP tools**: Load external MCP servers (streamableHttp / stdio) and expose their tools to the agent
 - **Langfuse observability**: Optional tracing of every task, step, LLM call and tool call
   (model + token usage per generation, secret masking, fail-open) — see `USAGE.md`
+- **Self-evolution (RSI)**: `agent_self_scan` turns your own run history into facts
+  (failures grouped by normalized error, run signals), and `agent_release` publishes a fix
+  through a checked gate (version bump → tests → pack → smoke → commit → optional push)
+  that aborts on the first failure — see `docs/self-evolve.md`
 - **Single-file CLI**: 170 KB minified; the only runtime dependencies are the optional
   Langfuse/OpenTelemetry packages, which are lazy-loaded and skipped when tracing is off
 

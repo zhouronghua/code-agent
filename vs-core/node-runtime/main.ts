@@ -52,6 +52,8 @@ import { agentInstructionFiles, agentHomeDir, migrateLegacyAgentHome } from '../
 import { SkillCatalogTool, CreateSkillTool, UpdateSkillTool } from '../../src/vs/workbench/contrib/agent/common/tools/skillTools';
 import { loadMemoryConfig, MemoryClient, MemorySearchTool, ConversationSearchTool, MemoryReadTool, MemoryWriteTool } from '../../src/vs/workbench/contrib/agent/common/agentMemory';
 import { IAgentTracing, NOOP_TRACING, initTracingFromConfig } from '../../src/vs/workbench/contrib/agent/common/agentTracing';
+import { SelfUpdateConfig, loadSelfUpdateConfig, buildSelfEvolvePromptSection, collectRunEvidence, formatEvidenceReport } from '../../src/vs/workbench/contrib/agent/common/agentSelfImprove';
+import { SelfScanTool, AgentReleaseTool } from '../../src/vs/workbench/contrib/agent/common/tools/selfImproveTools';
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
 import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common/agentSessions';
 import { TaskLogManager } from '../../src/vs/workbench/contrib/agent/common/agentTaskLog';
@@ -426,6 +428,8 @@ interface CLIOptions {
 	mcpTools?: string;
 	/** --tracing <on|off>: force Langfuse tracing on/off for this run. */
 	tracing?: 'on' | 'off';
+	/** --self-scan [days]: print the self-evolution run evidence and exit. */
+	selfScan?: number;
 }
 
 function parseArgs(): CLIOptions {
@@ -477,6 +481,13 @@ function parseArgs(): CLIOptions {
 				i++;
 				opts.tracing = args[i] === 'on' ? 'on' : 'off';
 				break;
+			case '--self-scan': {
+				// Optional days argument; `--self-scan 30` or a bare `--self-scan`.
+				const next = args[i + 1];
+				if (next !== undefined && /^\d+$/.test(next)) { opts.selfScan = parseInt(next, 10); i++; }
+				else opts.selfScan = 0;   // 0 = use the configured window
+				break;
+			}
 			case '--profiles':
 				opts.showProfiles = true;
 				break;
@@ -596,6 +607,8 @@ Options:
   --top-k <int>               Override top-k sampling; 0 = provider default
   --memory <on|off>           Force shared agent memory on/off for this run
   --tracing <on|off>          Force Langfuse tracing on/off (LANGFUSE_* keys)
+  --self-scan [days]          Print self-evolution evidence from your own run
+                              history (tool failures, run signals) and exit
   --batch                     Headless: run the task(s), then exit (no REPL)
   --batch-log <file>          Also append all run output to <file>
   --batch-result <file>       Write a JSON result summary to <file>
@@ -665,6 +678,15 @@ let tracing: IAgentTracing = NOOP_TRACING;
 /** Flushes and shuts the Langfuse processor down (set once tracing is up). */
 let tracingFlush: (() => Promise<void>) | undefined;
 
+/**
+ * Self-evolution config, resolved once per process (config.yaml is read by both
+ * the tool registry and the system prompt, and must not be re-read per task).
+ */
+let _selfUpdateConfig: SelfUpdateConfig | undefined;
+function selfUpdateConfig(): SelfUpdateConfig {
+	return (_selfUpdateConfig ??= loadSelfUpdateConfig());
+}
+
 /** Flush pending spans before the process exits (batched export). */
 async function flushTracing(): Promise<void> {
 	const flush = tracingFlush;
@@ -710,7 +732,6 @@ async function setupTracing(release: string, cliOverride?: 'on' | 'off'): Promis
 
 async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 'off', opts?: CLIOptions) {
 	const config = resolved.agentConfig;
-
 	if (!config.apiKey) {
 		console.error(`${C.red}No API key found. Set OPENAI_API_KEY, or configure apiKey in ~/.agent/models.json or config.yaml.${C.reset}`);
 		process.exit(1);
@@ -742,6 +763,21 @@ async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 
 	toolRegistry.register(new SkillCatalogTool(skillDirs));
 	toolRegistry.register(new CreateSkillTool(skillDirs));
 	toolRegistry.register(new UpdateSkillTool(skillDirs));
+
+	// ---- Self-evolution (RSI): inspect own run history, release own fixes ----
+	// The read-only scan is on by default; the release gate stays opt-in because
+	// it writes to the repository and can push.
+	const selfUpdate = selfUpdateConfig();
+	if (selfUpdate.enabled) {
+		toolRegistry.register(new SelfScanTool(selfUpdate));
+		const releaseNote = selfUpdate.allowRelease
+			? `release ON${selfUpdate.allowPush ? ' + push' : ' (no push)'}`
+			: 'release OFF (self_update.allow_release)';
+		console.log(`${C.green}[SELF]${C.reset} self-evolution: evidence scan ON, ${releaseNote}`);
+		if (selfUpdate.allowRelease) {
+			toolRegistry.register(new AgentReleaseTool(selfUpdate));
+		}
+	}
 
 	// ---- Shared memory (tdai_agent_mem) ----
 	// Tools + auto recall/capture are enabled when config.yaml `memory:` or
@@ -1193,6 +1229,16 @@ async function main() {
 		console.log(`${C.dim}${parts.join(' | ')}${C.reset}`);
 	}
 	console.log('');
+
+	// ---- Self-evolution evidence scan (headless, no LLM call) ----
+	// Prints the FACTS the agent would otherwise ask for via agent_self_scan, so
+	// an orchestrator/cron can feed them to a reviewer. Read-only.
+	if (opts.selfScan !== undefined) {
+		const cfg = selfUpdateConfig();
+		const evidence = collectRunEvidence({ days: opts.selfScan > 0 ? opts.selfScan : cfg.evidenceDays });
+		console.log(formatEvidenceReport(evidence));
+		return;
+	}
 
 	// ---- Langfuse observability (opt-in; fail-open) ----
 	// Resolved from LANGFUSE_* env vars / config.yaml `tracing:` / --tracing.
@@ -1740,6 +1786,10 @@ function buildSkillsContext(loader: SkillsLoader, activeSkill?: string, taskDesc
 	// (canonical SKILL.md contract, dedup recall, publication location).
 	const skillDirs = getResolvedSkillDirs();
 	prompt += loader.buildMetaSkillPromptSection(skillDirs);
+
+	// Self-evolution methodology: how to read run evidence, judge a finding, and
+	// release the fix through the gate. Empty when the feature is disabled.
+	prompt += buildSelfEvolvePromptSection(selfUpdateConfig());
 
 	// If user explicitly activated a skill not in the auto-matched set,
 	// append its full content separately (redundancy for safety)

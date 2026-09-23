@@ -42,6 +42,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { agentHomeFileCandidates } from './agentHome';
+import { parseScalarValue, stripYamlComment } from './agentConfig';
 
 // ---------------------------------------------------------------------------
 // Limits — mirrors the Langfuse attribute constraints, so we truncate at the
@@ -132,42 +133,6 @@ function toBool(v: unknown): boolean | undefined {
 	if (['1', 'true', 'yes', 'on'].includes(s)) return true;
 	if (['0', 'false', 'no', 'off'].includes(s)) return false;
 	return undefined;
-}
-
-function stripQuotes(v: string): string {
-	return v.replace(/^["']|["']$/g, '');
-}
-
-/**
- * Remove a trailing YAML comment from a scalar value.
- *
- * A `#` starts a comment only at the start of the value or after whitespace, and
- * never inside quotes — so `base_url: http://host/#frag` and `secret_key: "sk-#1"`
- * survive, while `enabled: true  # on by default` does not keep the comment.
- *
- * Users document their config inline (as config.template.yaml does), and feeding
- * `"https://cloud.langfuse.com   # 自建部署改成对应地址"` straight into the SDK
- * fails with "Could not parse user-provided export URL".
- */
-export function stripYamlComment(value: string): string {
-	let quote = '';
-	for (let i = 0; i < value.length; i++) {
-		const ch = value[i];
-		if (quote) {
-			if (ch === quote) quote = '';
-			continue;
-		}
-		if (ch === '"' || ch === "'") { quote = ch; continue; }
-		if (ch === '#' && (i === 0 || /\s/.test(value[i - 1]))) {
-			return value.slice(0, i);
-		}
-	}
-	return value;
-}
-
-/** Parse a `key: value` scalar the way the config file is written by hand. */
-function parseScalarValue(raw: string): string {
-	return stripQuotes(stripYamlComment(raw).trim());
 }
 
 /**

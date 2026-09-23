@@ -133,6 +133,37 @@ rules:
 #   tags:
 #     - code-agent
 
+# Agent self-evolution (RSI) — let the agent find its own defects from its run
+# history and release the fix through a checked gate.
+#
+#   agent_self_scan : reads <agent home>/tasks/*.json and returns FACTS — tool
+#                     call/failure histograms, failures grouped by normalized
+#                     error, run signals (user /btw corrections, model fallbacks,
+#                     context overflows, reasoning loops, step-limit hits,
+#                     unknown tools), slowest/costliest tasks. Read-only; session
+#                     transcripts are never read.
+#   agent_release   : version bump -> npm run release_scripts -> pack -> smoke the
+#                     built CLI -> git commit -> optional push. Aborts at the
+#                     first failure (no commit on red tests), never uses --force /
+#                     --amend / --no-verify, and restores package.json if it
+#                     aborts before committing.
+#
+# Method (evidence -> judgement -> minimal fix -> test -> release) is in
+# docs/self-evolve.md and is injected into the system prompt when enabled.
+#
+# Quick look at the evidence without an LLM call:
+#   code-agent --self-scan 30
+#
+# self_update:
+#   enabled: true            # register agent_self_scan (read-only, safe)
+#   allow_release: false     # register agent_release (writes the repo, commits)
+#   allow_push: false        # ...and let it push (requires allow_release: true)
+#   evidence_days: 14        # look-back window for run evidence
+#   evidence_tasks: 200      # hard cap on task logs scanned (newest first)
+#   remote: origin           # push target
+#   release_scripts: ["typecheck", "test", "pack"]
+#   install_command: ""      # optional extra command after the scripts (e.g. npm link)
+
 # Shared memory (tdai_agent_mem) — multi-machine / multi-agent memory hub.
 # When enabled, code-agent:
 #   - recalls relevant memories (L1 facts + L2 scenario index + L3 persona)

@@ -664,6 +664,69 @@ code-agent --tracing on  "task"     # 本次运行强制开启（覆盖 config.y
 > （当前 SDK 世代，非已废弃的 v3 `langfuse` 包）。它们在构建时被标记为 external 并按需
 > 懒加载，未安装时 tracing 自动降级为空操作。
 
+## 自演化（Agent 自己找缺陷、自己发布修复）
+
+把 RSI-Harness 的 **harness-rsi** 方法移植过来：*以历史记录为证据、事实与解释分离、
+有界读取、先讲方案再落笔、发布必须过机器校验闸门*。区别在于这里的对象是 code-agent
+自己的源码。
+
+### 证据：`agent_self_scan` / `--self-scan`
+
+读取 `<agent home>/tasks/*.json`（每次任务都会写的执行日志），返回**事实**：
+
+- **按归一化错误聚合的失败**：`count` 是重复次数。同一缺陷发生 40 次是**一行**，
+  不是 40 条发现（id、数字、引号参数、绝对路径都会被归一化掉）
+- **工具直方图**：调用数、失败数、失败率、最坏耗时
+- **运行信号**：用户中途 `/btw` 纠偏、保底模型切换、上下文压缩重试、推理死循环、
+  步数上限、模型编造的工具名 —— 这些是"没报错但也不对"的证据
+- **最贵/最慢的任务**：时间与 token 实际花在哪
+
+不返回 transcript，不做排序、不给结论 —— 排序是解释，解释是 reviewer 的活。
+
+```bash
+# 不需要 LLM 调用，直接看证据（默认窗口取配置）
+code-agent --self-scan 30
+```
+
+### 发布：`agent_release`
+
+机械步骤不让模型即兴发挥：
+
+```
+版本号 +1 → npm run typecheck / test / pack → 冒烟新构建产物 → git commit →（可选）push
+```
+
+**故障即中止**：测试红就绝不产生 commit；commit 前中止会把 `package.json` 版本改回去，
+不留半发布状态；全程不使用 `--force` / `--amend` / `--no-verify`；push 需要显式开启。
+实际跑过的每一步会作为 `Verified-by:` trailer 写进 commit message。
+
+### 配置
+
+```yaml
+self_update:
+  enabled: true            # 注册 agent_self_scan（只读，默认开）
+  allow_release: false     # 注册 agent_release（会写仓库、产生 commit），默认关
+  allow_push: false        # 允许 push（需 allow_release: true）
+  evidence_days: 14        # 证据回看窗口
+  evidence_tasks: 200      # 最多扫描多少个任务日志（取最新）
+  remote: origin
+  release_scripts: ["typecheck", "test", "pack"]
+  install_command: ""      # 可选：脚本之后再跑一条命令（如 npm link）
+```
+
+启用后会向系统提示词注入方法论（是否允许发布也会如实写进去），完整方法见
+[`docs/self-evolve.md`](docs/self-evolve.md)。
+
+典型用法：先看一眼证据，再让 agent 走一遍完整流程
+
+```bash
+code-agent --self-scan 30
+code-agent "根据你自己最近 30 天的运行证据，找出一个真实缺陷并修复它，先用 dry_run 验证发布流程"
+```
+
+> 边界：证据来自任务日志，因此"答案错误但没报错"的缺陷它看不见；自演化会改代码，
+> 所以 `allow_release` 默认关闭。
+
 ## 分发
 
 ### 通过 GitHub Releases 分发（推荐）

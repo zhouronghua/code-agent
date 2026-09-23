@@ -35,8 +35,8 @@ import {
 	redactDeep,
 	redactSecrets,
 	stringifyMeta,
-	stripYamlComment,
 } from 'vs/workbench/contrib/agent/common/agentTracing';
+import { stripYamlComment } from 'vs/workbench/contrib/agent/common/agentConfig';
 import {
 	createMessage,
 	MessageRole,

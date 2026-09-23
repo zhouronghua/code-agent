@@ -16,6 +16,38 @@ import * as os from 'node:os';
 import { IAgentConfig, DEFAULT_AGENT_CONFIG } from 'vs/workbench/services/agent/common/agentModels';
 import { agentHomeFileCandidates } from './agentHome';
 
+/**
+ * Remove a trailing YAML comment from a scalar value.
+ *
+ * A `#` starts a comment only at the start of the value or after whitespace, and
+ * never inside quotes — so `base_url: http://host/#frag` and `secret_key: "sk-#1"`
+ * survive, while `enabled: true  # on by default` does not keep the comment.
+ *
+ * The hand-written section parsers (`tracing:`, `self_update:`) rely on this: the
+ * config file is documented in place, and feeding
+ * `"https://cloud.langfuse.com   # 自建部署改成对应地址"` to a consumer fails.
+ */
+export function stripYamlComment(value: string): string {
+	let quote = '';
+	for (let i = 0; i < value.length; i++) {
+		const ch = value[i];
+		if (quote) {
+			if (ch === quote) quote = '';
+			continue;
+		}
+		if (ch === '"' || ch === "'") { quote = ch; continue; }
+		if (ch === '#' && (i === 0 || /\s/.test(value[i - 1]))) {
+			return value.slice(0, i);
+		}
+	}
+	return value;
+}
+
+/** Parse a `key: value` scalar the way these config files are written by hand. */
+export function parseScalarValue(raw: string): string {
+	return stripYamlComment(raw).trim().replace(/^["']|["']$/g, '');
+}
+
 interface ConfigProfile {
 	provider: string;
 	model: string;
