@@ -154,6 +154,69 @@ export function isApiTimeoutError(err: unknown): boolean {
 }
 
 /**
+ * Detect an API RATE-LIMIT / quota error, used to trigger the same 保底
+ * (fallback) model as an access timeout. Covers the gateway's HTTP 429 and the
+ * quota wording it returns, observed verbatim in the run history:
+ *
+ *   OpenAI API error 429: {"error":{"message":"Token usage exceeds the current
+ *   model TPM (tokens per minute) limit 6000000. Please reduce the request
+ *   frequency or contact the administrator."}}
+ *
+ * Why this counts as "the model is unreachable": the quota belongs to the
+ * primary model, so every retry against it fails until the window rolls over.
+ * The 保底 model has its own quota, so switching keeps the task alive instead of
+ * ending it with "OpenAI API error 429" — 13 tasks in a 14-day window died that
+ * way before this was treated as a fallback trigger.
+ *
+ * Deliberately NOT matched: 400/500 and request-shape errors (e.g. the
+ * reasoning_content 400) — those are not quota problems and switching models
+ * would not fix them.
+ */
+export function isApiRateLimitError(err: unknown): boolean {
+	if (!err) return false;
+	const e = err as {
+		name?: string; message?: string; code?: string; status?: number; statusCode?: number;
+		cause?: { message?: string; code?: string; status?: number; statusCode?: number };
+	};
+
+	const parts: string[] = [];
+	if (e.message) parts.push(e.message);
+	if (e.code) parts.push(String(e.code));
+	if (e.cause) {
+		if (e.cause.message) parts.push(e.cause.message);
+		if (e.cause.code) parts.push(String(e.cause.code));
+	}
+	const hay = parts.join(' ').toLowerCase();
+
+	// Quota wording first: it is specific, so it cannot misfire on unrelated text.
+	if (/token usage exceeds|tokens per minute|requests per minute|\btpm\b|\brpm\b|rate[\s_-]?limit|too many requests/.test(hay)) {
+		return true;
+	}
+	// Then the status code (HTTP 429), from either the wrapper or its cause.
+	const status = e.status ?? e.statusCode ?? e.cause?.status ?? e.cause?.statusCode;
+	if (status === 429) return true;
+	return /\b429\b/.test(hay);
+}
+
+/** Why the agent fell back to the 保底 model. */
+export type FallbackKind = 'timeout' | 'rate-limit';
+
+/**
+ * Should this error move the agent to the 保底 model? One predicate for both
+ * triggers so the loop cannot accidentally handle only one of them.
+ */
+export function isApiFallbackTrigger(err: unknown): boolean {
+	return isApiTimeoutError(err) || isApiRateLimitError(err);
+}
+
+/** Classify a fallback trigger (timeout wins when both look true). */
+export function classifyApiFallback(err: unknown): FallbackKind | undefined {
+	if (isApiTimeoutError(err)) return 'timeout';
+	if (isApiRateLimitError(err)) return 'rate-limit';
+	return undefined;
+}
+
+/**
  * Render a runtime model switch as one line, e.g.
  *   [MODEL] ⚠ deepseek-flash unreachable → switched to 保底模型 gpt-5.6-luna, retrying the same request
  *   [MODEL] ✓ deepseek-flash reachable again → switched back from 保底模型 gpt-5.6-luna
@@ -163,6 +226,8 @@ export function formatModelSwitch(e: IModelSwitchEvent): string {
 	switch (e.reason) {
 		case 'fallback-timeout':
 			return `[MODEL] ⚠ ${e.from} unreachable → switched to 保底模型 ${e.to}, retrying the same request${detail}`;
+		case 'fallback-rate-limit':
+			return `[MODEL] ⚠ ${e.from} rate-limited → switched to 保底模型 ${e.to}, retrying the same request${detail}`;
 		case 'primary-recovered':
 			return `[MODEL] ✓ ${e.to} reachable again → switched back from 保底模型 ${e.from}${detail}`;
 		case 'profile':
@@ -233,6 +298,8 @@ export class AgentLoop {
 	private _fallbackConfig: IAgentConfig | undefined;
 	private _fallbackProvider: ILLMProvider | undefined;
 	private _usingFallback = false;
+	/** Why the current fallback happened — decides what counts as "recovered". */
+	private _fallbackKind: FallbackKind | undefined;
 
 	// ---- Model switch reporting + fallback supervision ----
 	// The model that was active before the fallback swap; the probe returns to it.
@@ -310,6 +377,7 @@ export class AgentLoop {
 		// and cancels any pending recovery probe for the old primary model.
 		this._usingFallback = false;
 		this._primaryRecovered = false;
+		this._fallbackKind = undefined;
 		this._stopRecoveryProbe();
 		if (config.model !== fromModel) {
 			this._reportModelSwitch({
@@ -404,19 +472,22 @@ export class AgentLoop {
 	 * unreachable, retry the same request, and start supervising the primary
 	 * model so the agent returns to it as soon as it answers again.
 	 */
-	private _enterFallback(err: unknown, fromConfig: IAgentConfig, fromProvider: ILLMProvider): void {
+	private _enterFallback(err: unknown, fromConfig: IAgentConfig, fromProvider: ILLMProvider, kind: FallbackKind): void {
 		const to = this._fallbackConfig!;
 		this._primaryConfig = fromConfig;
 		this._primaryProvider = fromProvider;
 		this._applyModelSwitch(to, this._fallbackProvider!);
 		this._usingFallback = true;
-		this._noteSignal('model-fallback', `${fromConfig.model} → ${to.model}: ${(err as Error).message}`);
+		// Remember WHY we fell back: a throttled primary needs a different
+		// recovery criterion than a timed-out one (see _runProbe).
+		this._fallbackKind = kind;
+		this._noteSignal('model-fallback', `${fromConfig.model} → ${to.model} (${kind}): ${(err as Error).message}`);
 		this._reportModelSwitch({
 			from: fromConfig.model,
 			to: to.model,
-			reason: 'fallback-timeout',
+			reason: kind === 'rate-limit' ? 'fallback-rate-limit' : 'fallback-timeout',
 			toFallback: true,
-			detail: `timeout: ${(err as Error).message}`,
+			detail: `${kind === 'rate-limit' ? 'rate limit' : 'timeout'}: ${(err as Error).message}`,
 		});
 		this._startRecoveryProbe();
 	}
@@ -461,7 +532,13 @@ export class AgentLoop {
 
 		let reachable = false;
 		try {
-			reachable = (await provider.healthCheck!(FALLBACK_PROBE_TIMEOUT_MS)) === true;
+			// A primary that throttled us is NOT recovered just because it still
+			// answers 429 to the probe: switching back would immediately earn
+			// another 429 and ping-pong between the two models. For a rate-limit
+			// fallback only a real answer (200/400) counts as recovered.
+			reachable = (await provider.healthCheck!(FALLBACK_PROBE_TIMEOUT_MS, {
+				throttleSensitive: this._fallbackKind === 'rate-limit',
+			})) === true;
 		} catch {
 			reachable = false;
 		}
@@ -494,6 +571,7 @@ export class AgentLoop {
 		const fromModel = this._config.model;
 		this._applyModelSwitch(config, provider);
 		this._usingFallback = false;
+		this._fallbackKind = undefined;
 		this._stopRecoveryProbe();
 		this._reportModelSwitch({
 			from: fromModel,
@@ -1148,15 +1226,17 @@ export class AgentLoop {
 					}, step.ref);
 					break;
 				} catch (err) {
-					// ---- Model fallback (保底模型) on API access timeout ----
-					// When the active scenario/default model times out, transparently
-					// switch to the configured fallback model and retry the SAME
-					// request instead of failing the whole task. Only one fallback
-					// attempt is made per request (no ping-pong between models); a
-					// background probe then watches the primary model and returns to
-					// it as soon as it answers again.
-					if (isApiTimeoutError(err) && this._fallbackProvider && this._fallbackConfig && !this._usingFallback) {
-						this._enterFallback(err, this._config, this._llmProvider);
+					// ---- Model fallback (保底模型) on API access timeout / rate limit ----
+					// When the active scenario/default model times out OR is throttled
+					// (429 / TPM-RPM quota), transparently switch to the configured
+					// fallback model and retry the SAME request instead of failing the
+					// whole task. Only one fallback attempt is made per request (no
+					// ping-pong between models); a background probe then watches the
+					// primary model and returns to it as soon as it answers again
+					// (for a throttled primary, 429 does not count as recovery).
+					const fallbackKind = classifyApiFallback(err);
+					if (fallbackKind && this._fallbackProvider && this._fallbackConfig && !this._usingFallback) {
+						this._enterFallback(err, this._config, this._llmProvider, fallbackKind);
 						// The 保底 model may have a much smaller window than the model
 						// that just timed out — compact now instead of burning another
 						// (possibly slow) request against an overflowing context.

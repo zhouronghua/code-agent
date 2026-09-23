@@ -33,9 +33,12 @@ active_profile: openai
 #   default: deepseek-v4-flash          # fallback model for unmatched scenarios
 #   fallback: gpt-5.6-luna               # 保底模型 (guaranteed model): auto-switched
 #                                        # when the scenario/default model hits an API
-#                                        # access timeout, then the request is retried.
+#                                        # access timeout OR a rate limit (HTTP 429 /
+#                                        # TPM-RPM quota), then the request is retried.
 #                                        # A background probe switches back to the
-#                                        # primary model as soon as it answers again.
+#                                        # primary model as soon as it answers again
+#                                        # (a throttled primary must answer for real,
+#                                        # not merely return 429).
 #                                        # Use a NON-thinking model here: a thinking
 #                                        # 保底 model can loop on its own reasoning and
 #                                        # answer nothing (observed with hy3).

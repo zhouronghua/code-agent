@@ -14,6 +14,10 @@ import {
 	countRepeatedReasoningLines,
 	formatModelSwitch,
 	formatReasoningForLog,
+	isApiRateLimitError,
+	isApiTimeoutError,
+	isApiFallbackTrigger,
+	classifyApiFallback,
 } from 'vs/workbench/contrib/agent/common/agent';
 import { AgentContext } from 'vs/workbench/contrib/agent/common/agentContext';
 import { AgentModeManager } from 'vs/workbench/contrib/agent/common/agentModes';
@@ -28,7 +32,7 @@ import {
 	IModelSwitchEvent,
 	IToolSchema,
 } from 'vs/workbench/services/agent/common/agentModels';
-import { ILLMProvider } from 'vs/workbench/services/agent/browser/llmProvider';
+import { ILLMProvider, IHealthCheckOptions } from 'vs/workbench/services/agent/browser/llmProvider';
 import { OpenAIProvider } from 'vs/workbench/services/agent/browser/llmOpenai';
 
 let passed = 0;
@@ -66,7 +70,20 @@ function makeConfig(model: string, over: Partial<IAgentConfig> = {}): IAgentConf
 	};
 }
 
-type Behavior = { kind: 'ok'; text?: string; reasoning?: string } | { kind: 'timeout' } | { kind: 'loop' };
+type Behavior =
+	| { kind: 'ok'; text?: string; reasoning?: string }
+	| { kind: 'timeout' }
+	| { kind: 'rate-limit'; message?: string }
+	| { kind: 'loop' };
+
+/** The quota error observed verbatim in the run history (api.enflame.cn). */
+function tpmError(): Error {
+	return new Error(
+		'OpenAI API error 429: {"error":{"message":"Token usage exceeds the current model TPM '
+		+ '(tokens per minute) limit 6000000. Please reduce the request frequency or contact the '
+		+ 'administrator.","type":"invalid_request_error","code":"rate_limit_exceeded"}}',
+	);
+}
 
 /** The observed hy3 failure: a 98k-char reasoning block stuck on one line. */
 function degenerateReasoning(): string {
@@ -78,8 +95,15 @@ class FakeProvider implements ILLMProvider {
 	readonly name = 'fake';
 	healthChecks = 0;
 	calls = 0;
-	private readonly _queue: Behavior[];
-	constructor(behaviors: Behavior[], public healthy = true, public thinks = false) {
+	/** Probe options of the last health check (throttle-aware recovery). */
+	lastHealthCheckOpts: IHealthCheckOptions | undefined;
+	constructor(
+		behaviors: Behavior[],
+		public healthy = true,
+		public thinks = false,
+		/** Answers the probe with 429 (throttled) instead of a real answer. */
+		public throttled = false,
+	) {
 		// The last behavior repeats once the queue is exhausted.
 		this._queue = behaviors.length > 0 ? [...behaviors] : [{ kind: 'ok' }];
 	}
@@ -96,6 +120,9 @@ class FakeProvider implements ILLMProvider {
 			const err = new Error('request timed out') as Error & { code?: string };
 			err.code = 'ETIMEDOUT';
 			throw err;
+		}
+		if (behavior.kind === 'rate-limit') {
+			throw behavior.message ? new Error(behavior.message) : tpmError();
 		}
 		if (behavior.kind === 'loop') {
 			// Empty answer + no tool calls + runaway thinking.
@@ -122,8 +149,12 @@ class FakeProvider implements ILLMProvider {
 		return this.thinks;
 	}
 
-	async healthCheck(): Promise<boolean> {
+	async healthCheck(_timeoutMs?: number, opts?: IHealthCheckOptions): Promise<boolean> {
 		this.healthChecks++;
+		this.lastHealthCheckOpts = opts;
+		// A throttled endpoint answers 429: that means "reachable" unless the
+		// agent fell back because of throttling.
+		if (this.throttled) return opts?.throttleSensitive !== true;
 		return this.healthy;
 	}
 }
@@ -368,6 +399,20 @@ async function testOpenAiHealthCheck(): Promise<void> {
 		eq(await p.healthCheck(3000), expected, msg);
 	}
 
+	// Throttle-aware probing (used when the agent fell back because of a quota
+	// error): a 429 means "still throttled", so the agent must stay on the
+	// 保底 model until the model really answers.
+	status = 429;
+	const throttled = new OpenAIProvider(makeConfig('primary-model', { apiBase: base }));
+	eq(await throttled.healthCheck(3000, { throttleSensitive: true }), false,
+		'a 429 is NOT recovery when the fallback was caused by throttling');
+	status = 400;
+	eq(await throttled.healthCheck(3000, { throttleSensitive: true }), true,
+		'a real answer (400 = probe rejected) is recovery even for a throttled primary');
+	status = 200;
+	eq(await throttled.healthCheck(3000, { throttleSensitive: true }), true,
+		'a 200 is recovery for a throttled primary');
+
 	hang = true;
 	const hangStart = Date.now();
 	const hung = await new OpenAIProvider(makeConfig('primary-model', { apiBase: base })).healthCheck(400);
@@ -483,6 +528,88 @@ async function testThinkingEchoBackOnRecovery(): Promise<void> {
 	await new Promise<void>(resolve => server.close(() => resolve()));
 }
 
+/**
+ * Rate-limit (429 / TPM-RPM quota) must behave exactly like an access timeout:
+ * switch to the 保底 model, retry the SAME request, and keep the task alive.
+ * Measured motivation: "OpenAI API error 429: Token usage exceeds the current
+ * model TPM (tokens per minute) limit 6000000" failed 13 tasks in one 14-day
+ * window because only timeouts were treated as a fallback trigger.
+ */
+async function testRateLimitFallback(): Promise<void> {
+	console.log('\n[9] rate limit (429 / TPM quota) also falls back to the 保底 model');
+
+	// ---- (a) detection ----
+	const tpm = tpmError();
+	ok(isApiRateLimitError(tpm), 'the observed TPM quota error is detected as a rate limit');
+	ok(isApiRateLimitError(new Error('HTTP 429 Too Many Requests')), 'a bare 429 is detected');
+	ok(isApiRateLimitError(new Error('{"error":"requests per minute limit exceeded"}')),
+		'an RPM-limit message is detected');
+	const asStatus = new Error('throttled') as Error & { status?: number };
+	asStatus.status = 429;
+	ok(isApiRateLimitError(asStatus), 'a structured status=429 is detected');
+	ok(!isApiRateLimitError(new Error('OpenAI API error 4290: nope')),
+		'an unrelated number that merely contains 429 is NOT a rate limit');
+
+	// Not a rate limit: request-shape and server errors must keep their own paths.
+	const reasoning400 = new Error(
+		'OpenAI API error 400: {"error":{"message":"The `reasoning_content` in the thinking mode '
+		+ 'must be passed back to the API.","type":"invalid_request_error"}}',
+	);
+	ok(!isApiRateLimitError(reasoning400), 'the reasoning_content 400 is NOT a rate limit');
+	ok(!isApiFallbackTrigger(reasoning400), 'the reasoning_content 400 does not burn the 保底 model');
+	ok(!isApiRateLimitError(new Error('OpenAI API error 500: internal error')), 'a 500 is not a rate limit');
+	ok(!isApiTimeoutError(tpm), 'a rate limit is not a timeout (the two triggers stay distinguishable)');
+	eq(classifyApiFallback(tpm), 'rate-limit', 'classification: quota error → rate-limit');
+	eq(classifyApiFallback(new Error('request timed out')), 'timeout', 'classification: timeout → timeout');
+	eq(classifyApiFallback(reasoning400), undefined, 'classification: neither → no fallback');
+
+	// ---- (b) the loop retries the same request on the 保底 model ----
+	const primaryCfg = makeConfig('deepseek-flash');
+	const fallbackCfg = makeConfig('gpt-5.6-luna', { maxContextTokens: 256_000, maxOutputTokens: 32_768 });
+	const throttledPrimary = new FakeProvider([{ kind: 'rate-limit' }], true, false, true);
+
+	const agent = makeAgent(primaryCfg, throttledPrimary);
+	agent.setFallback(fallbackCfg, new FakeProvider([{ kind: 'ok', text: 'answered by 保底' }]));
+	agent.setProbeSchedule(60, 120);
+	const events: IModelSwitchEvent[] = [];
+	agent.onDidSwitchModel(e => events.push(e));
+
+	await agent.run('please answer');
+	eq(agent.activeModel, 'gpt-5.6-luna', 'the request is retried on the 保底 model');
+	eq(events.length, 1, 'exactly one fallback switch is reported');
+	eq(events[0].reason, 'fallback-rate-limit', 'the switch is reported as a rate-limit fallback');
+	ok(events[0].detail!.includes('rate limit'), 'the reason is surfaced in the switch detail');
+	ok(events[0].detail!.includes('TPM'), 'the offending quota message is preserved');
+	eq(agent.lastTaskError, undefined, 'the task survives instead of ending with the 429');
+
+	// ---- (c) a throttled primary is NOT "recovered" just because it answers 429 ----
+	await sleep(300);
+	ok(throttledPrimary.healthChecks >= 1, 'the recovery probe ran');
+	eq(throttledPrimary.lastHealthCheckOpts?.throttleSensitive, true,
+		'the probe asks for throttle-aware health (429 ≠ recovered after a quota fallback)');
+	eq(agent.activeModel, 'gpt-5.6-luna', 'still throttled → stay on the 保底 model');
+	eq(events.length, 1, 'no switch-back while the quota window is still closed');
+
+	// The window rolls over: the probe gets a real answer → switch back.
+	throttledPrimary.throttled = false;
+	await sleep(500);
+	eq(agent.activeModel, 'deepseek-flash', 'the primary is re-adopted once it really answers');
+	ok(!agent.usingFallback, 'fallback flag cleared after the quota recovery');
+	agent.dispose();
+
+	// ---- (d) a timeout fallback keeps the old, permissive probe policy ----
+	const timingOutPrimary = new FakeProvider([{ kind: 'timeout' }], true, false, true);
+	const agent2 = makeAgent(primaryCfg, timingOutPrimary);
+	agent2.setFallback(fallbackCfg, new FakeProvider([{ kind: 'ok' }]));
+	agent2.setProbeSchedule(60, 120);
+	await agent2.run('please answer');
+	await sleep(300);
+	ok(timingOutPrimary.healthChecks >= 1, 'the timeout fallback also probes the primary');
+	eq(timingOutPrimary.lastHealthCheckOpts?.throttleSensitive, false,
+		'a timeout fallback does not make the probe throttle-sensitive');
+	agent2.dispose();
+}
+
 async function main(): Promise<void> {
 	await testDegenerateReasoningDetection();
 	testReportFormatting();
@@ -492,6 +619,7 @@ async function main(): Promise<void> {
 	await testOpenAiHealthCheck();
 	await testReasoningLoopRecovery();
 	await testThinkingEchoBackOnRecovery();
+	await testRateLimitFallback();
 
 	console.log(`\n${failed === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED'}: ${passed} passed, ${failed} failed`);
 	process.exit(failed === 0 ? 0 : 1);

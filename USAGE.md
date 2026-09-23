@@ -218,7 +218,7 @@ agent-cli --profile local "explain this function"
 model_routing:
   enabled: true
   default: deepseek-flash             # 未命中场景时的兜底模型
-  fallback: gpt-5.6-luna              # 保底模型：场景/default 模型访问超时时自动切换并重试
+  fallback: gpt-5.6-luna              # 保底模型：场景/default 模型访问超时或限流(429/TPM)时自动切换并重试
   scenarios:
     reasoning: deepseek-v4-pro        # 复杂任务
     vision: deepseek-v4-flash-vision-exp  # 视觉任务
@@ -230,8 +230,16 @@ profile 名。存在 `model_routing` 配置段即默认启用（`enabled: false`
 模型切换会保留当前 session 的上下文历史。
 
 `fallback` 是**保底模型**（当前默认 `gpt-5.6-luna`）：当某个场景/default 选中的模型在
-调用时发生**访问超时**（request timeout / ETIMEDOUT / `UND_ERR_*_TIMEOUT`）时，agent 会
-自动切换到保底模型并对**同一请求**重试，而不是让整个任务失败。
+调用时发生下面任一种情况时，agent 会自动切换到保底模型并对**同一请求**重试，
+而不是让整个任务失败：
+
+1. **访问超时**（request timeout / ETIMEDOUT / `UND_ERR_*_TIMEOUT`）；
+2. **限流 / 配额用尽**（HTTP 429、`rate_limit_exceeded`、`Token usage exceeds the current
+   model TPM (tokens per minute) limit`、RPM 限制）。配额属于**发起请求的那个模型**，
+   在窗口滚动之前重试同一个模型必然继续 429；保底模型有自己的配额，因此切换才能真正
+   把任务救回来。实测教训：14 天窗口里有 13 个任务就是因为 429 直接失败。
+   注意 `reasoning_content must be passed back`（400）这类**请求格式**错误不属于限流，
+   不会消耗保底模型。
 
 保底模型建议使用**非 thinking（不支持 reasoning_content）**的模型。历史教训：hy3 作为
 保底模型时，会接着「上一轮回答」的上下文反复重放同一段推理（实测 98k 字符里
@@ -244,6 +252,7 @@ profile 名。存在 `model_routing` 配置段即默认启用（`enabled: false`
 ```
 [MODEL] ↪ routed deepseek-flash → deepseek-v4-pro          # 场景路由
 [MODEL] ⚠ deepseek-flash unreachable → switched to 保底模型 gpt-5.6-luna, retrying the same request (timeout: request timed out)
+[MODEL] ⚠ deepseek-flash rate-limited → switched to 保底模型 gpt-5.6-luna, retrying the same request (rate limit: OpenAI API error 429: Token usage exceeds the current model TPM (tokens per minute) limit 6000000)
 [MODEL] ✓ deepseek-flash reachable again → switched back from 保底模型 gpt-5.6-luna
 ```
 
@@ -264,6 +273,11 @@ profile 名。存在 `model_routing` 配置段即默认启用（`enabled: false`
 注意不能用 `max_tokens: 1` 探测——GPT-5.x 系列会返回 400 `max_tokens ... limit was
 reached`，会把健康模型误判成不可达。探针节奏可用 `model_routing.fallback_probe_interval_s`
 （秒，默认 30，失败退避至 120）配置，或调用 `AgentLoop.setProbeSchedule(initialMs, maxMs)`。
+
+**限流回退时 429 不算恢复**：如果这次回退的原因是限流（429/配额），那么探针拿到 429 只说明
+「对方还在限流」，此时切回去下一个请求立刻又是 429，两个模型之间来回抖动。因此探针会把
+`throttleSensitive: true` 传给 `healthCheck`，这时只有真正的回答（2xx/400）才算恢复；
+超时回退仍沿用上面的宽松策略（429 = 网关活着 = 已恢复）。
 
 #### 切换模型时的上下文一致性
 

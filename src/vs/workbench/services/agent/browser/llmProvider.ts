@@ -34,8 +34,19 @@ export interface ILLMProvider {
 	 * throw — an unreachable model is reported as `false`. Providers that cannot
 	 * probe a model cheaply may omit this method (the supervisor then treats the
 	 * primary model as still unreachable).
+	 *
+	 * `opts.throttleSensitive` is set when the agent fell back because the model
+	 * was RATE-LIMITED (429 / quota) rather than unreachable: the provider must
+	 * then treat a throttled answer (429) as still-unhealthy, otherwise the agent
+	 * would switch back only to be throttled again on the next request.
 	 */
-	healthCheck?(timeoutMs?: number): Promise<boolean>;
+	healthCheck?(timeoutMs?: number, opts?: IHealthCheckOptions): Promise<boolean>;
+}
+
+/** Options for {@link ILLMProvider.healthCheck}. */
+export interface IHealthCheckOptions {
+	/** 429 means "not recovered yet" instead of "reachable" (rate-limit fallback). */
+	throttleSensitive?: boolean;
 }
 
 /**

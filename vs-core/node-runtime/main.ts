@@ -912,8 +912,9 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memory
 
 /**
  * Wire the 保底 (guaranteed fallback) model into an agent loop. When the
- * scenario/default model times out, the agent swaps to this model and retries
- * the same request. Configured via config.yaml `model_routing.fallback`.
+ * scenario/default model times out or is rate-limited (429 / TPM quota), the
+ * agent swaps to this model and retries the same request. Configured via
+ * config.yaml `model_routing.fallback`.
  */
 function wireModelFallback(agentLoop: AgentLoop, modelRouter: ModelRouter): void {
 	// Optional probe cadence override (model_routing.fallback_probe_interval_s).
@@ -924,7 +925,7 @@ function wireModelFallback(agentLoop: AgentLoop, modelRouter: ModelRouter): void
 	if (!fb) return;
 	try {
 		agentLoop.setFallback(fb, LLMProviderFactory.create(fb));
-		console.log(`${C.dim}Model fallback: ON | 保底模型: ${fb.model} (auto-switch on API access timeout; background probe switches back on recovery)${C.reset}`);
+		console.log(`${C.dim}Model fallback: ON | 保底模型: ${fb.model} (auto-switch on API access timeout or rate limit; background probe switches back on recovery)${C.reset}`);
 	} catch (err: any) {
 		console.log(`${C.yellow}Model fallback: failed to init provider for "${fb.model}": ${err.message}${C.reset}`);
 	}
@@ -1207,7 +1208,7 @@ async function main() {
 			.join(', ');
 		console.log(`${C.dim}Model routing: ON | startup: ${cfg.model} | default: ${routingDefault}${scenarioEntries ? ` | ${scenarioEntries}` : ''}${C.reset}`);
 		if (resolved.modelRouting.fallbackModel) {
-			console.log(`${C.dim}Model fallback: ${resolved.modelRouting.fallbackModel} (保底模型, auto-switch on API access timeout)${C.reset}`);
+			console.log(`${C.dim}Model fallback: ${resolved.modelRouting.fallbackModel} (保底模型, auto-switch on API access timeout or rate limit)${C.reset}`);
 		}
 	} else if (resolved.profileExplicit) {
 		// A profile was pinned via --profile: the model is fixed and must never
@@ -1269,8 +1270,9 @@ async function main() {
 	let modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
 	let currentModel = config.model;
 
-	// Register the 保底 (guaranteed fallback) model: on an API access timeout
-	// the agent transparently switches to it and retries the same request.
+	// Register the 保底 (guaranteed fallback) model: on an API access timeout or
+	// a rate-limit (429 / TPM quota) response the agent transparently switches to
+	// it and retries the same request instead of ending the task.
 	wireModelFallback(agentLoop, modelRouter);
 
 	const applyModelRouting = (task: string): void => {

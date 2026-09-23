@@ -132,12 +132,14 @@ export interface IModelSwitchEvent {
 	to: string;
 	/**
 	 * Why the switch happened:
-	 *   - 'fallback-timeout'  : the primary/scenario model timed out → 保底模型
-	 *   - 'primary-recovered' : the primary model is reachable again → switch back
-	 *   - 'routing'           : scenario-based routing before a new task
-	 *   - 'profile'           : the user switched profile via /profile
+	 *   - 'fallback-timeout'    : the primary/scenario model timed out → 保底模型
+	 *   - 'fallback-rate-limit' : the primary/scenario model was throttled
+	 *                             (429 / TPM or RPM limit) → 保底模型
+	 *   - 'primary-recovered'   : the primary model is reachable again → switch back
+	 *   - 'routing'             : scenario-based routing before a new task
+	 *   - 'profile'             : the user switched profile via /profile
 	 */
-	reason: 'fallback-timeout' | 'primary-recovered' | 'routing' | 'profile';
+	reason: 'fallback-timeout' | 'fallback-rate-limit' | 'primary-recovered' | 'routing' | 'profile';
 	/** True when the switch moves TO the 保底 (fallback) model. */
 	toFallback: boolean;
 	/** Optional human-readable detail (e.g. the timeout error message). */

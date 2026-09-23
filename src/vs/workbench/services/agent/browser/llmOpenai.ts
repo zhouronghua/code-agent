@@ -5,7 +5,7 @@
  *  model-specific max tokens, rate limit recovery, and graceful error handling.
  *--------------------------------------------------------------------------------------------*/
 
-import { ILLMProvider, LLMProviderFactory, ContextOverflowError, estimateTokenCount, TOKENS_PER_MESSAGE_OVERHEAD } from './llmProvider';
+import { ILLMProvider, LLMProviderFactory, ContextOverflowError, estimateTokenCount, TOKENS_PER_MESSAGE_OVERHEAD, IHealthCheckOptions } from './llmProvider';
 import {
 	IAgentConfig,
 	IAgentMessage,
@@ -716,7 +716,7 @@ export class OpenAIProvider implements ILLMProvider {
 	 * a rejected or throttled probe still proves the model is back), while 5xx,
 	 * auth failures and timeouts count as unreachable.
 	 */
-	async healthCheck(timeoutMs = 8000): Promise<boolean> {
+	async healthCheck(timeoutMs = 8000, opts?: IHealthCheckOptions): Promise<boolean> {
 		if (!this._apiKey) return false;
 		const abortController = new AbortController();
 		const timer = setTimeout(() => abortController.abort(), timeoutMs);
@@ -739,7 +739,12 @@ export class OpenAIProvider implements ILLMProvider {
 			// 400 = the model answered but disliked the probe (e.g. a stricter
 			// max_tokens floor); 429 = reachable but throttled. Both mean the model
 			// is back. 401/403/404/5xx mean we must stay on the 保底 model.
-			return response.status === 400 || response.status === 429;
+			if (response.status === 400) return true;
+			// ...unless the agent fell back BECAUSE of throttling: then a 429 means
+			// the quota window has not rolled over yet, so the primary is still not
+			// usable and we stay on the 保底 model.
+			if (response.status === 429) return opts?.throttleSensitive !== true;
+			return false;
 		} catch {
 			return false;
 		} finally {
