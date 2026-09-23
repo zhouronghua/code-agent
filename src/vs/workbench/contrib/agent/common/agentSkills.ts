@@ -40,8 +40,27 @@ function parseFrontmatter(text: string): { meta: Record<string, string>; body: s
 			body = text.substring(endIdx + 3).trim();
 
 			let currentKey = '';
+			// YAML block scalar (`description: >-`): every more-indented line
+			// belongs to that key's value — including lines containing ':' or
+			// starting with '-', which the flat parser would otherwise mistake
+			// for a new key or a list item. Without this, a skill written in the
+			// style the official skill repos use gets a description of ">-".
+			let blockKey = '';
+			let blockIndent = 0;
+
 			for (const line of frontmatter.split('\n')) {
 				const trimmed = line.trim();
+				const indent = line.length - line.trimStart().length;
+
+				if (blockKey) {
+					if (trimmed === '' || indent > blockIndent) {
+						if (trimmed) meta[blockKey] = ((meta[blockKey] || '') + ' ' + trimmed).trim();
+						continue;
+					}
+					// Dedent — the block is over; this line is parsed normally.
+					blockKey = '';
+				}
+
 				// Handle list items: "- value" under a key like "trigger:"
 				if (trimmed.startsWith('- ') && currentKey) {
 					const itemVal = trimmed.slice(2).trim();
@@ -52,9 +71,15 @@ function parseFrontmatter(text: string): { meta: Record<string, string>; body: s
 				} else if (trimmed.includes(':') && !trimmed.startsWith('-')) {
 					const colonIdx = trimmed.indexOf(':');
 					currentKey = trimmed.substring(0, colonIdx).trim();
-					let val = trimmed.substring(colonIdx + 1).trim();
-					if (val === '>' || val === '|') val = '';
-					meta[currentKey] = val;
+					const val = trimmed.substring(colonIdx + 1).trim();
+					// `|`, `>`, `|-`, `>-`, `|+`, `>2` ... start a block scalar.
+					if (/^[|>][+-]?\d*$/.test(val)) {
+						meta[currentKey] = '';
+						blockKey = currentKey;
+						blockIndent = indent;
+					} else {
+						meta[currentKey] = val;
+					}
 				} else if (currentKey && trimmed && !trimmed.startsWith('-')) {
 					meta[currentKey] = ((meta[currentKey] || '') + ' ' + trimmed).trim();
 				}
@@ -360,17 +385,40 @@ You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL
 		return prompt;
 	}
 
+	/**
+	 * Classify a directory entry, FOLLOWING SYMLINKS.
+	 *
+	 * `Dirent.isDirectory()` / `isFile()` are false for a symlink, so a skill
+	 * installed the documented way (`ln -s …/skills/langfuse ~/.agent/skills/langfuse`,
+	 * the method the Langfuse/Anthropic skill repos prescribe) used to be skipped
+	 * silently. A broken link must stay harmless, hence the try/catch.
+	 */
+	private _entryKind(dir: string, entry: fs.Dirent): 'dir' | 'file' | 'other' {
+		if (entry.isDirectory()) return 'dir';
+		if (entry.isFile()) return 'file';
+		if (!entry.isSymbolicLink()) return 'other';
+		try {
+			const stat = fs.statSync(path.join(dir, entry.name));
+			if (stat.isDirectory()) return 'dir';
+			if (stat.isFile()) return 'file';
+		} catch {
+			// dangling symlink — ignore
+		}
+		return 'other';
+	}
+
 	private _scanForSkills(dir: string): void {
 		try {
 			const entries = fs.readdirSync(dir, { withFileTypes: true });
 			for (const entry of entries) {
 				const fullPath = path.join(dir, entry.name);
-				if (entry.isDirectory()) {
+				const kind = this._entryKind(dir, entry);
+				if (kind === 'dir') {
 					const skillFile = path.join(fullPath, 'SKILL.md');
 					if (fs.existsSync(skillFile)) {
 						this._loadSkill(skillFile, entry.name);
 					}
-				} else if (entry.name === 'SKILL.md') {
+				} else if (kind === 'file' && entry.name === 'SKILL.md') {
 					this._loadSkill(fullPath, path.basename(dir));
 				}
 			}
@@ -413,7 +461,9 @@ You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL
 		try {
 			const entries = fs.readdirSync(dir, { withFileTypes: true });
 			for (const entry of entries) {
-				if (entry.isFile() && entry.name.endsWith('.mdc')) {
+				// `_entryKind` follows symlinks: a rule file linked into the rules
+				// dir must load the same way a real one does.
+				if (this._entryKind(dir, entry) === 'file' && entry.name.endsWith('.mdc')) {
 					this._loadRule(path.join(dir, entry.name));
 				}
 			}

@@ -180,10 +180,78 @@ function testAgentMdRules(): void {
 	fs.rmSync(dir, { recursive: true, force: true });
 }
 
+function testSkillDiscovery(): void {
+	console.log('\n[4] skill discovery (symlinks + YAML block scalars)');
+
+	const dir = tmpDir('skills');
+	const skillsDir = path.join(dir, 'skills');
+	fs.mkdirSync(skillsDir, { recursive: true });
+
+	// Plain skill with a quoted one-line description (existing style).
+	const plain = path.join(skillsDir, 'plain');
+	fs.mkdirSync(plain);
+	fs.writeFileSync(path.join(plain, 'SKILL.md'),
+		'---\nname: plain\ndescription: does a plain thing\ntrigger:\n  - plain\n  - simple\n---\n\n# Plain\n\nbody\n');
+
+	// Skill written the way the official skill repos write it: a folded block
+	// scalar whose value contains a colon and list-looking lines.
+	const blocky = path.join(skillsDir, 'blocky');
+	fs.mkdirSync(blocky);
+	fs.writeFileSync(path.join(blocky, 'SKILL.md'), [
+		'---',
+		'name: blocky',
+		'description: >-',
+		'  Interact with blocky: tracing, monitoring, creating datasets,',
+		'  and evaluating applications. Invoke it even when blocky',
+		'  is not explicitly mentioned.',
+		'allowed-tools:',
+		'  - Bash(curl *blocky.com/*)',
+		'-not-a-list-item',
+		'---',
+		'',
+		'# Blocky',
+		'',
+		'body',
+	].join('\n'));
+
+	// A skill installed the documented way: a SYMLINK to a directory elsewhere.
+	const external = path.join(dir, 'external', 'linked');
+	fs.mkdirSync(external, { recursive: true });
+	fs.writeFileSync(path.join(external, 'SKILL.md'),
+		'---\nname: linked\ndescription: installed via symlink\n---\n\n# Linked\n\nbody\n');
+	fs.symlinkSync(external, path.join(skillsDir, 'linked'), 'dir');
+
+	// A dangling link must not break the scan.
+	fs.symlinkSync(path.join(dir, 'does-not-exist'), path.join(skillsDir, 'dangling'), 'dir');
+
+	const loader = new SkillsLoader();
+	loader.loadSkillsFromDirs([skillsDir]);
+	const names = loader.skills.map(s => s.name).sort();
+	eq(names.join(','), 'blocky,linked,plain', 'every skill loads; a dangling symlink is skipped');
+
+	const blockySkill = loader.skills.find(s => s.name === 'blocky')!;
+	ok(blockySkill.description.startsWith('Interact with blocky: tracing'),
+		`a ">-" block scalar becomes the description (got ${JSON.stringify(blockySkill.description.slice(0, 40))})`);
+	ok(blockySkill.description.includes('not explicitly mentioned'),
+		'the whole folded block is captured, not just the first line');
+	ok(!blockySkill.description.includes('allowed-tools'),
+		'the block stops at the next key at the same indent');
+	eq(loader.skills.find(s => s.name === 'plain')?.description, 'does a plain thing',
+		'a one-line description still parses unchanged');
+	eq(loader.skills.find(s => s.name === 'linked')?.description, 'installed via symlink',
+		'a symlinked skill directory is followed');
+
+	const triggers = loader.skills.find(s => s.name === 'plain')?.triggers ?? [];
+	eq(triggers.join(','), 'plain,simple', 'trigger list items still parse');
+
+	fs.rmSync(dir, { recursive: true, force: true });
+}
+
 function main(): void {
 	testHomeResolution();
 	testLegacyMigration();
 	testAgentMdRules();
+	testSkillDiscovery();
 	console.log(`\n${failed === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED'}: ${passed} passed, ${failed} failed`);
 	process.exit(failed === 0 ? 0 : 1);
 }
