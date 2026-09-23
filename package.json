@@ -1,6 +1,6 @@
 {
   "name": "@zhouronghua/code-agent",
-  "version": "0.3.38",
+  "version": "0.3.39",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
@@ -21,7 +21,11 @@
     "anthropic",
     "ollama",
     "cli",
-    "devtools"
+    "devtools",
+    "langfuse",
+    "observability",
+    "tracing",
+    "opentelemetry"
   ],
   "author": "zhouronghua",
   "license": "MIT",
@@ -39,7 +43,8 @@
     "start:mock": "MOCK_LLM=1 node standalone-demo/agent.mjs",
     "test:model-switch": "esbuild tests/model-switch.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/model-switch.test.mjs --tsconfig=tsconfig.json && node build/model-switch.test.mjs",
     "test:agent-home": "esbuild tests/agent-home.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/agent-home.test.mjs --tsconfig=tsconfig.json && node build/agent-home.test.mjs",
-    "test": "npm run test:model-switch && npm run test:agent-home",
+    "test:tracing": "esbuild tests/langfuse-tracing.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/langfuse-tracing.test.mjs --tsconfig=tsconfig.json --external:@langfuse/* --external:@opentelemetry/* && node build/langfuse-tracing.test.mjs",
+    "test": "npm run test:model-switch && npm run test:agent-home && npm run test:tracing",
     "clean": "rm -rf build",
     "pack": "npm run build:release && npm pack",
     "link": "npm run build && npm link",
@@ -59,5 +64,11 @@
     "esbuild": "^0.25.3",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@langfuse/otel": "^5.11.1",
+    "@langfuse/tracing": "^5.11.1",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/sdk-trace-node": "^2.11.0"
   }
 }

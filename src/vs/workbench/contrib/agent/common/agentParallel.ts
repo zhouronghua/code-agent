@@ -13,6 +13,7 @@ import { AgentCheckpointManager } from './agentCheckpoint';
 import { AgentLoop, formatModelSwitch } from './agent';
 import { ModelRouter } from './agentModelRouter';
 import { IMemoryIntegration } from './agentMemory';
+import { IAgentTracing, NOOP_TRACING } from './agentTracing';
 
 export interface IParallelTask {
 	readonly id: string;
@@ -55,12 +56,25 @@ export class ParallelAgentManager extends Disposable {
 		maxConcurrent = 4,
 		private readonly _modelRouter?: ModelRouter,
 		private readonly _memory?: IMemoryIntegration,
+		private readonly _tracing: IAgentTracing = NOOP_TRACING,
 	) {
 		super();
 		this._maxConcurrent = maxConcurrent;
 	}
 
 	async runParallel(tasks: string[]): Promise<IParallelResult[]> {
+		// ---- Langfuse: one orchestrator trace for the whole fan-out ----
+		// Without this root, each subagent would start its own trace and the
+		// Agent Graph could not show the dispatch relationship at all.
+		return this._tracing.runTask({
+			name: 'agent-parallel',
+			input: { tasks },
+			tags: ['parallel'],
+			metadata: { task_count: tasks.length, max_concurrent: this._maxConcurrent },
+		}, async () => this._runParallelTasks(tasks));
+	}
+
+	private async _runParallelTasks(tasks: string[]): Promise<IParallelResult[]> {
 		const taskEntries: IParallelTask[] = tasks.map(desc => ({
 			id: generateId(),
 			description: desc,
@@ -122,6 +136,7 @@ export class ParallelAgentManager extends Disposable {
 			checkpointManager,
 			this._workingDirectory,
 			this._memory,
+			this._tracing,
 		);
 
 		// Wire the 保底 (guaranteed fallback) model so a per-task scenario model
@@ -145,6 +160,23 @@ export class ParallelAgentManager extends Disposable {
 
 		const startTime = Date.now();
 
+		// ---- Langfuse: the subagent's OWN execution, typed `agent` ----
+		// Per the Langfuse multi-agent guidance this is one `agent` observation
+		// (not a `tool` "dispatch" span plus a separate execution span, which would
+		// double-represent the same event). Its name is derived from the task so
+		// concurrent subagents stay distinguishable in the Agent Graph, and the
+		// subagent's generations/tools nest inside it.
+		return this._tracing.runSubagent({
+			name: `subagent: ${task.description.slice(0, 60)}`,
+			input: task.description,
+			tags: ['subagent'],
+			metadata: {
+				task_id: task.id,
+				model: config.model,
+				provider: config.provider,
+				max_concurrent: this._maxConcurrent,
+			},
+		}, async agentObs => {
 		try {
 			await agentLoop.run(task.description);
 
@@ -162,6 +194,11 @@ export class ParallelAgentManager extends Disposable {
 				taskLog,
 			};
 
+			agentObs.update({
+				output: messages.filter(m => m.role === 'assistant' && m.content).slice(-1)[0]?.content,
+				level: agentLoop.lastTaskError ? 'ERROR' : 'DEFAULT',
+				statusMessage: agentLoop.lastTaskError,
+			});
 			this._results.set(task.id, result);
 			this._onDidTaskComplete.fire(result);
 			return result;
@@ -181,6 +218,11 @@ export class ParallelAgentManager extends Disposable {
 				taskLog,
 			};
 
+			agentObs.update({
+				output: (err as Error).message,
+				level: 'ERROR',
+				statusMessage: (err as Error).message,
+			});
 			this._results.set(task.id, result);
 			this._onDidTaskComplete.fire(result);
 			return result;
@@ -188,6 +230,7 @@ export class ParallelAgentManager extends Disposable {
 			agentLoop.dispose();
 			modeManager.dispose();
 		}
+		});
 	}
 
 	/**

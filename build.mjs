@@ -5,6 +5,25 @@ import * as path from 'node:path';
 const outDir = 'build';
 const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
 
+// Keep the OpenTelemetry/Langfuse stack out of the bundle:
+//   - it is only needed when Langfuse tracing is configured,
+//   - bundling it would add ~1 MB to every CLI start, and
+//   - leaving it external is what makes tracing genuinely optional at runtime
+//     (agentTracing.ts loads it lazily and degrades to a no-op when absent).
+const EXTERNAL_TRACING = [
+	'@langfuse/core',
+	'@langfuse/otel',
+	'@langfuse/tracing',
+	'@opentelemetry/api',
+	'@opentelemetry/sdk-trace-node',
+	'@opentelemetry/sdk-trace-base',
+	'@opentelemetry/core',
+	'@opentelemetry/exporter-trace-otlp-http',
+	'@opentelemetry/otlp-transformer',
+	'@opentelemetry/resources',
+	'@opentelemetry/semantic-conventions',
+];
+
 await esbuild.build({
 	entryPoints: ['vs-core/node-runtime/main.ts'],
 	bundle: true,
@@ -17,7 +36,7 @@ await esbuild.build({
 	define: {
 		'__AGENT_VERSION__': JSON.stringify(pkg.version),
 	},
-	external: [],
+	external: EXTERNAL_TRACING,
 	banner: {
 		js: '#!/usr/bin/env node',
 	},

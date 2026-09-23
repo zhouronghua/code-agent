@@ -88,6 +88,10 @@ chmod +x code-agent-portable-linux-x64
 - 内嵌 Node 来自构建机的 `node`（默认取 `PATH` 中的 node）。
   若目标机器系统更老（glibc 更低），请用 `NODE_SRC_BIN` 指定一个与目标机兼容的
   node 再构建（建议先在一台与目标机同代的机器上验证 `node --version` 可运行）。
+- **Langfuse tracing 在便携版中不可用**：便携包只内嵌 `agent-cli.js`，不含
+  `@langfuse/*` / `@opentelemetry/*`（它们按需懒加载）。启动时会打印
+  `[TRACING] Langfuse SDK failed to load — tracing disabled for this run`，
+  其余功能不受影响。需要 tracing 请用方法一 / 方法二（npm 安装）。
 - 使用方法三/方法四一致的配置方式：把 `config.template.yaml` 复制为
   `~/.agent/config.yaml` 并填入 API key 即可。
 
@@ -595,6 +599,70 @@ memory:
 ```
 
 记忆服务不可用时所有操作静默降级（fail-open），不会影响主流程。
+
+## LLM 可观测性（Langfuse Tracing）
+
+接入 [Langfuse](https://langfuse.com) 后，每次 agent 运行都会作为一条 trace 上报：
+
+```
+agent-task（根，输入=用户消息，输出=最终答复）
+└─ agent-step-N（每次 ReAct 迭代）
+     ├─ llm-call（generation：模型名、采样参数、输入消息、token 用量）
+     └─ tool:<name>（tool：参数、结果、失败时 level=ERROR）
+└─ subagent: <任务>（--parallel 并行子代理，类型为 agent，出现在 Agent Graph 中）
+```
+
+- **成本/用量**：每次 generation 都带 `model` + `usageDetails(input/output/total)`，
+  Langfuse 据此自动计算费用并支持模型对比
+- **归因**：trace 上带 `user.id`（`$USER`）、`environment`、`release`（agent 版本），
+  tags 含模式 / provider / 模型，可按用户、环境、模型过滤
+- **隐私**：所有上报字符串都会自动脱敏（`sk-*`、Bearer、JWT、`api_key=` 等）；
+  `capture_content: false` 时只上报名称、模型、token、耗时与错误级别，**不上报任何
+  prompt / 输出 / 工具参数**
+- **fail-open**：Langfuse 不可达、SDK 缺失或 key 错误都不会影响 agent 正常运行
+
+### 配置方式一：环境变量（优先级最高）
+
+```bash
+export LANGFUSE_PUBLIC_KEY=pk-lf-...
+export LANGFUSE_SECRET_KEY=sk-lf-...
+export LANGFUSE_BASE_URL=https://cloud.langfuse.com   # 美国区：https://us.cloud.langfuse.com
+```
+
+### 配置方式二：config.yaml
+
+```yaml
+tracing:
+  enabled: true
+  public_key: pk-lf-xxx
+  secret_key: sk-lf-xxx
+  base_url: https://cloud.langfuse.com   # 或自建部署地址
+  environment: local                     # 部署环境分组
+  release: 0.3.39                        # 默认取 agent 版本号
+  capture_content: true                  # false = 只上报元数据，不带任何内容
+  user_id: zrh                           # 默认取 $USER
+  tags:
+    - code-agent
+```
+
+### 命令行开关
+
+```bash
+code-agent --tracing off "task"     # 本次运行关闭 tracing
+code-agent --tracing on  "task"     # 本次运行强制开启（覆盖 config.yaml 的 enabled: false）
+```
+
+启动时会打印一行状态，便于确认是否真的生效：
+
+```
+[TRACING] Langfuse tracing enabled: Langfuse https://cloud.langfuse.com env=local (content=full)
+```
+
+未配置 key 时打印 `[TRACING] off — no Langfuse API keys ...`，不影响使用。
+
+> 说明：依赖 `@langfuse/tracing` / `@langfuse/otel` / `@opentelemetry/sdk-trace-node`
+> （当前 SDK 世代，非已废弃的 v3 `langfuse` 包）。它们在构建时被标记为 external 并按需
+> 懒加载，未安装时 tracing 自动降级为空操作。
 
 ## 分发
 

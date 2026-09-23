@@ -51,6 +51,7 @@ import { defaultSkillsDir } from '../../src/vs/workbench/contrib/agent/common/ag
 import { agentInstructionFiles, agentHomeDir, migrateLegacyAgentHome } from '../../src/vs/workbench/contrib/agent/common/agentHome';
 import { SkillCatalogTool, CreateSkillTool, UpdateSkillTool } from '../../src/vs/workbench/contrib/agent/common/tools/skillTools';
 import { loadMemoryConfig, MemoryClient, MemorySearchTool, ConversationSearchTool, MemoryReadTool, MemoryWriteTool } from '../../src/vs/workbench/contrib/agent/common/agentMemory';
+import { IAgentTracing, NOOP_TRACING, initTracingFromConfig } from '../../src/vs/workbench/contrib/agent/common/agentTracing';
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
 import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common/agentSessions';
 import { TaskLogManager } from '../../src/vs/workbench/contrib/agent/common/agentTaskLog';
@@ -423,6 +424,8 @@ interface CLIOptions {
 	mcp?: string;
 	/** --mcp-tools <a,b,c>: global MCP tool allowlist (intersected per server). */
 	mcpTools?: string;
+	/** --tracing <on|off>: force Langfuse tracing on/off for this run. */
+	tracing?: 'on' | 'off';
 }
 
 function parseArgs(): CLIOptions {
@@ -469,6 +472,10 @@ function parseArgs(): CLIOptions {
 			case '--memory':
 				i++;
 				opts.memory = args[i] === 'on' ? 'on' : 'off';
+				break;
+			case '--tracing':
+				i++;
+				opts.tracing = args[i] === 'on' ? 'on' : 'off';
 				break;
 			case '--profiles':
 				opts.showProfiles = true;
@@ -588,6 +595,7 @@ Options:
   --temperature <float>       Override sampling temperature (default from config)
   --top-k <int>               Override top-k sampling; 0 = provider default
   --memory <on|off>           Force shared agent memory on/off for this run
+  --tracing <on|off>          Force Langfuse tracing on/off (LANGFUSE_* keys)
   --batch                     Headless: run the task(s), then exit (no REPL)
   --batch-log <file>          Also append all run output to <file>
   --batch-result <file>       Write a JSON result summary to <file>
@@ -644,6 +652,60 @@ Config (searched in order):
   2. ./config.yaml
   3. ~/.agent/config.yaml
 `);
+}
+
+/**
+ * Langfuse observability, initialized once in `main()`.
+ *
+ * A module-level handle (rather than a parameter threaded through every mode)
+ * because all four entry points — interactive, batch, parallel, single task —
+ * share the same tracing configuration for the process.
+ */
+let tracing: IAgentTracing = NOOP_TRACING;
+/** Flushes and shuts the Langfuse processor down (set once tracing is up). */
+let tracingFlush: (() => Promise<void>) | undefined;
+
+/** Flush pending spans before the process exits (batched export). */
+async function flushTracing(): Promise<void> {
+	const flush = tracingFlush;
+	tracingFlush = undefined;
+	if (flush) await flush();
+}
+
+/**
+ * Resolve the tracing configuration, load the SDK and report the outcome.
+ *
+ * Always best-effort: a missing SDK, bad keys or an unreachable Langfuse leaves
+ * the agent fully functional with tracing disabled.
+ */
+async function setupTracing(release: string, cliOverride?: 'on' | 'off'): Promise<void> {
+	tracing = initTracingFromConfig(cliOverride, release);
+
+	if (!tracing.enabled) {
+		if (cliOverride !== 'off') {
+			console.log(`${C.dim}[TRACING] off — ${tracing.reason}${C.reset}`);
+		}
+		return;
+	}
+
+	const ok = await tracing.init();
+	if (!ok) {
+		console.log(`${C.yellow}[TRACING]${C.reset} Langfuse SDK failed to load — tracing disabled for this run`);
+		tracing = NOOP_TRACING;
+		return;
+	}
+
+	console.log(`${C.green}[TRACING]${C.reset} Langfuse tracing enabled: ${tracing.describe?.() ?? ''}`);
+
+	// Spans are batched; flush before the process exits or a short run loses
+	// its trace entirely (a Langfuse best-practice requirement).
+	tracingFlush = () => tracing.shutdown();
+	// `beforeExit` covers every clean return; the explicit `process.exit()` paths
+	// (batch mode, REPL quit) call flushTracing() themselves, and signals are
+	// handled here so a Ctrl-C doesn't drop the trace.
+	process.once('beforeExit', () => { void flushTracing(); });
+	process.once('SIGINT', () => { void flushTracing().finally(() => process.exit(130)); });
+	process.once('SIGTERM', () => { void flushTracing().finally(() => process.exit(143)); });
 }
 
 async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 'off', opts?: CLIOptions) {
@@ -776,7 +838,7 @@ async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memory
 	const modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
 
 	const taskLogManager = new TaskLogManager();
-	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4, modelRouter, memoryClient);
+	const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4, modelRouter, memoryClient, tracing);
 
 	manager.onDidTaskStart(task => {
 		log(C.cyan, `TASK ${task.id.slice(-6)}`, `Started: ${task.description.substring(0, 80)}`);
@@ -874,7 +936,7 @@ async function runBatchMode(opts: CLIOptions, resolved: ResolvedConfig, skillsLo
 
 	const modeManager = new AgentModeManager();
 	modeManager.switchMode(opts.mode);
-	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient);
+	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient, tracing);
 	agentLoop.setExtraSystemPrompt(buildSkillsContext(skillsLoader, opts.useSkill, task));
 
 	// Wire the 保底 (guaranteed fallback) model: batch/cron runs must survive an
@@ -947,6 +1009,7 @@ async function runBatchMode(opts: CLIOptions, resolved: ResolvedConfig, skillsLo
 	agentLoop.dispose();
 	releaseLock?.();
 	teardownLog();
+	await flushTracing();
 	process.exit(success ? 0 : timedOut ? 124 : 1);
 }
 
@@ -1131,6 +1194,11 @@ async function main() {
 	}
 	console.log('');
 
+	// ---- Langfuse observability (opt-in; fail-open) ----
+	// Resolved from LANGFUSE_* env vars / config.yaml `tracing:` / --tracing.
+	// Runs for every execution mode, but not for the info-only commands above.
+	await setupTracing(AGENT_VERSION, opts.tracing);
+
 	if (opts.parallel && opts.tasks.length > 1) {
 		await runParallelMode(opts.tasks, resolved, opts.memory, opts);
 		return;
@@ -1146,7 +1214,7 @@ async function main() {
 	const modeManager = new AgentModeManager();
 	modeManager.switchMode(opts.mode);
 
-	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient);
+	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient, tracing);
 	if (opts.streaming) {
 		agentLoop.setStreaming(true);
 	}
@@ -1316,7 +1384,7 @@ async function main() {
 
 	// Shared graceful exit — saves session, disposes agent, and exits cleanly.
 	// Used by both the "exit" command and Ctrl+C (SIGINT).
-	const gracefulExit = () => {
+	const gracefulExit = async () => {
 		try {
 			// Cancel agent if running
 			if (agentIsRunning) {
@@ -1335,6 +1403,8 @@ async function main() {
 		}
 		rl.close();
 		agentLoop.dispose();
+		// Flush any pending Langfuse spans before the hard exit below.
+		await flushTracing();
 		// Ensure process exits cleanly (readline close may not be enough with active promises)
 		setTimeout(() => process.exit(0), 100);
 	};
@@ -1378,7 +1448,7 @@ async function main() {
 
 		// ---- Normal REPL processing (agent is idle) ----
 		if (!trimmed || trimmed === 'exit' || trimmed === 'quit') {
-			gracefulExit();
+			void gracefulExit();
 			return;
 		}
 
@@ -1631,7 +1701,7 @@ async function main() {
 
 	// Handle Ctrl+C gracefully — same as "exit": save session and quit
 	rl.on('SIGINT', () => {
-		gracefulExit();
+		void gracefulExit();
 	});
 
 	displayPrompt();

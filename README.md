@@ -12,7 +12,10 @@ AI coding agent CLI, built on VS Code architecture with multi-provider LLM suppo
 - **Parallel agents**: Run multiple tasks concurrently
 - **Headless batch mode**: `--batch` for cron/CI — no TTY, deterministic exit codes, lock + log + JSON result
 - **MCP tools**: Load external MCP servers (streamableHttp / stdio) and expose their tools to the agent
-- **Single-file distribution**: 70 KB minified, zero runtime dependencies
+- **Langfuse observability**: Optional tracing of every task, step, LLM call and tool call
+  (model + token usage per generation, secret masking, fail-open) — see `USAGE.md`
+- **Single-file CLI**: 170 KB minified; the only runtime dependencies are the optional
+  Langfuse/OpenTelemetry packages, which are lazy-loaded and skipped when tracing is off
 
 ## Quick Start
 

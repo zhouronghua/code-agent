@@ -98,6 +98,41 @@ rules:
 #   custom-api:
 #     url: http://localhost:3000/mcp
 
+# LLM observability — Langfuse tracing (optional)
+#
+# When enabled, every agent run is exported to Langfuse as one trace:
+#   agent-task (root)  →  agent-step-N  →  llm-call (generation: model,
+#                                          params, tokens)
+#                                       →  tool:<name> (arguments, result)
+# Parallel subagents appear as `agent` observations in the Agent Graph.
+#
+# Setup (either the env vars OR this section):
+#   1. Create a project at https://cloud.langfuse.com (or self-host) and copy
+#      the API keys from Settings -> API Keys.
+#   2. Either export
+#        LANGFUSE_PUBLIC_KEY=pk-lf-...
+#        LANGFUSE_SECRET_KEY=sk-lf-...
+#        LANGFUSE_BASE_URL=https://cloud.langfuse.com   # EU; US: us.cloud.langfuse.com
+#      or fill in the section below. Env vars take precedence.
+#   3. Run as usual. `--tracing off` disables it for one run.
+#
+# Privacy: prompts, tool arguments and results are sent as trace input/output.
+# Set capture_content: false to send only names, models, token usage, timings
+# and error levels (no content at all). Secrets (API keys, bearer tokens, JWTs)
+# are masked automatically in every traced string.
+#
+# tracing:
+#   enabled: true
+#   public_key: pk-lf-your-public-key
+#   secret_key: sk-lf-your-secret-key
+#   base_url: https://cloud.langfuse.com   # or https://us.cloud.langfuse.com, or self-hosted
+#   environment: local                     # groups traces by deploy target
+#   release: 0.3.39                        # defaults to the agent version
+#   capture_content: true                  # false = metadata only, no prompts/outputs
+#   user_id: zrh                           # defaults to $USER
+#   tags:
+#     - code-agent
+
 # Shared memory (tdai_agent_mem) — multi-machine / multi-agent memory hub.
 # When enabled, code-agent:
 #   - recalls relevant memories (L1 facts + L2 scenario index + L3 persona)

@@ -25,6 +25,7 @@ import {
 	IToolExecutionRecord,
 	IAgentTaskLog,
 	IModelSwitchEvent,
+	ILlmUsage,
 	generateId,
 } from 'vs/workbench/services/agent/common/agentModels';
 import { ILLMProvider, ContextOverflowError } from 'vs/workbench/services/agent/browser/llmProvider';
@@ -35,6 +36,7 @@ import { AgentPlanner } from './agentPlanner';
 import { AgentCheckpointManager } from './agentCheckpoint';
 import { getSystemPrompt } from './agentPrompts';
 import { IMemoryIntegration } from './agentMemory';
+import { IAgentTracing, IObservationHandle, ITaskMeta, NOOP_TRACING, currentUserName } from './agentTracing';
 
 // Maximum characters for a single tool result sent back to the LLM.
 // Large outputs (e.g. read_file of a big file, run_terminal of a long build)
@@ -211,6 +213,12 @@ export class AgentLoop {
 	private _memoryContext = '';
 	private readonly _memory: IMemoryIntegration | undefined;
 
+	/**
+	 * Langfuse observability. Defaults to a shared no-op, so every existing
+	 * construction site (and every test) keeps working without tracing.
+	 */
+	private readonly _tracing: IAgentTracing;
+
 	/** Pending /btw hints injected during agent execution — consumed each loop iteration. */
 	private _pendingBtwHints: string[] = [];
 
@@ -265,10 +273,12 @@ export class AgentLoop {
 		private readonly _checkpointManager: AgentCheckpointManager,
 		private readonly _workingDirectory: string = process.cwd(),
 		memory?: IMemoryIntegration,
+		tracing?: IAgentTracing,
 	) {
 		this._context = new AgentContext(_config.maxContextTokens, _config.maxOutputTokens, _llmProvider);
 		this._planner = new AgentPlanner(_llmProvider);
 		this._memory = memory?.enabled ? memory : undefined;
+		this._tracing = tracing ?? NOOP_TRACING;
 	}
 
 	/**
@@ -687,6 +697,61 @@ export class AgentLoop {
 		this._llmRequestInFlight = false;
 
 		try {
+			// ---- Langfuse: one trace per user task ----
+			// The task is the trace root: its input is the user message only (never
+			// the whole scope — that would leak API keys and the full config into a
+			// third-party system), and its output is the final answer. Everything
+			// the run does (steps, LLM calls, tool calls, subagents) nests under it.
+			await this._tracing.runTask(this._taskTraceMeta(userMessage), async taskObs => {
+				await this._runTaskBody(userMessage);
+				taskObs.update({
+					output: this._finalAnswerForTrace(),
+					level: this._taskError ? 'ERROR' : 'DEFAULT',
+					statusMessage: this._taskError,
+				});
+			});
+		} finally {
+			this._isRunning = false;
+			this._cancellation?.dispose();
+			this._cancellation = undefined;
+		}
+	}
+
+	/** Trace-level metadata for a task: cheap dimensions, no payloads. */
+	private _taskTraceMeta(userMessage: string): ITaskMeta {
+		const mode = this._modeManager.currentMode;
+		return {
+			name: 'agent-task',
+			input: userMessage,
+			tags: [mode, this._config.provider, this._config.model],
+			metadata: {
+				mode,
+				model: this._config.model,
+				provider: this._config.provider,
+				working_directory: this._workingDirectory,
+				streaming: this._useStreaming,
+				pid: process.pid,
+			},
+			userId: currentUserName(),
+		};
+	}
+
+	/** The final assistant reply, used as the trace output. */
+	private _finalAnswerForTrace(): string | undefined {
+		const last = [...this._context.messages]
+			.reverse()
+			.find(m => m.role === MessageRole.Assistant && m.content && m.content.trim());
+		return last?.content;
+	}
+
+	/**
+	 * Per-task work, wrapped by the trace root in `run()`.
+	 *
+	 * Keeps the original contract: errors are recorded in `_taskError` and fired
+	 * on `onDidError` instead of propagating to the caller.
+	 */
+	private async _runTaskBody(userMessage: string): Promise<void> {
+		try {
 			// Recall shared memory (tdai_agent_mem) for this task, if enabled.
 			// Fail-open: memory unavailability must never block the agent.
 			this._memoryContext = '';
@@ -754,10 +819,6 @@ export class AgentLoop {
 			} else {
 				this._taskError = 'Cancelled';
 			}
-		} finally {
-			this._isRunning = false;
-			this._cancellation?.dispose();
-			this._cancellation = undefined;
 		}
 	}
 
@@ -907,6 +968,17 @@ export class AgentLoop {
 				throw new Error('Cancelled');
 			}
 
+			// ---- Langfuse: one step observation per ReAct iteration ----
+			// Created manually (not via a callback) so the loop's continue/break
+			// control flow is untouched, and closed in the `finally` below. The
+			// body deliberately keeps its original indentation: re-indenting ~300
+			// lines would bury the actual change in whitespace.
+			const step = this._tracing.beginStep({
+				name: `agent-step-${stepCount}`,
+				metadata: { step_index: stepCount },
+			});
+
+			try {
 			// ---- Inject any /btw hints received during agent execution ----
 			while (this._pendingBtwHints.length > 0) {
 				const hint = this._pendingBtwHints.shift()!;
@@ -995,28 +1067,59 @@ export class AgentLoop {
 						&& providerSupportsStreaming
 						&& !isReasoningModel;
 
-					if (canStream) {
-						const chunks: string[] = [];
-						const stream = this._llmProvider.stream(
-							messages,
-							undefined,
-							this._config.temperature,
-							this._config.topK,
-						);
-						for await (const token of stream) {
-							chunks.push(token);
-							this._onDidStreamToken.fire(token);
+					// ---- Langfuse: one generation per API attempt ----
+					// Inside the retry loop on purpose: a timeout→保底模型 retry or a
+					// context-overflow retry is a DISTINCT model call and must be
+					// visible as its own generation, otherwise a trace would hide why
+					// a request was slow or how many attempts it took.
+					response = await this._tracing.runGeneration({
+						name: canStream ? 'llm-call-stream' : 'llm-call',
+						model: this._config.model,
+						modelParameters: {
+							temperature: this._config.temperature,
+							...(this._config.topK && this._config.topK > 0 ? { top_k: this._config.topK } : {}),
+							stream: canStream ? 1 : 0,
+						},
+						input: messages.map(m => AgentLoop._generationMessage(m)),
+						startTime: new Date(stepStartTime),
+						metadata: {
+							attempt: overflowRetries + 1,
+							message_count: messages.length,
+							estimated_input_tokens: llmRequestMeta.estimatedTokens,
+							tool_count: tools.length,
+							using_fallback_model: this._usingFallback,
+						},
+					}, async gen => {
+						let out: IAgentMessage;
+						if (canStream) {
+							const chunks: string[] = [];
+							const stream = this._llmProvider.stream(
+								messages,
+								undefined,
+								this._config.temperature,
+								this._config.topK,
+							);
+							for await (const token of stream) {
+								chunks.push(token);
+								this._onDidStreamToken.fire(token);
+							}
+							out = createMessage(MessageRole.Assistant, chunks.join(''));
+						} else {
+							// Use non-streaming complete() which preserves reasoning_content
+							out = await this._llmProvider.complete(
+								messages,
+								tools.length > 0 ? tools : undefined,
+								this._config.temperature,
+								this._config.topK,
+							);
 						}
-						response = createMessage(MessageRole.Assistant, chunks.join(''));
-					} else {
-						// Use non-streaming complete() which preserves reasoning_content
-						response = await this._llmProvider.complete(
-							messages,
-							tools.length > 0 ? tools : undefined,
-							this._config.temperature,
-							this._config.topK,
-						);
-					}
+						gen.update({
+							output: AgentLoop._generationResult(out),
+							usageDetails: AgentLoop._usageDetails(out.usage),
+							metadata: { finish_reason: out.toolCalls?.length ? 'tool_calls' : 'stop' },
+						});
+						return out;
+					}, step.ref);
 					break;
 				} catch (err) {
 					// ---- Model fallback (保底模型) on API access timeout ----
@@ -1066,6 +1169,16 @@ export class AgentLoop {
 				durationMs: Date.now() - stepStartTime,
 				timestamp: stepStartTime,
 			};
+
+			// ---- Langfuse: give the step span a meaningful outcome ----
+			// Without this the step is an empty box in the trace, and "which step
+			// decided to call which tool" is exactly what makes an agent trace
+			// readable.
+			step.update({
+				output: response.toolCalls && response.toolCalls.length > 0
+					? { tool_calls: response.toolCalls.map(tc => tc.name) }
+					: { final_answer: true },
+			});
 
 			if (!response.toolCalls || response.toolCalls.length === 0) {
 				// No tool calls — agent thinks it's done.
@@ -1154,7 +1267,25 @@ export class AgentLoop {
 
 				hasExecutedTool = true;
 				const toolExecStart = Date.now();
-				const result = await this._executeTool(toolCall.id, toolCall.name, toolCall.arguments);
+				// ---- Langfuse: one tool observation per tool call ----
+				// Typed `tool` (the most specific type) and parented to this step,
+				// so the Agent Graph shows the call the model asked for. A failed
+				// call is recorded at ERROR level instead of breaking the trace.
+				const result = await this._tracing.runTool({
+					name: toolCall.name,
+					input: toolCall.arguments,
+					metadata: { tool_call_id: toolCall.id, step_index: stepCount },
+				}, async toolObs => {
+					const toolResult = await this._executeTool(toolCall.id, toolCall.name, toolCall.arguments);
+					toolObs.update({
+						output: toolResult.success
+							? toolResult.output
+							: (toolResult.error || toolResult.output),
+						level: toolResult.success ? 'DEFAULT' : 'ERROR',
+						statusMessage: toolResult.success ? undefined : toolResult.error,
+					});
+					return toolResult;
+				}, step.ref);
 				const toolExecDuration = Date.now() - toolExecStart;
 
 				// ---- Step tracing: record tool execution ----
@@ -1180,6 +1311,11 @@ export class AgentLoop {
 
 			this._stepRecords.push(stepRecord);
 			stepCount++;
+			} finally {
+				// Close this iteration's step span (idempotent; a no-op when
+				// tracing is disabled). `continue`/`break` still run it.
+				step.end();
+			}
 		}
 
 		if (stepCount >= this._config.maxSteps) {
@@ -1210,6 +1346,52 @@ export class AgentLoop {
 			};
 		}
 		return result;
+	}
+
+	/**
+	 * Shape one conversation message for a generation's `input`.
+	 *
+	 * Only the fields that make the trace readable are kept, and reasoning is
+	 * included (a thinking model's decisions are unexplainable without it) while
+	 * the tracing module bounds/redacts every string.
+	 */
+	private static _generationMessage(m: IAgentMessage): Record<string, unknown> {
+		const out: Record<string, unknown> = { role: m.role, content: m.content };
+		if (m.toolCalls && m.toolCalls.length > 0) {
+			out.tool_calls = m.toolCalls.map(tc => ({ id: tc.id, name: tc.name, arguments: tc.arguments }));
+		}
+		if (m.toolCallId) out.tool_call_id = m.toolCallId;
+		if (m.reasoningContent) out.reasoning_content = m.reasoningContent;
+		return out;
+	}
+
+	/** Shape the assistant reply for a generation's `output`. */
+	private static _generationResult(m: IAgentMessage): Record<string, unknown> {
+		const out: Record<string, unknown> = { role: m.role, content: m.content };
+		if (m.toolCalls && m.toolCalls.length > 0) {
+			out.tool_calls = m.toolCalls.map(tc => ({ id: tc.id, name: tc.name, arguments: tc.arguments }));
+		}
+		if (m.reasoningContent) out.reasoning_content = m.reasoningContent;
+		return out;
+	}
+
+	/**
+	 * Provider-normalized token usage → Langfuse `usageDetails`.
+	 *
+	 * Setting input/output (not just total) is what lets Langfuse compute cost
+	 * per model and expose cache hit rates; omitted when the provider reported
+	 * no usage at all, so a trace never shows a fake `0` token count.
+	 */
+	private static _usageDetails(usage?: ILlmUsage): Record<string, number> | undefined {
+		if (!usage) return undefined;
+		const details: Record<string, number> = {
+			input: usage.promptTokens,
+			output: usage.completionTokens,
+			total: usage.totalTokens,
+		};
+		if (usage.cachedTokens) details.cached = usage.cachedTokens;
+		if (usage.cacheCreationTokens) details.cache_creation = usage.cacheCreationTokens;
+		return details;
 	}
 
 	private async _executeTool(
