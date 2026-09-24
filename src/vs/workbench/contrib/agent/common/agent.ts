@@ -875,11 +875,34 @@ export class AgentLoop {
 		systemPrompt: string;
 		extraSystemPrompt: string;
 	} {
+		// Persist a REPAIRED history. `gracefulExit()` saves right after
+		// `cancel()`, i.e. while the cancelled run has not yet appended its tool
+		// results, so the snapshot can legitimately contain an assistant
+		// `tool_calls` with no answers. Saving that verbatim makes the session
+		// permanently unresumable ("insufficient tool messages following
+		// tool_calls message"), which is exactly how this bug reproduced.
+		this._context.repairToolCallPairs();
 		return {
 			messages: [...this._context.messages],
 			systemPrompt: this._context.systemPromptContent,
 			extraSystemPrompt: this._extraSystemPrompt,
 		};
+	}
+
+	/**
+	 * Close the tool-call pairing invariant after a run ends.
+	 *
+	 * A run can stop anywhere: cancelled at an iteration boundary, aborted
+	 * inside a tool, or thrown out of the loop — in every case the assistant's
+	 * `tool_calls` are already in the context while their results are not. The
+	 * synthesized "[not executed] …" answers keep both the next request and the
+	 * next resume valid.
+	 */
+	private _answerDanglingToolCalls(): void {
+		const inserted = this._context.repairToolCallPairs();
+		for (const msg of inserted) {
+			this._onDidReceiveMessage.fire(msg);
+		}
 	}
 
 	/**
@@ -896,6 +919,11 @@ export class AgentLoop {
 			this._context.addMessage(msg);
 		}
 
+		// A session saved by an older build (or by a run killed mid-tool) can
+		// carry an unanswered assistant `tool_calls`, which makes every request a
+		// 400. Heal it on load so resuming such a session just works.
+		this._context.repairToolCallPairs();
+
 		// Re-pin the restored session's original task (its first user turn) so a
 		// compaction after resuming cannot summarize the goal away.
 		const firstUser = messages.find(m => m.role === MessageRole.User && m.content && m.content.trim());
@@ -904,7 +932,7 @@ export class AgentLoop {
 		}
 
 		// Also populate the continue history
-		this._contextHistoryForContinue = [...messages];
+		this._contextHistoryForContinue = [...this._context.messages];
 	}
 
 	/**
@@ -996,6 +1024,9 @@ export class AgentLoop {
 				});
 			});
 		} finally {
+			// Never leave an assistant `tool_calls` unanswered: this is the last
+			// point of control before the session is saved and resumed.
+			this._answerDanglingToolCalls();
 			this._isRunning = false;
 			this._cancellation?.dispose();
 			this._cancellation = undefined;
@@ -1174,6 +1205,7 @@ export class AgentLoop {
 				this._onDidError.fire(err instanceof Error ? err : new Error(String(err)));
 			}
 		} finally {
+			this._answerDanglingToolCalls();
 			this._isRunning = false;
 			this._cancellation?.dispose();
 			this._cancellation = undefined;
@@ -1204,6 +1236,7 @@ export class AgentLoop {
 				this._onDidError.fire(err instanceof Error ? err : new Error(String(err)));
 			}
 		} finally {
+			this._answerDanglingToolCalls();
 			this._isRunning = false;
 			this._cancellation?.dispose();
 			this._cancellation = undefined;

@@ -29,6 +29,76 @@ const WINDOW_UTILIZATION = 0.75;
  */
 const TASK_ANCHOR_PREFIX = '[Pinned original task — always in context]';
 
+/**
+ * Content of the synthetic tool result inserted when a tool call was never
+ * answered (task cancelled/interrupted, or a session resumed mid-call).
+ */
+export const UNANSWERED_TOOL_CALL =
+	'[not executed] the tool call was never answered (task interrupted or cancelled)';
+
+/**
+ * Enforce the API's tool-call pairing invariant on a message list.
+ *
+ * The OpenAI-compatible API rejects a request whose assistant `tool_calls`
+ * message is not followed by one `tool` message per `tool_call_id`
+ * ("insufficient tool messages following tool_calls message"), and it also
+ * rejects a `tool` message that answers nothing. Neither is recoverable by the
+ * model: every retry replays the same malformed history and gets the same 400,
+ * so an affected session can never be resumed (observed: three consecutive
+ * "继续" tasks failed in under a second with that exact API error).
+ *
+ * The history CAN legitimately end up malformed — a run can be interrupted
+ * between the assistant turn (already appended) and its tool results (Ctrl+C /
+ * exit saves the session right after `cancel()`), `/btw` can supersede a plan
+ * mid-step, and the sliding window can start in the middle of an assistant
+ * tool_calls group. Trusting every producer to have honoured the invariant is
+ * what failed; enforcing it at the boundaries (send + persist) cannot.
+ *
+ * Returns a NEW array; input messages are reused by reference so callers can
+ * tell which tool results were synthesized.
+ */
+export function sanitizeToolCallPairs(messages: readonly IAgentMessage[]): IAgentMessage[] {
+	const out: IAgentMessage[] = [];
+	let i = 0;
+	while (i < messages.length) {
+		const msg = messages[i];
+
+		if (msg.role === MessageRole.Assistant && msg.toolCalls && msg.toolCalls.length > 0) {
+			out.push(msg);
+			const answered = new Set<string>();
+			let j = i + 1;
+			// Every following `tool` message belongs to this assistant turn.
+			while (j < messages.length && messages[j].role === MessageRole.Tool) {
+				const id = messages[j].toolCallId;
+				// A duplicate id (or a missing one) is itself invalid → drop it.
+				if (id && !answered.has(id)) {
+					out.push(messages[j]);
+					answered.add(id);
+				}
+				j++;
+			}
+			for (const tc of msg.toolCalls) {
+				if (!answered.has(tc.id)) {
+					out.push(createMessage(MessageRole.Tool, UNANSWERED_TOOL_CALL, { toolCallId: tc.id }));
+				}
+			}
+			i = j;
+			continue;
+		}
+
+		if (msg.role === MessageRole.Tool) {
+			// Orphan tool result: its assistant tool_calls is gone (evicted by the
+			// window, or dropped by a previous repair). The API rejects it.
+			i++;
+			continue;
+		}
+
+		out.push(msg);
+		i++;
+	}
+	return out;
+}
+
 export class AgentContext {
 	private readonly _messages: IAgentMessage[] = [];
 	private _systemPrompt: IAgentMessage | undefined;
@@ -162,6 +232,27 @@ export class AgentContext {
 		this._messages.push(message);
 	}
 
+	/**
+	 * Apply `sanitizeToolCallPairs` to the LIVE history and return the tool
+	 * results that had to be synthesized (empty when the history was already
+	 * valid).
+	 *
+	 * Called when a task ends (cancel/crash included), so what gets persisted is
+	 * a resumable conversation instead of one that 400s forever.
+	 */
+	repairToolCallPairs(): IAgentMessage[] {
+		const repaired = sanitizeToolCallPairs(this._messages);
+		if (repaired.length === this._messages.length
+			&& repaired.every((m, i) => m === this._messages[i])) {
+			return [];
+		}
+		const original = new Set<IAgentMessage>(this._messages);
+		const inserted = repaired.filter(m => !original.has(m));
+		this._messages.length = 0;
+		this._messages.push(...repaired);
+		return inserted;
+	}
+
 	getContextWindow(): IAgentMessage[] {
 		const result: IAgentMessage[] = [];
 
@@ -194,7 +285,11 @@ export class AgentContext {
 		}
 
 		result.push(...contextMessages);
-		return result;
+
+		// Send-boundary invariant: whatever the producers did, what leaves the
+		// process is always a valid tool-call pairing — an unanswered assistant
+		// `tool_calls` is a permanent 400 for the whole session.
+		return sanitizeToolCallPairs(result);
 	}
 
 	/**
