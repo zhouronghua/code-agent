@@ -24,6 +24,12 @@
  *    5. Tracing is strictly best-effort: every Langfuse call is wrapped so a
  *       broken/unreachable Langfuse can never fail an agent run ("fail open",
  *       same contract as the shared-memory integration).
+ *       The distinction that makes this safe: an error thrown by the SDK's OWN
+ *       observation machinery is swallowed and the work re-run untraced, whereas
+ *       an error thrown by the WRAPPED work (LLM request, tool, task) is
+ *       propagated unchanged. Conflating the two mislabels every upstream error
+ *       as "instrumentation failed" and silently re-issues the request — see the
+ *       regression test in tests/langfuse-tracing.test.ts [6].
  *
  *  Configuration (highest priority first):
  *    1. environment: LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL
@@ -585,20 +591,44 @@ export class LangfuseTracing implements IAgentTracing {
 		parent?: ISpanRef | null,
 	): Promise<T> {
 		if (!this._ready) return fn(NOOP_HANDLE);
+
+		// The wrapped work (an LLM request, a tool, a whole task) may legitimately
+		// throw — timeout, 429, 5xx, context overflow — and that error must then
+		// propagate UNCHANGED so the caller can classify it (fallback model,
+		// compaction, retry). Only a failure of the tracing SDK's own machinery
+		// may be swallowed.
+		//
+		// Conflating the two was a real defect: every upstream failure was logged
+		// as "<name> instrumentation failed" AND the request was silently issued a
+		// second time (verified empirically: callback invocations = 2). That hid
+		// the true cause behind a tracing-shaped message and doubled API traffic,
+		// so a persistently failing endpoint looked like a broken tracer that
+		// "could not continue working".
+		let workFailed = false;
+		let workError: unknown;
+		const wrapped = async (obs: SdkObservation): Promise<T> => {
+			try {
+				return await this._invoke(obs, attrs, fn, type);
+			} catch (err) {
+				workFailed = true;
+				workError = err;
+				throw err;
+			}
+		};
+
 		try {
 			const options: Record<string, unknown> = { asType: type };
 			if (parent) options.parentSpanContext = spanContextOf(parent);
-			const run = () => this._sdk!.tracing.startActiveObservation(
-				name,
-				(obs: SdkObservation) => this._invoke(obs, attrs, fn, type),
-				options,
-			);
 			const parentActive = this._sdk!.tracing.getActiveTraceId() !== undefined;
 			return await (parentActive || !traceAttrs
-				? run()
-				: this._sdk!.tracing.propagateAttributes(traceAttrs, run)) as T;
+				? this._sdk!.tracing.startActiveObservation(name, wrapped, options)
+				: this._sdk!.tracing.propagateAttributes(traceAttrs, () => this._sdk!.tracing.startActiveObservation(name, wrapped, options))) as T;
 		} catch (err) {
-			// Instrumentation must never break the agent run.
+			// The wrapped call failed → this is the caller's error, not ours.
+			if (workFailed) throw workError;
+			// The tracing SDK itself failed (span/context setup) — fail open: run
+			// the work exactly once, untraced. Instrumentation must never break the
+			// agent run.
 			console.warn(`[TRACING] ${name} instrumentation failed (non-fatal): ${(err as Error).message}`);
 			return fn(NOOP_HANDLE);
 		}
@@ -662,19 +692,29 @@ export class LangfuseTracing implements IAgentTracing {
 				} catch { /* never let an update break the run */ }
 			},
 		};
+		// Attribute shaping is instrumentation-only: a value the SDK rejects must
+		// not abort the call it is describing.
 		try {
 			obs.update(this._shape(attrs, type));
+		} catch { /* ignore */ }
+		try {
 			const result = await fn(handle);
-			obs.end();
+			try {
+				obs.end();
+			} catch { /* ignore */ }
 			return result;
 		} catch (err) {
+			// The wrapped work failed: record it, then rethrow UNCHANGED so the
+			// caller keeps the real error (never a tracing-shaped substitute).
 			try {
 				obs.update({
 					level: 'ERROR',
 					statusMessage: (err as Error).message?.slice(0, MAX_META_VALUE_LEN),
 				});
 			} catch { /* ignore */ }
-			obs.end();
+			try {
+				obs.end();
+			} catch { /* ignore */ }
 			throw err;
 		}
 	}

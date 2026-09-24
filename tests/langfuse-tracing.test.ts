@@ -642,6 +642,119 @@ async function testSubagentObservations(tracing: LangfuseTracing, receiver: Otlp
 	ok(orchId.length > 0, 'the orchestrator span id is propagated to its children');
 }
 
+// ---------------------------------------------------------------------------
+// [6] a failing wrapped call is NOT an instrumentation failure
+// ---------------------------------------------------------------------------
+
+/** Capture console.warn for the duration of `fn`. */
+async function withCapturedWarnings<T>(fn: () => Promise<T>): Promise<{ result: T; warnings: string[] }> {
+	const warnings: string[] = [];
+	const original = console.warn;
+	console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+	try {
+		return { result: await fn(), warnings };
+	} finally {
+		console.warn = original;
+	}
+}
+
+/**
+ * Regression (the "一直报 llm-call instrumentation failed, 无法继续工作" report).
+ *
+ * Every error thrown by the wrapped work — timeout, 429, 5xx, context overflow —
+ * used to be caught by the tracing wrapper, logged as
+ * "<name> instrumentation failed (non-fatal)" and then the work was silently
+ * invoked a SECOND time. The real cause was hidden behind a tracing-shaped
+ * message and each attempt cost two API requests; on a persistently failing
+ * endpoint the session looked like a broken tracer that could not continue.
+ */
+async function testWrappedCallFailurePropagation(tracing: LangfuseTracing, receiver: OtlpReceiver): Promise<void> {
+	console.log('\n[6] a failing wrapped call propagates unchanged and runs exactly once');
+	const from = receiver.spans.length;
+	const boom = new Error('simulated upstream 503: model gateway unavailable');
+
+	// (a) runGeneration — the plain `startActiveObservation` path.
+	let calls = 0;
+	let caught: unknown;
+	const gen = await withCapturedWarnings(async () => {
+		try {
+			await tracing.runGeneration({ name: 'llm-call', model: 'test-model' }, async () => {
+				calls++;
+				throw boom;
+			});
+		} catch (e) {
+			caught = e;
+		}
+	});
+	eq(calls, 1, 'runGeneration invokes the wrapped LLM call exactly once (no silent retry)');
+	ok(caught === boom, 'the original LLM error propagates unchanged (not swallowed or re-wrapped)');
+	ok(!gen.warnings.some(w => w.includes('instrumentation failed')),
+		'the LLM failure is NOT mislabelled as an instrumentation failure');
+	eq(gen.warnings.length, 0, `no warning is emitted for a plain LLM failure (got ${JSON.stringify(gen.warnings)})`);
+
+	await tracing.flush();
+	const failedSpan = receiver.spans.slice(from).find(s => s.name === 'llm-call');
+	ok(!!failedSpan, 'the failed generation is still exported to Langfuse');
+	eq(failedSpan?.attrs['langfuse.observation.level'], 'ERROR', 'the failed generation is recorded at ERROR level');
+	ok(String(failedSpan?.attrs['langfuse.observation.status_message'] ?? '').includes('503'),
+		'the span carries the REAL error message (not a tracing message)');
+
+	// (b) runTask — the `propagateAttributes` (trace-root) path.
+	const boomTask = new Error('simulated 400: context length exceeded');
+	let taskCalls = 0;
+	let taskCaught: unknown;
+	const task = await withCapturedWarnings(async () => {
+		try {
+			await tracing.runTask({ name: 'agent-task' }, async () => {
+				taskCalls++;
+				throw boomTask;
+			});
+		} catch (e) {
+			taskCaught = e;
+		}
+	});
+	eq(taskCalls, 1, 'runTask invokes the wrapped work exactly once');
+	ok(taskCaught === boomTask, 'a task-level failure also propagates unchanged');
+	ok(!task.warnings.some(w => w.includes('instrumentation failed')),
+		'a task-level failure is not mislabelled as an instrumentation failure');
+}
+
+/**
+ * Instrumentation-only failures must still fail open: the work runs once,
+ * untraced, and the result is returned. A broken SDK is simulated so the
+ * distinction between "the tracer broke" and "the work failed" stays covered.
+ */
+async function testInstrumentationFailOpen(): Promise<void> {
+	console.log('\n[6b] a broken tracing SDK fails open (work runs once, untraced)');
+	const tracing = new LangfuseTracing({
+		publicKey: 'pk-lf-broken',
+		secretKey: 'sk-lf-broken',
+		baseUrl: 'http://127.0.0.1:1',
+		captureContent: true,
+		tags: [],
+	});
+	const sdkFailure = new Error('sdk: span create failed');
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	(tracing as any)._sdk = {
+		tracing: {
+			startObservation: () => { throw sdkFailure; },
+			startActiveObservation: () => { throw sdkFailure; },
+			propagateAttributes: (_p: Record<string, unknown>, fn: () => unknown) => fn(),
+			getActiveTraceId: () => undefined,
+		},
+		processor: { forceFlush: async () => { /* noop */ }, shutdown: async () => { /* noop */ } },
+	};
+
+	let calls = 0;
+	const { result, warnings } = await withCapturedWarnings(() =>
+		tracing.runGeneration({ name: 'llm-call' }, async () => { calls++; return 'untraced-ok'; }),
+	);
+	eq(calls, 1, 'the work runs exactly once when the tracer is broken');
+	eq(result, 'untraced-ok', 'the untraced result is still returned (fail open)');
+	ok(warnings.some(w => w.includes('instrumentation failed')),
+		'a genuine SDK failure IS reported as an instrumentation failure');
+}
+
 async function main(): Promise<void> {
 	console.log(`langfuse tracing tests — node ${process.version}`);
 	testConfigResolution();
@@ -666,6 +779,8 @@ async function main(): Promise<void> {
 
 	await testEndToEnd(tracing, receiver);
 	await testSubagentObservations(tracing, receiver);
+	await testWrappedCallFailurePropagation(tracing, receiver);
+	await testInstrumentationFailOpen();
 
 	await tracing.shutdown();
 	await receiver.close();
