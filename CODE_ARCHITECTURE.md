@@ -48,6 +48,7 @@ code-agent/
 │       │   ├── common/               #   核心逻辑
 │       │   │   ├── agent.ts          #   AgentLoop - ReAct 核心循环
 │       │   │   ├── agentTools.ts     #   Tool 基类 + ToolRegistry
+│       │   │   ├── agentBtw.ts       #   /btw 干预分类（提示 vs. 取代任务）+ 评估
 │       │   │   ├── agentContext.ts   #   上下文管理（滑动窗口 + 压缩）
 │       │   │   ├── agentModes.ts     #   模式切换 (Agent/Ask/Plan)
 │       │   │   ├── agentPlanner.ts   #   Plan 模式实现
@@ -254,7 +255,7 @@ TypeScript 入口，负责：
 - **服务创建**：实例化 LLM Provider、文件服务、搜索服务、终端服务、工具注册
 - **Agent 循环**：单次任务或交互式 REPL
 - **技能注入**：`buildSkillsContext()` 将 rules + skills 拼入 system prompt
-- **REPL 命令**：`/mode`, `/stream`, `/skills`, `/skill <name>`, `/parallel`, `exit`
+- **REPL 命令**：`/mode`, `/stream`, `/skills`, `/skill <name>`, `/parallel`, `/btw`, `exit`
 
 ### 5.2 Agent 核心 (`agent.ts` - `AgentLoop`)
 
@@ -275,6 +276,36 @@ AgentLoop.run() → _runAgentLoop()
 - **流式输出**：通过 `onDidStreamToken` 逐 token 推送
 - **Checkpoint 机制**：写文件操作前自动快照
 - **超时控制**：每个工具执行有 `stepTimeout`，支持 `Promise.race`
+- **中途干预（`/btw`）**：见 5.2.1——运行的指令可能只是提示，也可能**取代**当前任务
+
+#### 5.2.1 中途干预 `/btw`：提示 vs. 取代任务 (`agentBtw.ts`)
+
+`/btw <指令>` 在 agent 运行中发送时，先判断它是否让当前工作在飞行中作废：
+
+```
+injectBtwHint(text)                       // 异步，返回 IBtwOutcome
+  │
+  ├─ classifyBtwIntent(text)              // 确定性关键词：cancel / supersede / hint / unknown
+  ├─ supersede  → _supersede(): abort 正在跑的工具（_currentToolController.abort()）
+  │                             置 _supersedeRequested，队列化，丢弃计划（planner.reset()）
+  ├─ hint       → 入队，下一轮循环作为 User 消息注入，计划继续
+  └─ unknown    → BtwConflictEvaluator（默认一次轻量 LLM 调用）判定；
+                  超时 / 报错 → 降级为 hint（绝不误杀在跑的工作）
+```
+
+循环内的两处配合：
+
+1. 每次迭代开头 drain 待处理 `/btw`；遇到 supersede 时注入
+   「THIS INSTRUCTION SUPERSEDES THE CURRENT TASK」消息、`planner.reset()`、
+   把新指令设为任务锚点（`setTaskAnchor`）、清零验证/工具计数，并清除
+   `_supersedeRequested`。
+2. 工具批次执行前检查 `_supersedeRequested`：本步已规划但属于旧计划的工具调用被
+   **跳过**，且**每个 `tool_call_id` 仍补一条 tool 结果**——否则下一轮请求会因
+   「assistant tool_calls 未被 tool 消息回应」被 API 拒绝。
+
+记录 `task-superseded` 信号到任务日志（`IIssueSignal`），自演化证据可据此区分
+「用户纠偏」与「用户直接换了任务」。新任务开始时 `_resetPendingBtwState()` 清空残留
+状态，空闲时发出的 `/btw` 不会污染下一个任务。
 
 ### 5.3 上下文管理 (`agentContext.ts` - `AgentContext`)
 

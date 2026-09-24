@@ -58,6 +58,14 @@ When you need to wait for an external async task to complete (CI pipeline, backg
 - The check command should return exit 0 on success, OR use success_pattern to match output
 - Example: poll(command="curl -s http://localhost:8080/health", success_pattern="OK", max_attempts=20)
 
+## Mid-task User Intervention (/btw)
+- The user may send '/btw <instruction>' while you are working.
+- An instruction that replaces the goal, contradicts the current plan, or asks to redo work against
+  the LATEST state/version SUPERSEDES the task: abandon the rest of the old plan, do not finish work
+  that is now irrelevant, and start from the new instruction.
+- A pure hint (extra detail, a constraint, a reminder) does NOT supersede: keep the current plan and
+  apply the hint.
+
 ## Safety
 - Never execute destructive commands (rm -rf, drop database, etc.) without confirmation
 - Always create a checkpoint before major changes

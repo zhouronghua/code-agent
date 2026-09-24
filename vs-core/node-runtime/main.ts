@@ -658,6 +658,10 @@ Intervention:
                  for subsequent turns. While idle, treat it as a direct prompt
                  and respond immediately. Useful for course-correcting or adding
                  context mid-session.
+                 An instruction that CONFLICTS with (or replaces) the running
+                 task — e.g. "取消刚才的任务，改为基于最新版本重新执行" — is detected
+                 automatically: the in-flight tool call is aborted, the running
+                 plan is dropped, and the agent pivots to the new instruction.
   /btw cancel    Cancel the currently running tool (e.g., a long build or
                  poll). The agent will continue with the next step.
 
@@ -1380,7 +1384,7 @@ async function main() {
 	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, exit${C.reset}`);
 	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save${C.reset}`);
 	console.log(`${C.dim}Tasks:   /tasks, /task <id>, /delete-task <id>${C.reset}`);
-	console.log(`${C.dim}Tip: use /btw <hint> any time — even while agent is running; /btw cancel to abort current tool${C.reset}`);
+	console.log(`${C.dim}Tip: /btw <hint> works any time (even while running). Conflicting instructions (e.g. "基于最新版本重新执行") auto-cancel the running tool/plan and pivot; /btw cancel aborts the current tool${C.reset}`);
 	console.log(`${C.dim}Tip: press Tab to auto-complete commands like /resume, /mode, /profile, /skill${C.reset}\n`);
 
 	let agentIsRunning = false;
@@ -1477,11 +1481,24 @@ async function main() {
 						if (cancelled) {
 							log(C.magenta, 'BTW', 'Cancelling current tool execution...');
 						} else {
-							log(C.yellow, 'BTW', 'No tool currently running to cancel');
+							const outcome = await agentLoop.injectBtwHint(hint);
+							log(C.yellow, 'BTW', outcome.kind === 'superseded'
+								? 'No tool running — asking the agent to stop the current task'
+								: 'No tool currently running to cancel');
 						}
 					} else {
-						agentLoop.injectBtwHint(hint);
-						log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+						// Classify first: an instruction that replaces the running
+						// task aborts the in-flight tool call and drops the plan,
+						// instead of being queued behind a long build/poll.
+						const outcome = await agentLoop.injectBtwHint(hint);
+						if (outcome.kind === 'superseded') {
+							log(C.magenta, 'BTW', `Task superseded — ${outcome.toolCancelled ? 'aborted the running tool and ' : ''}pivoting to: "${hint.substring(0, 80)}${hint.length > 80 ? '...' : ''}"`);
+							if (outcome.reason) log(C.dim, 'BTW', `reason: ${outcome.reason}`);
+						} else if (outcome.kind === 'cancelled') {
+							log(C.magenta, 'BTW', 'Cancelling current tool execution...');
+						} else {
+							log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+						}
 					}
 				} else {
 					log(C.yellow, 'BTW', 'Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)');

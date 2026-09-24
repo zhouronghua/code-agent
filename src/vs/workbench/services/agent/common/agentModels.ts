@@ -187,6 +187,7 @@ export interface IStepRecord {
 export interface IIssueSignal {
 	readonly kind:
 		| 'user-intervention'      // the user had to steer the agent mid-task (/btw)
+		| 'task-superseded'       // a /btw instruction replaced the running task (/btw conflict)
 		| 'step-limit'            // the task ran out of steps
 		| 'reasoning-loop'         // the model repeated itself and produced no answer
 		| 'context-overflow'       // history had to be compacted and the call retried

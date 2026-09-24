@@ -1,6 +1,6 @@
 {
   "name": "@zhouronghua/code-agent",
-  "version": "0.3.44",
+  "version": "0.3.45",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
@@ -46,8 +46,9 @@
     "test:tracing": "esbuild tests/langfuse-tracing.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/langfuse-tracing.test.mjs --tsconfig=tsconfig.json --external:@langfuse/* --external:@opentelemetry/* && node build/langfuse-tracing.test.mjs",
     "test:self-improve": "esbuild tests/self-improve.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/self-improve.test.mjs --tsconfig=tsconfig.json && node build/self-improve.test.mjs",
     "test:harness": "esbuild tests/agent-harness.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/agent-harness.test.mjs --tsconfig=tsconfig.json && node build/agent-harness.test.mjs",
+    "test:btw": "esbuild tests/btw-supersede.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/btw-supersede.test.mjs --tsconfig=tsconfig.json && node build/btw-supersede.test.mjs",
     "test:e2e-anthropic": "node tests/e2e-anthropic-cache.mjs",
-    "test": "npm run test:model-switch && npm run test:agent-home && npm run test:tracing && npm run test:self-improve && npm run test:harness",
+    "test": "npm run test:model-switch && npm run test:agent-home && npm run test:tracing && npm run test:self-improve && npm run test:harness && npm run test:btw",
     "clean": "rm -rf build",
     "pack": "npm run build:release && npm pack",
     "link": "npm run build && npm link",

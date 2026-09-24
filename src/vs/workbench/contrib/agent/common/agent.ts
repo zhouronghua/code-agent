@@ -38,6 +38,15 @@ import { AgentCheckpointManager } from './agentCheckpoint';
 import { getSystemPrompt } from './agentPrompts';
 import { IMemoryIntegration } from './agentMemory';
 import { IAgentTracing, IObservationHandle, ITaskMeta, NOOP_TRACING, currentUserName } from './agentTracing';
+import {
+	classifyBtwIntent,
+	buildBtwConflictPrompt,
+	parseBtwConflictVerdict,
+	renderBtwInjection,
+	BtwConflictEvaluator,
+	IBtwOutcome,
+	IPendingBtwHint,
+} from './agentBtw';
 
 // Maximum characters for a single tool result sent back to the LLM.
 // Large outputs (e.g. read_file of a big file, run_terminal of a long build)
@@ -286,7 +295,25 @@ export class AgentLoop {
 	private readonly _tracing: IAgentTracing;
 
 	/** Pending /btw hints injected during agent execution — consumed each loop iteration. */
-	private _pendingBtwHints: string[] = [];
+	private _pendingBtwHints: IPendingBtwHint[] = [];
+
+	/**
+	 * Set when an in-flight /btw instruction supersedes the running task. The
+	 * loop reads it twice: to abandon the remaining tool calls of the step that
+	 * was already planned, and — once the hint is drained — to reset itself.
+	 */
+	private _supersedeRequested = false;
+
+	/**
+	 * Optional LLM-backed evaluator deciding whether an ambiguous /btw
+	 * instruction supersedes the running task.
+	 *
+	 * `undefined` → use the built-in LLM evaluator; `null` → keyword-only.
+	 */
+	private _btwEvaluatorOverride: BtwConflictEvaluator | null | undefined = undefined;
+
+	/** Upper bound on one conflict-evaluation call, so `/btw` never hangs the REPL. */
+	private _btwEvaluationTimeoutMs = 20_000;
 
 	/** AbortController for the currently executing tool, if any. Allows /btw cancel. */
 	private _currentToolController: AbortController | undefined;
@@ -628,29 +655,179 @@ export class AgentLoop {
 	}
 
 	/**
-	 * Inject a /btw hint while the agent is actively running.
-	 * The hint is queued and will be delivered as a User message at the
-	 * start of the next ReAct loop iteration, allowing mid-reasoning intervention.
+	 * Override the evaluator used to decide whether an ambiguous in-flight /btw
+	 * instruction supersedes the running task.
+	 *
+	 * Pass a function to replace the built-in LLM evaluator (used by tests for
+	 * determinism), or `null` to disable evaluation entirely (keyword-only).
+	 */
+	setBtwConflictEvaluator(evaluator: BtwConflictEvaluator | null, timeoutMs?: number): void {
+		this._btwEvaluatorOverride = evaluator;
+		if (timeoutMs && timeoutMs > 0) {
+			this._btwEvaluationTimeoutMs = timeoutMs;
+		}
+	}
+
+	/** The evaluator to use for ambiguous instructions, if any. */
+	private _resolveBtwEvaluator(): BtwConflictEvaluator | undefined {
+		if (this._btwEvaluatorOverride === null) return undefined;
+		if (this._btwEvaluatorOverride) return this._btwEvaluatorOverride;
+		return (hint, runningTask) => this._llmBtwConflictEvaluator(hint, runningTask);
+	}
+
+	/**
+	 * Built-in evaluator: one short LLM call that judges whether the instruction
+	 * replaces the running task. Uses the agent's *active* provider (so a
+	 * /profile switch or 保底 fallback is respected) and never passes tools.
+	 */
+	private async _llmBtwConflictEvaluator(hint: string, runningTask: string): Promise<{ supersede: boolean; reason: string }> {
+		const reply = await this._llmProvider.complete(buildBtwConflictPrompt(hint, runningTask), undefined, 0);
+		return parseBtwConflictVerdict(reply?.content || '');
+	}
+
+	/**
+	 * Inject a /btw instruction while the agent is actively running.
+	 *
+	 * The instruction is first classified:
+	 *   - additive hint   → queued and delivered as a User message at the start of
+	 *                       the next ReAct loop iteration (the plan keeps running).
+	 *   - supersede       → the in-flight tool call is aborted immediately, the
+	 *                       remaining tool calls of the current step are skipped,
+	 *                       the plan is dropped, and the instruction becomes the
+	 *                       new task.
+	 *
+	 * Ambiguous instructions are handed to the configured evaluator (an LLM call
+	 * by default in the CLI host); if it cannot answer in time, the instruction
+	 * is treated as an additive hint — never as a destructive supersede.
 	 *
 	 * Special commands:
 	 *   "/btw cancel" or "/btw abort" — cancels the currently running tool immediately.
 	 */
-	injectBtwHint(hint: string): void {
-		const trimmed = hint.trim();
-		// Check for cancel/abort command
-		if (trimmed === 'cancel' || trimmed === 'abort') {
+	async injectBtwHint(hint: string): Promise<IBtwOutcome> {
+		const trimmed = (hint || '').trim();
+		if (!trimmed) return { kind: 'ignored' };
+
+		const intent = classifyBtwIntent(trimmed);
+
+		// Explicit stop command.
+		if (intent === 'cancel') {
 			if (this._currentToolController) {
 				this._currentToolController.abort();
 				console.log('[BTW] Cancelling current tool execution...');
-				return;
+				return { kind: 'cancelled', toolCancelled: true };
 			}
-			// No tool running — treat as a regular hint to cancel the overall task
-			this._pendingBtwHints.push('[User requested cancellation of the current operation.]');
-			return;
+			// No tool running — ask the model to stop and let the loop react.
+			return this._supersede(trimmed, 'user requested cancellation (/btw cancel)');
 		}
-		this._pendingBtwHints.push(trimmed);
+
+		// Unambiguous redirect.
+		if (intent === 'supersede') {
+			return this._supersede(trimmed, 'instruction replaces the running task');
+		}
+
+		// Cheap additive signal — keep the current plan.
+		if (intent === 'hint') {
+			return this._queueHint(trimmed, false);
+		}
+
+		// Ambiguous: ask the evaluator when one is available and a task is running.
+		const evaluator = this._resolveBtwEvaluator();
+		if (evaluator && this._isRunning) {
+			let verdict;
+			try {
+				verdict = await this._withBtwTimeout(
+					evaluator(trimmed, this._runningTaskContext()),
+					this._btwEvaluationTimeoutMs,
+				);
+			} catch (err) {
+				// Fail open: an evaluator outage must never block the user or kill work.
+				console.warn(`[BTW] conflict evaluation failed (non-fatal): ${(err as Error).message}`);
+				verdict = undefined;
+			}
+			if (verdict?.supersede) {
+				return this._supersede(trimmed, verdict.reason || 'evaluator: the running task is obsolete');
+			}
+		}
+
+		return this._queueHint(trimmed, false);
+	}
+
+	/** Queue an additive hint (persisted into extraSystemPrompt, as before). */
+	private _queueHint(text: string, supersede: boolean): IBtwOutcome {
+		this._pendingBtwHints.push({ text, supersede });
 		// Also append to extraSystemPrompt so the hint persists across runs
-		this.appendExtraSystemPrompt(hint);
+		this.appendExtraSystemPrompt(text);
+		return { kind: supersede ? 'superseded' : 'hint' };
+	}
+
+	/**
+	 * Abort whatever is in flight and mark the running task as superseded.
+	 *
+	 * The abort usually arrives while a long tool call (build, poll, CI wait) is
+	 * running: without it the user's redirect would only be read after that call
+	 * finally returns — which is exactly the wasted work this exists to prevent.
+	 */
+	private _supersede(text: string, reason: string): IBtwOutcome {
+		const toolCancelled = this.cancelCurrentTool();
+		this._supersedeRequested = true;
+		this._pendingBtwHints.push({ text, supersede: true, reason });
+		this.appendExtraSystemPrompt(text);
+		console.log(`[BTW] Task superseded (${reason})${toolCancelled ? ' — in-flight tool aborted' : ''}`);
+		return { kind: 'superseded', toolCancelled, reason };
+	}
+
+	/**
+	 * A compact description of what the agent is doing right now, used as input
+	 * to the conflict evaluator. Deliberately short: it only needs enough context
+	 * to tell "same goal, extra detail" from "different goal, abort".
+	 */
+	private _runningTaskContext(): string {
+		const parts: string[] = [];
+		parts.push(`Task: ${this._taskDescription || '(unknown)'}`);
+		const plan = this._planner.currentPlan;
+		if (plan && plan.steps.length > 0) {
+			const shown = plan.steps.slice(0, 12).map((s, i) => `${i + 1}. ${s.description}`).join('\n');
+			parts.push(`Plan (step ${plan.currentStep}/${plan.steps.length}):\n${shown}`);
+		}
+		const lastAssistant = [...this._context.messages]
+			.reverse()
+			.find(m => m.role === MessageRole.Assistant && m.content && m.content.trim());
+		if (lastAssistant) {
+			parts.push(`Latest progress: ${lastAssistant.content.slice(0, 400)}`);
+		}
+		const lastTool = [...this._stepRecords].reverse().find(s => s.toolExecutions.length > 0);
+		if (lastTool) {
+			const names = lastTool.toolExecutions.map(t => t.toolName).join(', ');
+			parts.push(`Last tool calls: ${names}`);
+		}
+		return parts.join('\n\n').slice(0, 3000);
+	}
+
+	/** Race a promise against a timeout (used to bound the evaluator call). */
+	private async _withBtwTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			return await Promise.race([
+				promise,
+				new Promise<T>((_, reject) => {
+					timer = setTimeout(() => reject(new Error(`btw conflict evaluation timed out after ${ms}ms`)), ms);
+				}),
+			]);
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
+	}
+
+	/**
+	 * Drop any /btw state left over from a previous run.
+	 *
+	 * Called when a new task starts: a hint queued while the agent was idle (or a
+	 * `/btw cancel` with nothing to cancel) must never be replayed against the
+	 * next task and silently supersede it.
+	 */
+	private _resetPendingBtwState(): void {
+		this._pendingBtwHints = [];
+		this._supersedeRequested = false;
 	}
 
 	/**
@@ -800,6 +977,9 @@ export class AgentLoop {
 		this._taskError = undefined;
 		// A previous run may have aborted mid-request; never leave the probe blocked.
 		this._llmRequestInFlight = false;
+		// /btw state belongs to the run that was in flight: a hint that never got
+		// delivered (or a cancel issued while idle) must not leak into this task.
+		this._resetPendingBtwState();
 
 		try {
 			// ---- Langfuse: one trace per user task ----
@@ -959,6 +1139,7 @@ export class AgentLoop {
 		this._taskStartTime = Date.now();
 		this._taskDescription = '(continue previous session)';
 		this._taskError = undefined;
+		this._resetPendingBtwState();
 
 		try {
 			// Restore conversation context from the previous session.
@@ -1013,6 +1194,7 @@ export class AgentLoop {
 		this._taskStartTime = Date.now();
 		this._taskDescription = plan?.task || '(execute plan)';
 		this._taskError = undefined;
+		this._resetPendingBtwState();
 
 		try {
 			await this._executePlanCore(this._cancellation.token, plan);
@@ -1105,17 +1287,34 @@ export class AgentLoop {
 
 			try {
 			// ---- Inject any /btw hints received during agent execution ----
+			let drainedSupersede = false;
 			while (this._pendingBtwHints.length > 0) {
 				const hint = this._pendingBtwHints.shift()!;
 				// A hint means the agent's own reasoning was not good enough to
 				// continue unattended — the strongest signal in this evidence base.
-				this._noteSignal('user-intervention', hint, stepCount);
-				const btwMsg = createMessage(MessageRole.User,
-					`[User intervention via /btw]: ${hint}\n` +
-					`(This is a hint from the user to adjust your reasoning. Follow it in subsequent steps.)`
+				// A supersede is stronger still: the user had to REPLACE the task.
+				this._noteSignal(
+					hint.supersede ? 'task-superseded' : 'user-intervention',
+					hint.text,
+					stepCount,
 				);
+				const btwMsg = createMessage(MessageRole.User, renderBtwInjection(hint));
+				if (hint.supersede) {
+					// Abandon the old plan and re-anchor on the new instruction, so
+					// compaction can no longer summarize the goal back to the old one.
+					drainedSupersede = true;
+					this._planner.reset();
+					this._taskDescription = hint.text;
+					this._context.setTaskAnchor(hint.text);
+					verificationRounds = 0;
+					consecutiveToolOnlySteps = 0;
+				}
 				this._context.addMessage(btwMsg);
 				this._onDidReceiveMessage.fire(btwMsg);
+			}
+			// The supersede has been delivered — stop skipping tool calls.
+			if (drainedSupersede) {
+				this._supersedeRequested = false;
 			}
 
 			// ---- Return to the primary model as soon as it recovers ----
@@ -1399,6 +1598,20 @@ export class AgentLoop {
 					throw new Error('Cancelled');
 				}
 
+				// A /btw that superseded the task may have arrived while these tool
+				// calls were already planned. They belong to the abandoned plan:
+				// skip them — but still answer every tool_call_id, because an
+				// assistant `tool_calls` message with an unanswered id is rejected
+				// by the API on the next request.
+				if (this._supersedeRequested) {
+					const skippedMsg = createMessage(MessageRole.Tool,
+						'[skipped] the user superseded this task via /btw before this tool call ran',
+						{ toolCallId: toolCall.id });
+					this._context.addMessage(skippedMsg);
+					this._onDidReceiveMessage.fire(skippedMsg);
+					continue;
+				}
+
 				hasExecutedTool = true;
 				const toolExecStart = Date.now();
 				// ---- Langfuse: one tool observation per tool call ----
@@ -1566,7 +1779,7 @@ export class AgentLoop {
 					toolCallId,
 					success: false,
 					output: '',
-					error: 'Tool execution cancelled by user (/btw cancel)',
+					error: 'Tool execution cancelled by user intervention (/btw)',
 				};
 			}
 
@@ -1586,7 +1799,7 @@ export class AgentLoop {
 					toolCallId,
 					success: false,
 					output: '',
-					error: 'Tool execution cancelled by user (/btw cancel)',
+					error: 'Tool execution cancelled by user intervention (/btw)',
 				};
 			}
 			return {
