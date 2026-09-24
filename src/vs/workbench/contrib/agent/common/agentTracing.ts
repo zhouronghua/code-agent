@@ -605,8 +605,10 @@ export class LangfuseTracing implements IAgentTracing {
 		// so a persistently failing endpoint looked like a broken tracer that
 		// "could not continue working".
 		let workFailed = false;
+		let workStarted = false;
 		let workError: unknown;
 		const wrapped = async (obs: SdkObservation): Promise<T> => {
+			workStarted = true;
 			try {
 				return await this._invoke(obs, attrs, fn, type);
 			} catch (err) {
@@ -626,10 +628,16 @@ export class LangfuseTracing implements IAgentTracing {
 		} catch (err) {
 			// The wrapped call failed → this is the caller's error, not ours.
 			if (workFailed) throw workError;
-			// The tracing SDK itself failed (span/context setup) — fail open: run
-			// the work exactly once, untraced. Instrumentation must never break the
-			// agent run.
 			console.warn(`[TRACING] ${name} instrumentation failed (non-fatal): ${(err as Error).message}`);
+			// Hard rule: the wrapped work is NEVER launched twice. Re-running a
+			// tool after it already started would apply its side effects again
+			// (a second `git push`, a duplicated build), which is far worse than
+			// an untraced failure — so once the work has begun, surface the
+			// tracing error instead.
+			if (workStarted) throw err;
+			// Work never started and only the tracing SDK failed (span/context
+			// setup) — fail open: run it exactly once, untraced. Instrumentation
+			// must never break the agent run.
 			return fn(NOOP_HANDLE);
 		}
 	}

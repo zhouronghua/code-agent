@@ -753,6 +753,39 @@ async function testInstrumentationFailOpen(): Promise<void> {
 	eq(result, 'untraced-ok', 'the untraced result is still returned (fail open)');
 	ok(warnings.some(w => w.includes('instrumentation failed')),
 		'a genuine SDK failure IS reported as an instrumentation failure');
+
+	// A tracer that throws AFTER the work has started must not cause a second
+	// run: re-running a tool would apply its side effects twice.
+	const tracing2 = new LangfuseTracing({
+		publicKey: 'pk-lf-broken2',
+		secretKey: 'sk-lf-broken2',
+		baseUrl: 'http://127.0.0.1:1',
+		captureContent: true,
+		tags: [],
+	});
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	(tracing2 as any)._sdk = {
+		tracing: {
+			startObservation: () => { throw sdkFailure; },
+			startActiveObservation: (_n: string, fn: (obs: unknown) => unknown) => {
+				fn({ id: 's', traceId: 't', update: () => { /* noop */ }, end: () => { /* noop */ } });
+				throw sdkFailure;
+			},
+			propagateAttributes: (_p: Record<string, unknown>, fn: () => unknown) => fn(),
+			getActiveTraceId: () => undefined,
+		},
+		processor: { forceFlush: async () => { /* noop */ }, shutdown: async () => { /* noop */ } },
+	};
+
+	let lateCalls = 0;
+	let lateCaught: unknown;
+	try {
+		await tracing2.runTool({ name: 'push' }, async () => { lateCalls++; return 'ok'; });
+	} catch (e) {
+		lateCaught = e;
+	}
+	eq(lateCalls, 1, 'a tracer that fails after the work started never re-runs the work');
+	ok(lateCaught === sdkFailure, 'the tracing error is surfaced instead of silently duplicating the work');
 }
 
 async function main(): Promise<void> {
