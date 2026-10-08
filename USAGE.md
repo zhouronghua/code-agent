@@ -580,14 +580,47 @@ CodeAgent 支持接入 [tdai_agent_mem](https://github.com/Tencent/TencentDB-Age
 多机/多 Agent 共享记忆中心。开启后：
 
 - **自动召回**：每次任务开始前，按 Memory 分级召回相关记忆注入系统提示词
-  - L1（原子事实）`searchAtomic` → `<relevant-memories>`
-  - L2（场景索引）`scenario/ls` → Scenario Index
-  - L3（用户画像）`core/read` → `<user-persona>`
+  - L1（原子事实）`searchAtomic` → `<relevant-memories>`（**按工作区目录隔离**，见下）
+  - L2（场景索引）`scenario/ls` → Scenario Index（跨项目，不做隔离）
+  - L3（用户画像）`core/read` → `<user-persona>`（跨项目，不做隔离）
 - **自动捕获**：每次任务结束后，把本轮对话写入 L0（`conversation/add`），
   记忆中心的后台流水线会自动把 L0 蒸馏为 L1 → L2 → L3，实现多机共享
-- **记忆工具**：注册 `tdai_memory_search`（L1 搜索）、`tdai_conversation_search`
-  （L0 对话搜索）、`tdai_read_file`（读取 L2/L3 文件）、`tdai_memory_write`
-  （按 l1/l2/l3 分级写入）
+- **记忆工具**：注册 `tdai_memory_search`（L1 搜索，同样按工作区隔离）、
+  `tdai_conversation_search`（L0 对话搜索）、`tdai_read_file`（读取 L2/L3 文件）、
+  `tdai_memory_write`（按 l1/l2/l3 分级写入；写 L1 时自动打上工作区标签）
+
+### L1 工作区隔离
+
+多条流水线/多个项目共用同一个记忆中心时，A 项目的事实不应该泄漏到 B 项目。
+因此 **只有 L1 会按工作区目录隔离**，L2/L3 仍然是跨项目的：
+
+- **打标签**：捕获 L0 时把当前工作区绝对路径写入 `task_id` 字段
+  （已实测 `/v3/conversation/add` 会落库、`/v3/atomic/search` 支持按 `task_id` 过滤），
+  同时在用户消息里写入可读标记 `[workspace:<绝对路径>]`；
+  通过 `tdai_memory_write` 写 L1 时同样写入 `task_id` 并在 `background` 里带标记。
+- **召回规则**：
+  - 工作区目录**完全相同** → 完整召回该工作区的 L1；
+  - 两个目录是**父子关系**（当前目录是标签目录的子目录，或反之）→ 互相召回；
+  - **兄弟目录**（不存在父子关系）→ 不召回对方的 L1；
+  - 完全没有标签的历史 L1 → 由 `workspace_scope` 决定（默认 `strict` 不召回）。
+- **实现方式**：召回时先按"当前目录 + 各级父目录"分别做
+  `task_id` 精确查询，再叠加一次不限标签的过量召回（覆盖子目录与无标签数据），
+  合并去重后统一按工作区规则过滤，再按相似度排序取 top-N。
+
+```yaml
+memory:
+  workspace_scope: strict   # strict(默认) | loose | off
+  workspace_dir: ""         # 可选，绝对路径；默认取进程工作目录
+```
+
+- `strict`（默认）：只召回"打过标签且与本工作区相同/父子"的 L1，无标签的隐藏；
+- `loose`：打过标签的仍按规则隔离，无标签的历史 L1 保持可见（向后兼容）；
+- `off`：完全不做工作区过滤（旧行为）。
+
+CLI 启动时会打印生效的作用域与目录，例如
+`L1 workspace scope: strict @ /work/ronghua.zhou/code/code-agent`；
+召回时若有其它工作区的记忆被隐藏，会打印
+`[memory] L1 workspace scope (strict) [...]: hid N memory(ies) tagged to other workspaces`。
 
 ### 配置方式一：config.yaml（推荐）
 
@@ -604,6 +637,8 @@ memory:
   session_id: ""                      # 可选；留空则按工作目录聚合
   recall: true                        # 任务前自动召回（默认 true）
   capture: true                       # 任务后自动捕获 L0（默认 true）
+  workspace_scope: strict             # L1 工作区隔离：strict | loose | off
+  workspace_dir: ""                   # 可选；默认取进程工作目录
 ```
 
 ### 配置方式二：MCP 配置（~/.agent/mcp.json）

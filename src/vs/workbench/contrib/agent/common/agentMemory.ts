@@ -29,6 +29,16 @@ import * as path from 'node:path';
 import { IToolResult } from 'vs/workbench/services/agent/common/agentModels';
 import { AgentTool } from './agentTools';
 import { agentHomeFileCandidates } from './agentHome';
+import {
+	WorkspaceScope,
+	DEFAULT_WORKSPACE_SCOPE,
+	MAX_ANCESTOR_QUERIES,
+	parseWorkspaceScope,
+	normalizeWorkspaceDir,
+	workspaceMarker,
+	filterL1ByWorkspace,
+	workspaceCandidateTags,
+} from './agentMemoryWorkspace';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -56,6 +66,20 @@ export interface MemoryConfig {
 	recall: boolean;
 	/** Auto-capture the task conversation (L0) when a task finishes. Default true. */
 	capture: boolean;
+	/**
+	 * Absolute workspace directory used to tag and scope L1 (atomic) memories.
+	 * Defaults to the process working directory. L1 recalled from the hub only
+	 * when its tag is this directory (or an ancestor/descendant of it).
+	 */
+	workspaceDir: string;
+	/**
+	 * L1 workspace scoping mode (see agentMemoryWorkspace.ts):
+	 *   strict (default) — untagged L1 hidden, tagged L1 must match the workspace
+	 *   loose            — tagged L1 must match, untagged L1 stays visible
+	 *   off              — no workspace filtering (legacy behaviour)
+	 * L2/L3 are never scoped.
+	 */
+	workspaceScope: WorkspaceScope;
 }
 
 export interface MemorySectionConfig {
@@ -71,6 +95,8 @@ export interface MemorySectionConfig {
 	session_id?: string;
 	recall?: boolean;
 	capture?: boolean;
+	workspace_dir?: string;
+	workspace_scope?: string;
 }
 
 interface McpJsonFile {
@@ -115,6 +141,8 @@ function loadMcpMemoryEntry(): MemorySectionConfig | undefined {
 				agent_id: entry.agentId as string | undefined,
 				user_id: entry.userId as string | undefined,
 				session_id: entry.sessionId as string | undefined,
+				workspace_dir: entry.workspaceDir as string | undefined,
+				workspace_scope: entry.workspaceScope as string | undefined,
 			};
 		} catch {
 			// ignore malformed mcp.json — fall through to config.yaml
@@ -208,6 +236,8 @@ export function loadMemoryConfig(): MemoryConfig | undefined {
 		sessionId: yamlSection?.session_id || mcpEntry?.session_id || '',
 		recall: yamlSection?.recall ?? true,
 		capture: yamlSection?.capture ?? true,
+		workspaceDir: normalizeWorkspaceDir(yamlSection?.workspace_dir || mcpEntry?.workspace_dir || ''),
+		workspaceScope: parseWorkspaceScope(yamlSection?.workspace_scope ?? mcpEntry?.workspace_scope),
 	};
 }
 
@@ -240,9 +270,35 @@ export interface IMemoryIntegration {
 export class MemoryClient implements IMemoryIntegration {
 	readonly enabled = true;
 	readonly config: MemoryConfig;
+	/** Explicit workspace override (host-provided); falls back to config / cwd. */
+	private readonly _workspaceOverride?: string;
 
-	constructor(config: MemoryConfig) {
+	constructor(config: MemoryConfig, opts?: { workspaceDir?: string }) {
 		this.config = config;
+		this._workspaceOverride = opts?.workspaceDir;
+	}
+
+	/**
+	 * Absolute directory that identifies "this workspace" for L1 tagging/scoping.
+	 * Resolution order: constructor override → config `workspace_dir` → process.cwd().
+	 */
+	get workspaceDir(): string {
+		const explicit = normalizeWorkspaceDir(this._workspaceOverride || this.config.workspaceDir);
+		if (explicit) return explicit;
+		try {
+			return normalizeWorkspaceDir(process.cwd());
+		} catch {
+			return '';
+		}
+	}
+
+	/** The tag written onto L1 notes; '' when scoping is disabled. */
+	get workspaceTag(): string {
+		return this.config.workspaceScope === 'off' ? '' : this.workspaceDir;
+	}
+
+	get workspaceScope(): WorkspaceScope {
+		return this.config.workspaceScope;
 	}
 
 	private get _sessionId(): string | undefined {
@@ -310,12 +366,13 @@ export class MemoryClient implements IMemoryIntegration {
 
 	// ---- L0 conversation ----
 
-	async addConversation(messages: ConversationMessage[], sessionId?: string): Promise<boolean> {
+	async addConversation(messages: ConversationMessage[], sessionId?: string, taskId?: string): Promise<boolean> {
 		const sid = sessionId || this._sessionId || this._defaultSession();
 		const data = await this._post('/v3/conversation/add', {
 			...this._iso(sid),
 			session_id: sid,
 			messages,
+			...(taskId ? { task_id: taskId } : {}),
 		});
 		return data !== null;
 	}
@@ -340,22 +397,69 @@ export class MemoryClient implements IMemoryIntegration {
 
 	// ---- L1 atomic ----
 
-	async searchAtomic(query: string, limit = 5, type?: string): Promise<Array<Record<string, unknown>>> {
+	/**
+	 * Raw L1 search against the hub.
+	 *
+	 * `taskId` is a first-class server-side filter (verified against the v3 data
+	 * plane); this client stores the workspace directory there, so passing it
+	 * restricts the search to notes tagged with exactly that directory.
+	 */
+	async searchAtomic(query: string, limit = 5, type?: string, taskId?: string): Promise<Array<Record<string, unknown>>> {
 		const data = await this._post<{ items?: Array<Record<string, unknown>> }>('/v3/atomic/search', {
 			...this._iso(null),
 			query,
 			limit,
 			...(type ? { type } : {}),
+			...(taskId ? { task_id: taskId } : {}),
 		});
 		return data?.items ?? [];
 	}
 
-	async updateAtomic(id: string, content: string, background?: string, sessionId?: string | null): Promise<boolean> {
+	/**
+	 * Workspace-scoped L1 search: the only L1 entry point used for recall.
+	 *
+	 * Candidates = an over-fetched unfiltered search (which is what surfaces
+	 * descendants-of-cwd notes and untagged legacy notes) UNION one exact-tag query per
+	 * candidate tag (cwd + ancestors), so a workspace with few notes is still found even
+	 * when the global top-N is crowded by other projects. Everything is then gated by the
+	 * workspace rule before the caller sees it.
+	 */
+	async searchL1Scoped(query: string, limit = 5, type?: string): Promise<{ items: Array<Record<string, unknown>>; hidden: number }> {
+		const scope = this.config.workspaceScope;
+		const ws = this.workspaceDir;
+		if (scope === 'off' || !ws || limit <= 0) {
+			return { items: await this.searchAtomic(query, limit, type), hidden: 0 };
+		}
+
+		const overfetch = Math.max(limit, limit * 5);
+		const primary = await this.searchAtomic(query, overfetch, type);
+		const ancestorTags = workspaceCandidateTags(ws);
+		const extra = await Promise.all(
+			ancestorTags.map(tag => this.searchAtomic(query, limit, type, tag).catch(() => [] as Array<Record<string, unknown>>)),
+		);
+
+		const seen = new Set<string>();
+		const merged: Array<Record<string, unknown>> = [];
+		for (const item of [primary, ...extra].flat()) {
+			const id = typeof item.id === 'string' ? item.id : '';
+			const key = id || `anon:${merged.length}:${String(item.content ?? '').slice(0, 48)}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			merged.push(item);
+		}
+
+		const visible = filterL1ByWorkspace(merged, ws, scope);
+		visible.sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0));
+		return { items: visible.slice(0, limit), hidden: merged.length - visible.length };
+	}
+
+	async updateAtomic(id: string, content: string, background?: string, taskId?: string): Promise<boolean> {
 		const data = await this._post('/v3/atomic/update', {
-			...this._iso(sessionId === undefined ? null : sessionId),
+			...this._iso(null),
 			id,
 			content,
 			...(background ? { background } : {}),
+			...(taskId ? { task_id: taskId } : {}),
 		});
 		return data !== null;
 	}
@@ -406,16 +510,22 @@ export class MemoryClient implements IMemoryIntegration {
 	// ---- IMemoryIntegration (AgentLoop hooks) ----
 
 	/**
-	 * Recall relevant memories for the task: L1 atomic search + L2 scenario
-	 * index + L3 persona. All three run independently; a failure in one never
-	 * blocks the others. Returns a formatted context block or undefined.
+	 * Recall relevant memories for the task: L1 atomic search (workspace-scoped)
+	 * + L2 scenario index + L3 persona. All three run independently; a failure in
+	 * one never blocks the others. Returns a formatted context block or undefined.
+	 *
+	 * L2/L3 are intentionally cross-project; only L1 is scoped to the workspace
+	 * directory (same dir, or an ancestor/descendant of it).
 	 */
 	async recall(task: string): Promise<string | undefined> {
 		const sections: string[] = [];
 
-		// L1 — relevant facts
+		// L1 — relevant facts (workspace-scoped)
 		try {
-			const atoms = await this.searchAtomic(task, 5);
+			const { items: atoms, hidden } = await this.searchL1Scoped(task, 5);
+			if (hidden > 0) {
+				console.log(`[memory] L1 workspace scope (${this.config.workspaceScope}) [${this.workspaceDir}]: hid ${hidden} memory(ies) tagged to other workspaces`);
+			}
 			const lines = atoms
 				.filter(a => typeof a.content === 'string' && a.content.trim())
 				.map(a => {
@@ -463,20 +573,28 @@ export class MemoryClient implements IMemoryIntegration {
 	 * Capture the finished task exchange into L0. The memory hub's offload
 	 * pipeline later distills L0 → L1 → L2 → L3, so raw turns are the right
 	 * input here. Fail-open: never throws into the main agent flow.
+	 *
+	 * The workspace directory is stamped on the turn twice: as the hub's
+	 * `task_id` field (filterable server-side) and as a `[workspace:<dir>]`
+	 * marker inside the user text, so the distilled L1 stays attributable to
+	 * this workspace even if the pipeline only keeps the text.
 	 */
 	async capture(task: string, assistantContent: string): Promise<void> {
 		try {
+			const tag = this.workspaceTag;
+			const marker = tag ? workspaceMarker(tag) : '';
 			const messages: ConversationMessage[] = [];
 			if (task && task.trim()) {
-				messages.push({ role: 'user', content: task.slice(0, 8000) });
+				const body = task.slice(0, 8000);
+				messages.push({ role: 'user', content: marker ? `${marker}\n${body}` : body });
 			}
 			if (assistantContent && assistantContent.trim()) {
 				messages.push({ role: 'assistant', content: assistantContent.slice(0, 8000) });
 			}
 			if (messages.length === 0) return;
-			const ok = await this.addConversation(messages);
+			const ok = await this.addConversation(messages, undefined, tag || undefined);
 			if (ok) {
-				console.log(`[memory] L0 captured: ${messages.length} message(s) -> ${this.config.username || this.config.userId}`);
+				console.log(`[memory] L0 captured: ${messages.length} message(s) -> ${this.config.username || this.config.userId}${tag ? ` [workspace ${tag}]` : ''}`);
 			}
 		} catch (err) {
 			console.warn(`[memory] capture failed (non-fatal): ${(err as Error).message}`);
@@ -494,10 +612,10 @@ export abstract class MemoryTool extends AgentTool {
 	}
 }
 
-/** tdai_memory_search — L1 atomic (structured facts/preferences) search. */
+/** tdai_memory_search — L1 atomic (structured facts/preferences) search, workspace-scoped. */
 export class MemorySearchTool extends MemoryTool {
 	readonly name = 'tdai_memory_search';
-	readonly description = 'Search shared agent memory (L1 atomic facts: user preferences, rules, past decisions, project conventions) on the tdai_agent_mem hub. Use when you need knowledge stored by previous agent runs on any machine.';
+	readonly description = 'Search shared agent memory (L1 atomic facts: user preferences, rules, past decisions, project conventions) on the tdai_agent_mem hub. Use when you need knowledge stored by previous agent runs on any machine. L1 is scoped to the current workspace directory: only memories tagged with this directory (or one of its parents/children) are returned.';
 	readonly parameters = {
 		type: 'object',
 		properties: {
@@ -511,15 +629,20 @@ export class MemorySearchTool extends MemoryTool {
 		const toolCallId = (args._toolCallId as string) || '';
 		if (signal?.aborted) return this.failure(toolCallId, 'Tool execution cancelled by user');
 		try {
-			const items = await this._client.searchAtomic(String(args.query || ''), (args.limit as number) || 5);
-			if (items.length === 0) return this.success(toolCallId, '(no matching memories found)');
+			const { items, hidden } = await this._client.searchL1Scoped(String(args.query || ''), (args.limit as number) || 5);
+			const scopeNote = hidden > 0
+				? `\n\n(workspace scope \`${this._client.workspaceScope}\` on \`${this._client.workspaceDir}\`: ${hidden} memory(ies) tagged to other workspaces were withheld)`
+				: '';
+			if (items.length === 0) {
+				return this.success(toolCallId, `(no matching memories found in this workspace)${scopeNote}`);
+			}
 			const out = items.map((it, i) => {
 				const id = it.id ? `\nid: ${it.id}` : '';
 				const type = it.type ? `\ntype: ${it.type}` : '';
 				const background = it.background ?? it.scene_name ? `\nbackground: ${String(it.background ?? it.scene_name)}` : '';
 				return `[${i + 1}]${type}${id}\n${String(it.content)}${background}`;
 			}).join('\n\n');
-			return this.success(toolCallId, out);
+			return this.success(toolCallId, out + scopeNote);
 		} catch (err) {
 			return this.failure(toolCallId, `memory_search failed: ${(err as Error).message}`);
 		}
@@ -590,7 +713,7 @@ export class MemoryReadTool extends MemoryTool {
 /** tdai_memory_write — write L1/L2/L3 according to the memory tier. */
 export class MemoryWriteTool extends MemoryTool {
 	readonly name = 'tdai_memory_write';
-	readonly description = 'Write knowledge to the tdai_agent_mem hub at a specific memory tier: l1 = atomic fact (needs an existing note id), l2 = scenario file (updates an existing path), l3 = user persona (core). L0 conversations are captured automatically after each task.';
+	readonly description = 'Write knowledge to the tdai_agent_mem hub at a specific memory tier: l1 = atomic fact (needs an existing note id), l2 = scenario file (updates an existing path), l3 = user persona (core). L0 conversations are captured automatically after each task. L1 notes written here are tagged with the current workspace directory so they are only recalled in that workspace (or its parent/child directories).';
 	readonly parameters = {
 		type: 'object',
 		properties: {
@@ -623,8 +746,17 @@ export class MemoryWriteTool extends MemoryTool {
 			if (layer === 'l1') {
 				const id = String(args.id || '');
 				if (!id) return this.failure(toolCallId, 'layer=l1 requires "id" of an existing atomic note');
-				const ok = await this._client.updateAtomic(id, content, args.background ? String(args.background) : undefined);
-				return ok ? this.success(toolCallId, `L1 atomic note updated: ${id}`) : this.failure(toolCallId, 'update failed (note must already exist)');
+				// Tag the note with this workspace: `task_id` is the authoritative,
+				// server-filterable carrier; the marker in `background` keeps the tag
+				// readable even if the hub rewrites task_id.
+				const tag = this._client.workspaceTag;
+				const marker = tag ? workspaceMarker(tag) : '';
+				const bg = args.background ? String(args.background) : '';
+				const background = marker ? `${bg ? `${bg} ` : ''}${marker}` : (bg || undefined);
+				const ok = await this._client.updateAtomic(id, content, background, tag || undefined);
+				return ok
+					? this.success(toolCallId, `L1 atomic note updated: ${id}${tag ? ` (workspace ${tag})` : ''}`)
+					: this.failure(toolCallId, 'update failed (note must already exist)');
 			}
 			return this.failure(toolCallId, `Unknown layer: ${layer} (use l1 | l2 | l3)`);
 		} catch (err) {

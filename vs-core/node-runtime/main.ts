@@ -797,7 +797,9 @@ async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 
 	const memoryConfig = memoryOverride === 'off' ? undefined : loadMemoryConfig();
 	let memoryClient: MemoryClient | undefined;
 	if (memoryConfig) {
-		memoryClient = new MemoryClient(memoryConfig);
+		// The workspace directory is what L1 memories are tagged with / scoped by.
+		// In the CLI the workspace IS the working directory the agent was launched in.
+		memoryClient = new MemoryClient(memoryConfig, { workspaceDir: process.cwd() });
 		toolRegistry.register(new MemorySearchTool(memoryClient));
 		toolRegistry.register(new ConversationSearchTool(memoryClient));
 		toolRegistry.register(new MemoryReadTool(memoryClient));
@@ -805,6 +807,7 @@ async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 
 		const who = memoryConfig.username || memoryConfig.userId;
 		console.log(`${C.green}[MEMORY]${C.reset} Shared memory enabled (tdai_agent_mem): user=${who || '?'} endpoint=${memoryConfig.endpoint} service=${memoryConfig.serviceId}`);
 		console.log(`${C.dim}  Tools: tdai_memory_search / tdai_conversation_search / tdai_read_file / tdai_memory_write${C.reset}`);
+		console.log(`${C.dim}  L1 workspace scope: ${memoryClient.workspaceScope} @ ${memoryClient.workspaceDir || '(unknown)'}${C.reset}`);
 		if (memoryConfig.recall) console.log(`${C.dim}  Auto-recall: on | Auto-capture L0: ${memoryConfig.capture ? 'on' : 'off'}${C.reset}`);
 	}
 
