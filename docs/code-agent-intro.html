@@ -596,7 +596,7 @@ body.presMode .pres-on::-webkit-scrollbar-thumb{background:rgba(148,163,184,.35)
       <div class="b-card reveal d2">
         <div class="ico">🧠</div>
         <h3>共享记忆 (tdai_agent_mem)</h3>
-        <p>跨机器 / 跨 Agent 共享 L0 对话 → L1 原子事实 → L2 场景 → L3 人格；<b>L1 按工作区目录隔离</b>（同目录或父子目录才互相召回，兄弟目录不互相召回），记忆服务不可用时自动降级（fail-open）。</p>
+        <p>跨机器 / 跨 Agent 共享 L0 对话 → L1 原子事实 → L2 场景 → L3 人格；<b>L0 与 L1 按工作区目录隔离</b>（同目录或父子目录才互相召回，兄弟目录不互相召回），L2/L3 跨项目，记忆服务不可用时自动降级（fail-open）。</p>
         <span class="tag">agentMemory.ts · agentMemoryWorkspace.ts</span>
       </div>
       <div class="b-card reveal">
@@ -951,7 +951,7 @@ trigger:
         <div class="kv"><span>agent</span><b>max_steps / 上下文 / 超时 / temperature</b></div>
         <div class="kv"><span>skills / rules</span><b>扫描目录列表</b></div>
         <div class="kv"><span>mcp_servers</span><b>stdio / streamableHttp 扩展工具</b></div>
-        <div class="kv"><span>memory</span><b>tdai_agent_mem 端点与身份 + L1 工作区隔离</b></div>
+        <div class="kv"><span>memory</span><b>tdai_agent_mem 端点与身份 + L0/L1 工作区隔离</b></div>
         <p class="bm-note" style="margin-top:10px">models.json 里每个模型声明 <b>supportsToolCall / Images / Reasoning、thinking.type、maxTokens、maxInputTokens</b> —— 路由与 max_tokens 钳制都依赖这些能力位。</p>
       </div>
     </div>

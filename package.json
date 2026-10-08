@@ -1,6 +1,6 @@
 {
   "name": "@zhouronghua/code-agent",
-  "version": "0.3.48",
+  "version": "0.3.49",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
@@ -78,6 +78,6 @@
     "@langfuse/tracing": "^5.11.1",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/sdk-trace-node": "^2.11.0",
-    "@zhouronghua/code-agent": "file:zhouronghua-code-agent-0.3.47.tgz"
+    "@zhouronghua/code-agent": "file:zhouronghua-code-agent-0.3.48.tgz"
   }
 }

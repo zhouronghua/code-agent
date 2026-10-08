@@ -57,6 +57,17 @@ await esbuild.build({
 	const sizeKB = (stat.size / 1024).toFixed(1);
 	console.log(`\nOutput: ${outPath} (${sizeKB} KB)`);
 
+	// Guard against the "stale version" failure mode: `code-agent --version`
+	// must report the version in package.json, otherwise an artifact built from
+	// (or shipped with) a stale bundle would keep advertising an old number.
+	const bundle = fs.readFileSync(outPath, 'utf-8');
+	if (!bundle.includes(JSON.stringify(pkg.version)) && !bundle.includes(pkg.version)) {
+		console.error(`\nERROR: ${outPath} does not contain the package version ${pkg.version}.`);
+		console.error('The __AGENT_VERSION__ define is missing or the build is stale.');
+		process.exit(1);
+	}
+	console.log(`Version check: ${outPath} reports ${pkg.version} ✓`);
+
 	const templateSrc = 'config.template.yaml';
 	const templateDst = path.join(outDir, 'config.template.yaml');
 	if (fs.existsSync(templateSrc)) {

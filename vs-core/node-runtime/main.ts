@@ -585,6 +585,11 @@ const AGENT_VERSION = __AGENT_VERSION__;
 
 function printVersion() {
 	console.log(`code-agent v${AGENT_VERSION}`);
+	// Print WHERE this copy lives. A stale install earlier on PATH is the usual
+	// reason `code-agent --version` keeps reporting an old number after
+	// `npm install <tgz>`: this line shows which file actually ran.
+	console.log(`path: ${__filename}`);
+	console.log(`node: ${process.version} (${process.platform}-${process.arch})`);
 }
 
 function printHelp() {

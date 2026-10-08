@@ -1,12 +1,13 @@
 /*---------------------------------------------------------------------------------------------
- *  Unit tests: workspace scoping of shared L1 (atomic) memories.
+ *  Unit tests: workspace scoping of shared memories (L0 turns + L1 atoms).
  *
  *  Covers the rule requested for tdai_agent_mem:
- *    - L1 is tagged with the workspace directory (hub `task_id` + `[workspace:<dir>]` marker),
- *    - L1 is recalled only when the tag equals the current workspace dir or is an
+ *    - memories are tagged with the workspace directory (hub `task_id` + `[workspace:<dir>]` marker),
+ *    - they are recalled only when the tag equals the current workspace dir or is an
  *      ancestor/descendant of it (parent/child recall each other),
- *    - sibling workspaces never see each other's L1,
- *    - L2/L3 stay unscoped.
+ *    - sibling workspaces never see each other's memories,
+ *    - L2/L3 stay unscoped, and L0 is scoped exactly like L1,
+ *    - auto-recall still never injects L0 (tool-only tier).
  *
  *  Run:
  *    npx esbuild tests/memory-workspace.test.ts --bundle --platform=node --target=node18 \
@@ -22,13 +23,14 @@ import {
 	MemoryClient,
 	MemoryConfig,
 	MemorySearchTool,
+	ConversationSearchTool,
 	MemoryWriteTool,
 } from 'vs/workbench/contrib/agent/common/agentMemory';
 import {
 	workspaceRelation,
 	isSubDir,
-	isL1Visible,
-	filterL1ByWorkspace,
+	isWorkspaceVisible,
+	filterByWorkspace,
 	normalizeWorkspaceDir,
 	extractWorkspaceFromText,
 	workspaceTagOfItem,
@@ -64,8 +66,11 @@ function testNormalize(): void {
 
 	eq(workspaceMarker('/work/a'), '[workspace:/work/a]', 'marker rendering');
 	eq(workspaceMarker(''), '', 'no marker without a directory');
-	eq(extractWorkspaceFromText('noise [workspace:/work/a] more'), '/work/a', 'marker parsed from text');
+	eq(extractWorkspaceFromText('noise\n[workspace:/work/a]\nmore'), '/work/a', 'marker parsed from a line start');
 	eq(extractWorkspaceFromText('nothing here'), undefined, 'no marker -> undefined');
+	eq(extractWorkspaceFromText('prose about [workspace:/work/a] inline'), undefined,
+		'an inline marker mention is NOT a tag (documentation must not spoof it)');
+	eq(extractWorkspaceFromText('```\n[workspace:/work/a]\n```'), '/work/a', 'a marker on its own line counts');
 
 	eq(parseWorkspaceScope(undefined), 'strict', 'default scope is strict');
 	eq(parseWorkspaceScope('LOOSE'), 'loose', 'scope parsing is case-insensitive');
@@ -96,21 +101,25 @@ function testVisibility(): void {
 	const cur = '/w/p';
 	const note = (extra: Record<string, unknown>) => ({ id: 'x', type: 'instruction', content: 'c', ...extra });
 
-	ok(isL1Visible(note({ task_id: '/w/p' }), cur, 'strict'), 'strict: same dir visible');
-	ok(isL1Visible(note({ task_id: '/w' }), cur, 'strict'), 'strict: ancestor visible');
-	ok(isL1Visible(note({ task_id: '/w/p/sub' }), cur, 'strict'), 'strict: descendant visible');
-	ok(!isL1Visible(note({ task_id: '/w/q' }), cur, 'strict'), 'strict: sibling hidden');
-	ok(!isL1Visible(note({ task_id: '/w/q/sub' }), cur, 'strict'), 'strict: sibling subtree hidden');
-	ok(!isL1Visible(note({}), cur, 'strict'), 'strict: untagged hidden');
-	ok(isL1Visible(note({}), cur, 'loose'), 'loose: untagged visible');
-	ok(!isL1Visible(note({ task_id: '/w/q' }), cur, 'loose'), 'loose: sibling still hidden');
-	ok(isL1Visible(note({ task_id: '/w/q' }), cur, 'off'), 'off: no filtering');
+	ok(isWorkspaceVisible(note({ task_id: '/w/p' }), cur, 'strict'), 'strict: same dir visible');
+	ok(isWorkspaceVisible(note({ task_id: '/w' }), cur, 'strict'), 'strict: ancestor visible');
+	ok(isWorkspaceVisible(note({ task_id: '/w/p/sub' }), cur, 'strict'), 'strict: descendant visible');
+	ok(!isWorkspaceVisible(note({ task_id: '/w/q' }), cur, 'strict'), 'strict: sibling hidden');
+	ok(!isWorkspaceVisible(note({ task_id: '/w/q/sub' }), cur, 'strict'), 'strict: sibling subtree hidden');
+	ok(!isWorkspaceVisible(note({}), cur, 'strict'), 'strict: untagged hidden');
+	ok(isWorkspaceVisible(note({}), cur, 'loose'), 'loose: untagged visible');
+	ok(!isWorkspaceVisible(note({ task_id: '/w/q' }), cur, 'loose'), 'loose: sibling still hidden');
+	ok(isWorkspaceVisible(note({ task_id: '/w/q' }), cur, 'off'), 'off: no filtering');
 
-	ok(isL1Visible(note({ content: 'fact [workspace:/w/p]' }), cur, 'strict'), 'strict: content marker accepted');
-	ok(isL1Visible(note({ background: 'ctx [workspace:/w]' }), cur, 'strict'), 'strict: background marker accepted');
-	ok(!isL1Visible(note({ task_id: 'TSK-123', content: 'no marker' }), cur, 'strict'),
+	ok(isWorkspaceVisible(note({ content: '[workspace:/w/p]\nfact' }), cur, 'strict'), 'strict: leading content marker accepted');
+	ok(!isWorkspaceVisible(note({ content: 'fact mentions [workspace:/w/p] inline' }), cur, 'strict'),
+		'strict: an inline marker mention is not a tag');
+	ok(isWorkspaceVisible(note({ background: 'ctx\n[workspace:/w]' }), cur, 'strict'), 'strict: background marker line accepted');
+	ok(isWorkspaceVisible(note({ task_id: '/w/p', role: 'user', content: 'a turn' }), cur, 'strict'),
+		'the same gate applies to L0 turns (role/timestamp fields)');
+	ok(!isWorkspaceVisible(note({ task_id: 'TSK-123', content: 'no marker' }), cur, 'strict'),
 		'strict: a non-path task_id is not a workspace tag');
-	ok(isL1Visible(note({ task_id: 'TSK-123', background: '[workspace:/w/p]' }), cur, 'strict'),
+	ok(isWorkspaceVisible(note({ task_id: 'TSK-123', background: '[workspace:/w/p]\nctx' }), cur, 'strict'),
 		'non-path task_id falls through to the marker');
 
 	eq(workspaceTagOfItem({ task_id: '/w/p/' }), '/w/p', 'tag read from task_id, normalised');
@@ -122,7 +131,7 @@ function testVisibility(): void {
 		{ id: 'b', task_id: '/w/q' },
 		{ id: 'c', task_id: '/w' },
 	];
-	eq(filterL1ByWorkspace(batch, cur, 'strict').map(b => b.id).join(','), 'a,c', 'batch filter keeps same+ancestor');
+	eq(filterByWorkspace(batch, cur, 'strict').map(b => b.id).join(','), 'a,c', 'batch filter keeps same+ancestor');
 }
 
 // ---------------------------------------------------------------------------
@@ -138,16 +147,27 @@ interface FakeNote {
 	score?: number;
 }
 
+interface FakeTurn {
+	id: string;
+	content: string;
+	role?: string;
+	task_id?: string;
+	timestamp?: string;
+	score?: number;
+}
+
 interface FakeRequest { path: string; body: Record<string, unknown> }
 
 class FakeHub {
 	readonly notes: FakeNote[];
+	readonly turns: FakeTurn[];
 	readonly requests: FakeRequest[] = [];
 	private _server?: http.Server;
 	port = 0;
 
-	constructor(notes: FakeNote[]) {
+	constructor(notes: FakeNote[], turns: FakeTurn[] = []) {
 		this.notes = notes;
+		this.turns = turns;
 	}
 
 	async start(): Promise<void> {
@@ -164,6 +184,7 @@ class FakeHub {
 					res.writeHead(status, { 'Content-Type': 'application/json' });
 					res.end(json);
 				};
+				const limitOf = () => (typeof body.limit === 'number' ? body.limit : 5);
 				switch (pathname) {
 					case '/v3/atomic/search': {
 						const q = String(body.query ?? '').toLowerCase();
@@ -173,8 +194,20 @@ class FakeHub {
 							const want = body.task_id;
 							items = items.filter(n => (n.task_id ?? '') === want);
 						}
-						const limit = typeof body.limit === 'number' ? body.limit : 5;
-						return send({ code: 0, message: 'ok', data: { items: items.slice(0, limit) } });
+						return send({ code: 0, message: 'ok', data: { items: items.slice(0, limitOf()) } });
+					}
+					case '/v3/conversation/search': {
+						const q = String(body.query ?? '').toLowerCase();
+						let turns = this.turns.filter(t =>
+							q === '' || q.split(/\s+/).some(tok => t.content.toLowerCase().includes(tok)));
+						if (typeof body.task_id === 'string') {
+							const want = body.task_id;
+							turns = turns.filter(t => (t.task_id ?? '') === want);
+						}
+						// The real v3 data plane answers this endpoint with `messages`
+						// and does NOT echo task_id back — mimic both.
+						const messages = turns.slice(0, limitOf()).map(({ task_id, ...rest }) => rest);
+						return send({ code: 0, message: 'ok', data: { messages } });
 					}
 					case '/v3/atomic/update':
 						return send({ code: 0, message: 'ok', data: { ok: true } });
@@ -199,6 +232,10 @@ class FakeHub {
 
 	searches(): FakeRequest[] {
 		return this.requests.filter(r => r.path === '/v3/atomic/search');
+	}
+
+	turnSearches(): FakeRequest[] {
+		return this.requests.filter(r => r.path === '/v3/conversation/search');
 	}
 }
 
@@ -233,6 +270,24 @@ function scopedNotes(): FakeNote[] {
 		{ id: 'sibling', content: 'alpha sibling workspace', task_id: OTHER, score: 0.6 },
 		{ id: 'legacy', content: 'alpha untagged legacy note', score: 0.5 },
 		{ id: 'siblingchild', content: 'alpha sibling child note', task_id: path.join(OTHER, 'sub'), score: 0.4 },
+	];
+}
+
+function scopedTurns(): FakeTurn[] {
+	// Captured turns always carry a marker line (that is what capture() writes);
+	// t-reply deliberately does not, exercising the "stamped by the tag query"
+	// path that saves turns whose text the hub may have rewritten.
+	const marker = (dir: string) => `[workspace:${dir}]\n`;
+	return [
+		{ id: 't-same', content: marker(WS) + 'alpha turn same workspace', role: 'user', task_id: WS, score: 0.9, timestamp: '2026-10-01T10:00:00Z' },
+		{ id: 't-parent', content: marker(path.resolve('/work')) + 'alpha turn parent workspace', role: 'assistant', task_id: path.resolve('/work'), score: 0.8, timestamp: '2026-10-01T09:00:00Z' },
+		{ id: 't-child', content: marker(path.join(WS, 'sub')) + 'alpha turn child workspace', role: 'user', task_id: path.join(WS, 'sub'), score: 0.7, timestamp: '2026-10-01T08:00:00Z' },
+		{ id: 't-sibling', content: marker(OTHER) + 'alpha turn sibling workspace', role: 'user', task_id: OTHER, score: 0.6, timestamp: '2026-10-01T07:00:00Z' },
+		{ id: 't-legacy', content: 'alpha turn untagged legacy', role: 'user', score: 0.5, timestamp: '2026-10-01T06:00:00Z' },
+		{ id: 't-marked', content: marker(WS) + 'alpha turn tagged by text marker only', role: 'user', score: 0.4, timestamp: '2026-10-01T05:00:00Z' },
+		{ id: 't-reply', content: 'alpha assistant reply with no marker at all', role: 'assistant', task_id: WS, score: 0.3, timestamp: '2026-10-01T04:00:00Z' },
+		// Prose that merely mentions the marker syntax must not count as a tag.
+		{ id: 't-mention', content: 'alpha prose about [workspace:' + WS + '] inline', role: 'assistant', score: 0.2, timestamp: '2026-10-01T03:00:00Z' },
 	];
 }
 
@@ -341,6 +396,10 @@ async function testCaptureTagging(): Promise<void> {
 		ok(messages[0].content.startsWith(workspaceMarker(WS)), 'user turn starts with the [workspace:...] marker');
 		ok(messages[0].content.includes('do the thing'), 'the original task text is preserved');
 		eq(messages[1].role, 'assistant', 'assistant turn captured too');
+		// The hub does not echo task_id on /v3/conversation/search, so the marker
+		// line is what keeps assistant turns attributable to this workspace.
+		ok(messages[1].content.startsWith(workspaceMarker(WS)), 'assistant turn carries the marker as well');
+		ok(messages[1].content.includes('done'), 'the original answer text is preserved');
 
 		// Scope off -> no tag anywhere.
 		const clean = new MemoryClient(makeConfig(hub.port, { workspaceScope: 'off' }), { workspaceDir: WS });
@@ -354,9 +413,66 @@ async function testCaptureTagging(): Promise<void> {
 	}
 }
 
+async function testL0Scoping(): Promise<void> {
+	console.log('\n[6] MemoryClient.searchL0Scoped — L0 turns use the same rule');
+
+	// --- strict ---
+	let hub = new FakeHub(scopedNotes(), scopedTurns());
+	await hub.start();
+	try {
+		const client = new MemoryClient(makeConfig(hub.port, { workspaceScope: 'strict' }), { workspaceDir: WS });
+		const { items, hidden } = await client.searchL0Scoped('alpha', 10);
+		const ids = items.map(i => i.id);
+		eq(ids.join(','), 't-same,t-parent,t-child,t-marked,t-reply',
+			'strict: same+parent+child (stamped by the tag query) + marker + marker-less reply');
+		ok(!ids.includes('t-sibling'), 'strict: sibling conversation hidden');
+		ok(!ids.includes('t-legacy'), 'strict: untagged legacy conversation hidden');
+		ok(!ids.includes('t-mention'), 'strict: prose mentioning the marker syntax is hidden');
+		eq(hidden, 3, 'strict: three turns withheld');
+
+		// /v3/conversation/search omits task_id, so the tag-filtered results must be
+		// stamped with the tag the hub filtered on - otherwise an assistant reply
+		// (which never carries a marker) would be withheld in its own workspace.
+		eq(items.find(i => i.id === 't-reply')?.task_id, WS, 'a tag-filtered turn is stamped with its tag');
+
+		const tagsQueried = hub.turnSearches().map(r => r.body.task_id).filter(t => typeof t === 'string');
+		ok(tagsQueried.includes(WS), 'L0: exact-tag query issued for the current dir');
+		ok(tagsQueried.includes(path.resolve('/work')), 'L0: ancestor-tag query issued');
+		ok(hub.turnSearches().some(r => r.body.task_id === undefined), 'L0: unfiltered over-fetch issued');
+	} finally {
+		await hub.stop();
+	}
+
+	// --- loose ---
+	hub = new FakeHub(scopedNotes(), scopedTurns());
+	await hub.start();
+	try {
+		const client = new MemoryClient(makeConfig(hub.port, { workspaceScope: 'loose' }), { workspaceDir: WS });
+		const { items, hidden } = await client.searchL0Scoped('alpha', 10);
+		const ids = items.map(i => i.id);
+		ok(ids.includes('t-legacy') && ids.includes('t-mention'), 'loose: untagged conversations visible');
+		ok(!ids.includes('t-sibling'), 'loose: sibling conversation still hidden');
+		eq(hidden, 1, 'loose: only the sibling turn withheld');
+	} finally {
+		await hub.stop();
+	}
+
+	// --- off ---
+	hub = new FakeHub(scopedNotes(), scopedTurns());
+	await hub.start();
+	try {
+		const client = new MemoryClient(makeConfig(hub.port, { workspaceScope: 'off' }), { workspaceDir: WS });
+		const { items } = await client.searchL0Scoped('alpha', 10);
+		ok(items.map(i => i.id).includes('t-sibling'), 'off: no workspace filtering on L0 either');
+		eq(hub.turnSearches().length, 1, 'off: exactly one conversation/search request');
+	} finally {
+		await hub.stop();
+	}
+}
+
 async function testTools(): Promise<void> {
-	console.log('\n[6] tools honour the workspace scope');
-	const hub = new FakeHub(scopedNotes());
+	console.log('\n[7] tools honour the workspace scope');
+	const hub = new FakeHub(scopedNotes(), scopedTurns());
 	await hub.start();
 	try {
 		const client = new MemoryClient(makeConfig(hub.port), { workspaceDir: WS });
@@ -367,6 +483,16 @@ async function testTools(): Promise<void> {
 		ok(res.output.includes('same workspace'), 'search tool returns same-workspace memory');
 		ok(!res.output.includes('sibling workspace'), 'search tool hides sibling memory');
 		ok(/withheld/.test(res.output), 'search tool reports how many memories were withheld');
+
+		const conv = new ConversationSearchTool(client);
+		const cres = await conv.execute({ query: 'alpha', limit: 5 });
+		ok(cres.success, 'tdai_conversation_search succeeded');
+		// Regression: the hub answers with `data.messages`; reading `data.items`
+		// silently returned "(no matching conversations found)" for every query.
+		ok(cres.output.includes('turn same workspace'), 'L0 tool surfaces the hub `messages` field (regression)');
+		ok(cres.output.includes('user: '), 'L0 tool renders the message role');
+		ok(!cres.output.includes('turn sibling workspace'), 'L0 tool hides sibling-workspace conversation');
+		ok(/withheld/.test(cres.output), 'L0 tool reports how many conversations were withheld');
 
 		const write = new MemoryWriteTool(client);
 		const w = await write.execute({ layer: 'l1', id: 'note-1', content: 'fact', background: 'ctx' });
@@ -388,6 +514,7 @@ async function main(): Promise<void> {
 	testVisibility();
 	await testRecallScoping();
 	await testCaptureTagging();
+	await testL0Scoping();
 	await testTools();
 
 	console.log(`\n${failed === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED'} — ${passed} passed, ${failed} failed`);

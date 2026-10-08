@@ -3,8 +3,9 @@
  *
  * Prints, for the workspace passed on the command line (default: cwd):
  *   - the resolved scope + workspace tag,
- *   - the raw (unscoped) hub result count for a query,
- *   - what `strict` recalls (workspace-tagged only) vs `loose` (untagged kept visible).
+ *   - the raw (unscoped) L1 hub result count for a query,
+ *   - what `strict` recalls (workspace-tagged only) vs `loose` (untagged kept visible),
+ *   - the same for L0 conversation turns.
  *
  * Read-only: it never writes to the hub. Run:
  *   npx esbuild tests/live-memory-scope-check.ts --bundle --platform=node --target=node18 \
@@ -32,8 +33,13 @@ for (const scope of ['strict', 'loose', 'off'] as const) {
 	const rawCount = (await client.searchAtomic(query, 10)).length;
 	const { items, hidden } = await client.searchL1Scoped(query, 5);
 	console.log(`--- scope=${scope} (tag ${client.workspaceTag || '(none)'}) ---`);
-	console.log(`   raw hub hits: ${rawCount} | recalled: ${items.length} | withheld: ${hidden}`);
+	console.log(`   L1  raw hub hits: ${rawCount} | recalled: ${items.length} | withheld: ${hidden}`);
 	for (const it of items) {
 		console.log(`   * [${String(it.id)}] task_id=${JSON.stringify(it.task_id ?? '')} ${String(it.content).slice(0, 60).replace(/\n/g, ' ')}`);
+	}
+	const l0 = await client.searchL0Scoped(query, 5);
+	console.log(`   L0  recalled: ${l0.items.length} | withheld: ${l0.hidden}`);
+	for (const it of l0.items) {
+		console.log(`   * [${String(it.id)}] task_id=${JSON.stringify(it.task_id ?? '')} ${String(it.role ?? '')}: ${String(it.content).slice(0, 50).replace(/\n/g, ' ')}`);
 	}
 }

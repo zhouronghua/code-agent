@@ -176,13 +176,14 @@ rules:
 #   - registers tdai_memory_search / tdai_conversation_search / tdai_read_file /
 #     tdai_memory_write tools so the LLM can query/write memory directly.
 #
-# L1 workspace scoping: L1 (atomic) notes are tagged with the absolute workspace
-# directory (the hub's task_id field + a `[workspace:<dir>]` marker in the text),
-# and are only recalled when that tag equals the current workspace directory or is
-# an ancestor/descendant of it (a directory and its sub-directories recall each
-# other; sibling directories never do). L2/L3 are never scoped.
-#   workspace_scope: strict  → untagged L1 hidden (default: pure isolation)
-#                    loose   → tagged L1 scoped, untagged (legacy) L1 visible
+# L0/L1 workspace scoping: L0 (raw conversation turns) and L1 (atomic) memories are
+# tagged with the absolute workspace directory (the hub's task_id field + a
+# `[workspace:<dir>]` marker in the text), and are only recalled when that tag equals
+# the current workspace directory or is an ancestor/descendant of it (a directory and
+# its sub-directories recall each other; sibling directories never do).
+# L2/L3 are never scoped; L0 is never injected automatically (tool-only tier).
+#   workspace_scope: strict  → untagged memories hidden (default: pure isolation)
+#                    loose   → tagged memories scoped, untagged (legacy) visible
 #                    off     → no workspace filtering at all
 #   workspace_dir: absolute override; defaults to the process working directory.
 #
@@ -205,5 +206,5 @@ rules:
 #   session_id: ""           # optional; omit to aggregate L0/L1 across sessions
 #   recall: true             # auto-recall before each task (default true)
 #   capture: true            # auto-capture L0 after each task (default true)
-#   workspace_scope: strict  # strict | loose | off   (L1 isolation, default strict)
+#   workspace_scope: strict  # strict | loose | off   (L0/L1 isolation, default strict)
 #   workspace_dir: ""        # optional absolute workspace dir override

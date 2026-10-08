@@ -1,42 +1,56 @@
 /*---------------------------------------------------------------------------------------------
- *  Workspace scoping for shared L1 (atomic) memories.
+ *  Workspace scoping for shared memories (L0 conversation turns + L1 atomic facts).
  *
  *  Why: the tdai_agent_mem hub is shared across machines *and* projects. A fact learnt
  *  in one repository must not leak into an unrelated one. L2 (scenario) and L3 (persona)
- *  are deliberately cross-project, so ONLY L1 is scoped here.
+ *  are deliberately cross-project, so only L0/L1 are scoped here.
  *
  *  Rule (mirrors the user requirement):
- *    - Every L1 note is tagged with the absolute workspace directory it was captured in.
- *    - L1 is recalled only when its tag equals the current workspace directory, or when
+ *    - Every L0 turn / L1 note is tagged with the absolute workspace directory it was
+ *      captured in.
+ *    - It is recalled only when its tag equals the current workspace directory, or when
  *      the two are in an ancestor/descendant relation (a directory and its sub-directories
  *      recall each other).
- *    - Sibling directories never see each other's L1.
- *    - A note with no tag at all (legacy data written before scoping existed) is hidden
+ *    - Sibling directories never see each other's memories.
+ *    - An item with no tag at all (legacy data written before scoping existed) is hidden
  *      under `strict` and kept visible under `loose`.
  *
  *  Tag carriers, in priority order (see `workspaceTagOfItem`):
  *    1. the hub's `task_id` field — a first-class, server-side filterable field
- *       (verified against /v3/atomic/search and /v3/conversation/add),
- *    2. a `[workspace:<abs dir>]` marker inside `content`,
- *    3. the same marker inside `background`.
+ *       (verified against /v3/conversation/add, /v3/conversation/search,
+ *       /v3/atomic/search and /v3/atomic/query),
+ *    2. a `[workspace:<abs dir>]` marker at the start of a line inside `content`,
+ *    3. the same marker at the start of a line inside `background`.
+ *
+ *  The marker is only a *fallback*: /v3/conversation/search does not echo `task_id`
+ *  back, so turns returned by a tag-filtered query are stamped with the tag the
+ *  server filtered on before they reach this gate (see MemoryClient._mergeScoped).
  *
  *  Pure functions only (no I/O) so the rule can be unit-tested in isolation.
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path';
 
-/** L1 recall scoping mode. */
+/** Scoping mode for tagged memories (L0 conversation turns + L1 atomic facts). */
 export type WorkspaceScope = 'strict' | 'loose' | 'off';
 
 export const WORKSPACE_SCOPES: WorkspaceScope[] = ['strict', 'loose', 'off'];
 
-/** Default mode: enforce isolation (untagged L1 is hidden). */
+/** Default mode: enforce isolation (untagged memories are hidden). */
 export const DEFAULT_WORKSPACE_SCOPE: WorkspaceScope = 'strict';
 
 /** Opening token of the in-text workspace marker: `[workspace:/abs/dir]`. */
 export const WORKSPACE_MARKER_OPEN = '[workspace:';
 
-const MARKER_RE = /\[workspace:([^\]\n\r]+)\]/;
+/**
+ * Marker: `[workspace:/abs/dir]`, recognised only at the START OF A LINE.
+ *
+ * Anchoring matters: markers are stamped as a leading line (L0 user turns) or a
+ * trailing line (L1 background), so prose that merely *mentions* the syntax —
+ * e.g. this feature's own documentation — must not be mistaken for a tag.
+ * `m` flag, so `^` matches at every line start.
+ */
+const MARKER_RE = /^\[workspace:([^\]\n\r]+)\]/m;
 
 /** Longest ancestor chain we ask the hub about (bounds the number of HTTP calls). */
 export const MAX_ANCESTOR_QUERIES = 4;
@@ -140,12 +154,12 @@ export function isWorkspaceRelated(noteTag: string | undefined | null, currentDi
 }
 
 /**
- * Gate a single L1 item.
+ * Gate a single tagged item (an L1 atom or an L0 conversation turn).
  *  - `off`    — everything is visible (legacy behaviour)
  *  - `loose`  — tagged items obey the workspace rule, untagged items stay visible
  *  - `strict` — tagged items obey the workspace rule, untagged items are hidden
  */
-export function isL1Visible(
+export function isWorkspaceVisible(
 	item: Record<string, unknown> | undefined | null,
 	currentDir: string | undefined | null,
 	scope: WorkspaceScope = DEFAULT_WORKSPACE_SCOPE,
@@ -156,14 +170,14 @@ export function isL1Visible(
 	return isWorkspaceRelated(tag, currentDir);
 }
 
-/** Filter a batch of L1 items through the workspace gate. */
-export function filterL1ByWorkspace<T extends Record<string, unknown>>(
+/** Filter a batch of tagged items (L1 atoms / L0 turns) through the workspace gate. */
+export function filterByWorkspace<T extends Record<string, unknown>>(
 	items: T[],
 	currentDir: string | undefined | null,
 	scope: WorkspaceScope = DEFAULT_WORKSPACE_SCOPE,
 ): T[] {
 	if (scope === 'off') return items;
-	return items.filter(it => isL1Visible(it, currentDir, scope));
+	return items.filter(it => isWorkspaceVisible(it, currentDir, scope));
 }
 
 /**

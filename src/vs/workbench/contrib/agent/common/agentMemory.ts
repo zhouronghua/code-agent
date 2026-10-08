@@ -36,7 +36,9 @@ import {
 	parseWorkspaceScope,
 	normalizeWorkspaceDir,
 	workspaceMarker,
-	filterL1ByWorkspace,
+	workspaceTagOfItem,
+	isWorkspaceVisible,
+	filterByWorkspace,
 	workspaceCandidateTags,
 } from './agentMemoryWorkspace';
 
@@ -67,21 +69,21 @@ export interface MemoryConfig {
 	/** Auto-capture the task conversation (L0) when a task finishes. Default true. */
 	capture: boolean;
 	/**
-	 * Absolute workspace directory used to tag and scope L1 (atomic) memories.
-	 * Defaults to the process working directory. L1 recalled from the hub only
-	 * when its tag is this directory (or an ancestor/descendant of it).
+	 * Absolute workspace directory used to tag and scope L1 (atomic) memories
+	 * and L0 (raw conversation) turns. Defaults to the process working directory.
+	 * Tagged memories are recalled from the hub only when their tag is this
+	 * directory (or an ancestor/descendant of it).
 	 */
 	workspaceDir: string;
 	/**
-	 * L1 workspace scoping mode (see agentMemoryWorkspace.ts):
-	 *   strict (default) — untagged L1 hidden, tagged L1 must match the workspace
-	 *   loose            — tagged L1 must match, untagged L1 stays visible
+	 * L0/L1 workspace scoping mode (see agentMemoryWorkspace.ts):
+	 *   strict (default) — untagged memories hidden, tagged memories must match
+	 *   loose            — tagged memories must match, untagged stay visible
 	 *   off              — no workspace filtering (legacy behaviour)
-	 * L2/L3 are never scoped.
+	 * L2 (scenario) and L3 (persona) are never scoped.
 	 */
 	workspaceScope: WorkspaceScope;
 }
-
 export interface MemorySectionConfig {
 	enabled?: boolean;
 	endpoint?: string;
@@ -377,22 +379,101 @@ export class MemoryClient implements IMemoryIntegration {
 		return data !== null;
 	}
 
-	async searchConversation(query: string, limit = 5): Promise<Array<Record<string, unknown>>> {
-		const data = await this._post<{ items?: Array<Record<string, unknown>> }>('/v3/conversation/search', {
+	/**
+	 * Raw L0 conversation search against the hub.
+	 *
+	 * NOTE: the v3 data plane answers this endpoint with `data.messages`
+	 * (verified live) — reading `data.items` silently returned nothing.
+	 *
+	 * `taskId` is a first-class server-side filter here too (verified: a bogus
+	 * tag yields 0 hits, the workspace tag yields exactly the tagged turns).
+	 */
+	async searchConversation(query: string, limit = 5, taskId?: string): Promise<Array<Record<string, unknown>>> {
+		const data = await this._post<{ messages?: Array<Record<string, unknown>>; items?: Array<Record<string, unknown>> }>('/v3/conversation/search', {
 			...this._iso(null),
 			query,
 			limit,
+			...(taskId ? { task_id: taskId } : {}),
 		});
-		return data?.items ?? [];
+		return data?.messages ?? data?.items ?? [];
+	}
+
+	/**
+	 * Workspace-scoped L0 search — the only L0 entry point used by the tool.
+	 * Same strategy as `searchL1Scoped`: an over-fetched unfiltered search (which is
+	 * what surfaces descendant-workspace and untagged legacy turns) UNION one exact-tag
+	 * query per candidate tag (cwd + ancestors), merged, gated, then ranked.
+	 */
+	async searchL0Scoped(query: string, limit = 5): Promise<{ items: Array<Record<string, unknown>>; hidden: number }> {
+		const scope = this.config.workspaceScope;
+		const ws = this.workspaceDir;
+		if (scope === 'off' || !ws || limit <= 0) {
+			return { items: await this.searchConversation(query, limit), hidden: 0 };
+		}
+
+		const primary = await this.searchConversation(query, Math.max(limit, limit * 5));
+		const tagged = await Promise.all(
+			workspaceCandidateTags(ws).map(async tag => ({
+				tag,
+				items: await this.searchConversation(query, limit, tag).catch(() => [] as Array<Record<string, unknown>>),
+			})),
+		);
+
+		const merged = this._mergeScoped(primary, tagged);
+		const visible = filterByWorkspace(merged, ws, scope);
+		// Conversations have no comparable notion of "most relevant line", so
+		// relevance first, then newest first.
+		visible.sort((a, b) => {
+			const byScore = Number(b.score ?? 0) - Number(a.score ?? 0);
+			if (byScore !== 0) return byScore;
+			return String(b.timestamp ?? b.created_at ?? '').localeCompare(String(a.timestamp ?? a.created_at ?? ''));
+		});
+		return { items: visible.slice(0, limit), hidden: merged.length - visible.length };
 	}
 
 	async queryConversation(limit = 20): Promise<Array<Record<string, unknown>>> {
-		const data = await this._post<{ items?: Array<Record<string, unknown>> }>('/v3/conversation/query', {
+		const data = await this._post<{ messages?: Array<Record<string, unknown>>; items?: Array<Record<string, unknown>> }>('/v3/conversation/query', {
 			...this._iso(null),
 			limit,
 			offset: 0,
 		});
-		return data?.items ?? [];
+		return data?.messages ?? data?.items ?? [];
+	}
+
+	/**
+	 * Merge an unfiltered over-fetch with tag-filtered queries.
+	 *
+	 * Every item returned by a tag-filtered query is stamped with the tag the hub
+	 * filtered on, because /v3/conversation/search does not echo `task_id` back —
+	 * without the stamp, a correctly-tagged L0 turn (e.g. an assistant reply that
+	 * carries no marker) would look untagged and be withheld in `strict` mode.
+	 * Tagged copies win over the unfiltered pool, and duplicates collapse by id.
+	 */
+	private _mergeScoped(
+		primary: Array<Record<string, unknown>>,
+		tagged: Array<{ tag: string; items: Array<Record<string, unknown>> }>,
+	): Array<Record<string, unknown>> {
+		const keyOf = (item: Record<string, unknown>, index: number): string => {
+			const id = typeof item.id === 'string' ? item.id : '';
+			return id || `anon:${index}:${String(item.content ?? '').slice(0, 48)}`;
+		};
+		const seen = new Set<string>();
+		const merged: Array<Record<string, unknown>> = [];
+		for (const { tag, items } of tagged) {
+			for (const item of items) {
+				const key = keyOf(item, merged.length);
+				if (seen.has(key)) continue;
+				seen.add(key);
+				merged.push(workspaceTagOfItem(item) ? item : { ...item, task_id: tag });
+			}
+		}
+		for (const item of primary) {
+			const key = keyOf(item, merged.length);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			merged.push(item);
+		}
+		return merged;
 	}
 
 	// ---- L1 atomic ----
@@ -434,21 +515,15 @@ export class MemoryClient implements IMemoryIntegration {
 		const overfetch = Math.max(limit, limit * 5);
 		const primary = await this.searchAtomic(query, overfetch, type);
 		const ancestorTags = workspaceCandidateTags(ws);
-		const extra = await Promise.all(
-			ancestorTags.map(tag => this.searchAtomic(query, limit, type, tag).catch(() => [] as Array<Record<string, unknown>>)),
+		const tagged = await Promise.all(
+			ancestorTags.map(async tag => ({
+				tag,
+				items: await this.searchAtomic(query, limit, type, tag).catch(() => [] as Array<Record<string, unknown>>),
+			})),
 		);
 
-		const seen = new Set<string>();
-		const merged: Array<Record<string, unknown>> = [];
-		for (const item of [primary, ...extra].flat()) {
-			const id = typeof item.id === 'string' ? item.id : '';
-			const key = id || `anon:${merged.length}:${String(item.content ?? '').slice(0, 48)}`;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			merged.push(item);
-		}
-
-		const visible = filterL1ByWorkspace(merged, ws, scope);
+		const merged = this._mergeScoped(primary, tagged);
+		const visible = filterByWorkspace(merged, ws, scope);
 		visible.sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0));
 		return { items: visible.slice(0, limit), hidden: merged.length - visible.length };
 	}
@@ -514,8 +589,10 @@ export class MemoryClient implements IMemoryIntegration {
 	 * + L2 scenario index + L3 persona. All three run independently; a failure in
 	 * one never blocks the others. Returns a formatted context block or undefined.
 	 *
-	 * L2/L3 are intentionally cross-project; only L1 is scoped to the workspace
-	 * directory (same dir, or an ancestor/descendant of it).
+	 * L2/L3 are intentionally cross-project; L0 and L1 are scoped to the workspace
+	 * directory (same dir, or an ancestor/descendant of it). L0 is never injected
+	 * automatically — it is reachable only through the `tdai_conversation_search`
+	 * tool, which applies the very same scope.
 	 */
 	async recall(task: string): Promise<string | undefined> {
 		const sections: string[] = [];
@@ -574,22 +651,25 @@ export class MemoryClient implements IMemoryIntegration {
 	 * pipeline later distills L0 → L1 → L2 → L3, so raw turns are the right
 	 * input here. Fail-open: never throws into the main agent flow.
 	 *
-	 * The workspace directory is stamped on the turn twice: as the hub's
-	 * `task_id` field (filterable server-side) and as a `[workspace:<dir>]`
-	 * marker inside the user text, so the distilled L1 stays attributable to
-	 * this workspace even if the pipeline only keeps the text.
+	 * The workspace directory is stamped on the turn three times: as the hub's
+	 * `task_id` field (filterable server-side, but NOT echoed back by
+	 * /v3/conversation/search), and as a `[workspace:<dir>]` marker line inside
+	 * BOTH captured messages. The marker is what makes a turn attributable when
+	 * it is only reachable through the unfiltered search (e.g. a turn from a
+	 * sub-directory of this workspace); without it, a marker-less assistant reply
+	 * would be indistinguishable from untagged legacy data.
 	 */
 	async capture(task: string, assistantContent: string): Promise<void> {
 		try {
 			const tag = this.workspaceTag;
 			const marker = tag ? workspaceMarker(tag) : '';
+			const stamp = (text: string): string => (marker ? `${marker}\n${text}` : text);
 			const messages: ConversationMessage[] = [];
 			if (task && task.trim()) {
-				const body = task.slice(0, 8000);
-				messages.push({ role: 'user', content: marker ? `${marker}\n${body}` : body });
+				messages.push({ role: 'user', content: stamp(task.slice(0, 8000)) });
 			}
 			if (assistantContent && assistantContent.trim()) {
-				messages.push({ role: 'assistant', content: assistantContent.slice(0, 8000) });
+				messages.push({ role: 'assistant', content: stamp(assistantContent.slice(0, 8000)) });
 			}
 			if (messages.length === 0) return;
 			const ok = await this.addConversation(messages, undefined, tag || undefined);
@@ -649,10 +729,10 @@ export class MemorySearchTool extends MemoryTool {
 	}
 }
 
-/** tdai_conversation_search — L0 raw conversation search. */
+/** tdai_conversation_search — L0 raw conversation search, workspace-scoped. */
 export class ConversationSearchTool extends MemoryTool {
 	readonly name = 'tdai_conversation_search';
-	readonly description = 'Search raw past conversation history (L0) stored on the tdai_agent_mem hub — useful when the exact wording of a previous exchange matters.';
+	readonly description = 'Search raw past conversation history (L0) stored on the tdai_agent_mem hub — useful when the exact wording of a previous exchange matters. L0 is scoped to the current workspace directory: only conversations tagged with this directory (or one of its parents/children) are returned.';
 	readonly parameters = {
 		type: 'object',
 		properties: {
@@ -666,14 +746,19 @@ export class ConversationSearchTool extends MemoryTool {
 		const toolCallId = (args._toolCallId as string) || '';
 		if (signal?.aborted) return this.failure(toolCallId, 'Tool execution cancelled by user');
 		try {
-			const items = await this._client.searchConversation(String(args.query || ''), (args.limit as number) || 5);
-			if (items.length === 0) return this.success(toolCallId, '(no matching conversations found)');
+			const { items, hidden } = await this._client.searchL0Scoped(String(args.query || ''), (args.limit as number) || 5);
+			const scopeNote = hidden > 0
+				? `\n\n(workspace scope \`${this._client.workspaceScope}\` on \`${this._client.workspaceDir}\`: ${hidden} conversation(s) from other workspaces were withheld)`
+				: '';
+			if (items.length === 0) {
+				return this.success(toolCallId, `(no matching conversations found in this workspace)${scopeNote}`);
+			}
 			const out = items.map((it, i) => {
 				const role = it.role ? `${it.role}: ` : '';
 				const when = it.timestamp ?? it.created_at ? `\n(time: ${String(it.timestamp ?? it.created_at)})` : '';
 				return `[${i + 1}]${when}\n${role}${String(it.content ?? '').slice(0, 1000)}`;
 			}).join('\n\n');
-			return this.success(toolCallId, out);
+			return this.success(toolCallId, out + scopeNote);
 		} catch (err) {
 			return this.failure(toolCallId, `conversation_search failed: ${(err as Error).message}`);
 		}
@@ -747,12 +832,13 @@ export class MemoryWriteTool extends MemoryTool {
 				const id = String(args.id || '');
 				if (!id) return this.failure(toolCallId, 'layer=l1 requires "id" of an existing atomic note');
 				// Tag the note with this workspace: `task_id` is the authoritative,
-				// server-filterable carrier; the marker in `background` keeps the tag
-				// readable even if the hub rewrites task_id.
+				// server-filterable carrier; a marker line in `background` keeps the
+				// tag readable even if the hub rewrites task_id (the marker is only
+				// honoured at the start of a line, hence the newline).
 				const tag = this._client.workspaceTag;
 				const marker = tag ? workspaceMarker(tag) : '';
 				const bg = args.background ? String(args.background) : '';
-				const background = marker ? `${bg ? `${bg} ` : ''}${marker}` : (bg || undefined);
+				const background = marker ? `${bg ? `${bg}\n` : ''}${marker}` : (bg || undefined);
 				const ok = await this._client.updateAtomic(id, content, background, tag || undefined);
 				return ok
 					? this.success(toolCallId, `L1 atomic note updated: ${id}${tag ? ` (workspace ${tag})` : ''}`)
