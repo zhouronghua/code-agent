@@ -72,6 +72,11 @@ const FALLBACK_PROBE_INITIAL_DELAY_MS = 30_000;
 const FALLBACK_PROBE_MAX_DELAY_MS = 120_000;
 /** Per-probe timeout — a model that needs longer than this is still unhealthy. */
 const FALLBACK_PROBE_TIMEOUT_MS = 10_000;
+/** Require consecutive healthy probes before returning to the primary model. */
+const FALLBACK_RECOVERY_SUCCESS_THRESHOLD = 2;
+/** Switch-back detail, shared by the probe path and the deferred in-loop path. */
+const FALLBACK_RECOVERY_DETAIL =
+	`primary model answered ${FALLBACK_RECOVERY_SUCCESS_THRESHOLD} consecutive health probes`;
 
 /**
  * Maximum characters of model reasoning_content shown in the console.
@@ -340,6 +345,12 @@ export class AgentLoop {
 	private _llmRequestInFlight = false;
 	/** A background probe found the primary model healthy while a request was in flight. */
 	private _primaryRecovered = false;
+	/**
+	 * Consecutive healthy probes seen while on the 保底 model. A single success is
+	 * not enough to switch back (the primary can flap: answer once, then fail
+	 * again), so the agent waits for FALLBACK_RECOVERY_SUCCESS_THRESHOLD in a row.
+	 */
+	private _primaryHealthyProbes = 0;
 	/** Set by a model switch whose history no longer fits the new model's window. */
 	private _pendingForceCompact = false;
 
@@ -404,6 +415,7 @@ export class AgentLoop {
 		// and cancels any pending recovery probe for the old primary model.
 		this._usingFallback = false;
 		this._primaryRecovered = false;
+		this._primaryHealthyProbes = 0;
 		this._fallbackKind = undefined;
 		this._stopRecoveryProbe();
 		if (config.model !== fromModel) {
@@ -505,6 +517,9 @@ export class AgentLoop {
 		this._primaryProvider = fromProvider;
 		this._applyModelSwitch(to, this._fallbackProvider!);
 		this._usingFallback = true;
+		// A fresh fallback episode starts with a clean recovery tally.
+		this._primaryHealthyProbes = 0;
+		this._primaryRecovered = false;
 		// Remember WHY we fell back: a throttled primary needs a different
 		// recovery criterion than a timed-out one (see _runProbe).
 		this._fallbackKind = kind;
@@ -573,18 +588,35 @@ export class AgentLoop {
 		if (!this._usingFallback || this._primaryProvider !== provider) return;
 
 		if (reachable) {
-			// Prefer an immediate switch-back; if a request is in flight, defer to
-			// the next loop iteration so the recorded response keeps its provenance.
-			this._clearProbeTimer();
-			if (this._llmRequestInFlight) {
-				this._primaryRecovered = true;
-				console.warn('[MODEL] primary model reachable again — switching back at the next step');
-			} else {
-				this._switchBackToPrimary('primary model answered a health probe');
+			// One healthy answer is not proof of recovery: gateways have been seen
+			// to answer a probe and then fail the very next request, which would
+			// make the agent ping-pong between the two models. Require a run of
+			// consecutive successes, re-probing quickly to confirm.
+			this._primaryHealthyProbes++;
+			if (this._primaryHealthyProbes >= FALLBACK_RECOVERY_SUCCESS_THRESHOLD) {
+				// Prefer an immediate switch-back; if a request is in flight, defer to
+				// the next loop iteration so the recorded response keeps its provenance.
+				this._clearProbeTimer();
+				if (this._llmRequestInFlight) {
+					this._primaryRecovered = true;
+					console.warn('[MODEL] primary model reachable again — switching back at the next step');
+				} else {
+					this._switchBackToPrimary(FALLBACK_RECOVERY_DETAIL);
+				}
+				return;
 			}
+			console.log(
+				`[MODEL] ${config.model} answered a probe `
+				+ `(${this._primaryHealthyProbes}/${FALLBACK_RECOVERY_SUCCESS_THRESHOLD}) `
+				+ '— confirming recovery before switching back',
+			);
+			this._probeDelayMs = this._probeInitialDelayMs;
+			this._scheduleProbe();
 			return;
 		}
 
+		// Unhealthy again → the tally resets; recovery must be consecutive.
+		this._primaryHealthyProbes = 0;
 		this._probeDelayMs = Math.min(this._probeDelayMs * 2, this._probeMaxDelayMs);
 		this._scheduleProbe();
 	}
@@ -599,6 +631,8 @@ export class AgentLoop {
 		this._applyModelSwitch(config, provider);
 		this._usingFallback = false;
 		this._fallbackKind = undefined;
+		this._primaryHealthyProbes = 0;
+		this._primaryRecovered = false;
 		this._stopRecoveryProbe();
 		this._reportModelSwitch({
 			from: fromModel,
@@ -1355,7 +1389,7 @@ export class AgentLoop {
 			// the primary/scenario model healthy while a request was in flight.
 			if (this._usingFallback && this._primaryRecovered) {
 				this._primaryRecovered = false;
-				this._switchBackToPrimary('primary model answered a health probe');
+				this._switchBackToPrimary(FALLBACK_RECOVERY_DETAIL);
 			}
 
 			// Guard: if agent calls tools repeatedly without producing any text content

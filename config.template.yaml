@@ -36,7 +36,10 @@ active_profile: openai
 #                                        # access timeout OR a rate limit (HTTP 429 /
 #                                        # TPM-RPM quota), then the request is retried.
 #                                        # A background probe switches back to the
-#                                        # primary model as soon as it answers again
+#                                        # primary model once it answers again —
+#                                        # confirmed by 2 consecutive healthy probes,
+#                                        # so a flapping primary cannot ping-pong
+#                                        # the session between the two models
 #                                        # (a throttled primary must answer for real,
 #                                        # not merely return 429).
 #                                        # Use a NON-thinking model here: a thinking

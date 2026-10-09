@@ -103,6 +103,11 @@ class FakeProvider implements ILLMProvider {
 		public thinks = false,
 		/** Answers the probe with 429 (throttled) instead of a real answer. */
 		public throttled = false,
+		/**
+		 * Scripted health answers, consumed one per probe (the last one repeats).
+		 * Lets a test make the primary flap: answer once, then fail again.
+		 */
+		public healthSequence: boolean[] = [],
 	) {
 		// The last behavior repeats once the queue is exhausted.
 		this._queue = behaviors.length > 0 ? [...behaviors] : [{ kind: 'ok' }];
@@ -152,6 +157,9 @@ class FakeProvider implements ILLMProvider {
 	async healthCheck(_timeoutMs?: number, opts?: IHealthCheckOptions): Promise<boolean> {
 		this.healthChecks++;
 		this.lastHealthCheckOpts = opts;
+		if (this.healthSequence.length > 0) {
+			return this.healthSequence.length > 1 ? this.healthSequence.shift()! : this.healthSequence[0];
+		}
 		// A throttled endpoint answers 429: that means "reachable" unless the
 		// agent fell back because of throttling.
 		if (this.throttled) return opts?.throttleSensitive !== true;
@@ -308,8 +316,8 @@ async function testFallbackAndRecoveryProbe(): Promise<void> {
 	eq(events.length, 1, 'no recovery switch while the primary is down');
 	agent.dispose();
 
-	// --- 4b: primary recovers → switch back automatically, without a new task ---
-	const recovered = new FakeProvider([{ kind: 'ok', text: 'primary is back' }]);
+	// --- 4b: primary flaps (one good answer, then down again) → stay on 保底 ---
+	const flappy = new FakeProvider([{ kind: 'ok', text: 'primary is back' }], true, false, false, [true, false]);
 	const agent2 = makeAgent(primaryCfg, new FakeProvider([{ kind: 'timeout' }], false));
 	agent2.setFallback(fallbackCfg, new FakeProvider([{ kind: 'ok' }]));
 	agent2.setProbeSchedule(60, 120);
@@ -319,17 +327,43 @@ async function testFallbackAndRecoveryProbe(): Promise<void> {
 	await agent2.run('please answer');
 	eq(agent2.activeModel, 'gpt-5.6-luna', 'started on the 保底 model');
 
-	// Primary becomes reachable — swap the provider the probe will call.
-	(agent2 as unknown as { _primaryProvider: ILLMProvider })._primaryProvider = recovered;
-	await sleep(400);
+	// Primary answers the first probe and fails the next one — a single success
+	// must NOT be enough to leave the 保底 model (that is what caused flapping).
+	(agent2 as unknown as { _primaryProvider: ILLMProvider })._primaryProvider = flappy;
+	await sleep(500);
 
-	eq(agent2.activeModel, 'primary-model', 'primary model is re-adopted as soon as it recovers');
-	ok(!agent2.usingFallback, 'fallback flag cleared after recovery');
-	ok(recovered.healthChecks >= 1, 'recovery was confirmed by a health probe');
-	const recovery = events2.find(e => e.reason === 'primary-recovered');
+	eq(agent2.activeModel, 'gpt-5.6-luna', 'a lone healthy probe does not switch back');
+	ok(agent2.usingFallback, 'the agent stays on the 保底 model while the primary flaps');
+	ok(flappy.healthChecks >= 2, `recovery needs more than one probe (${flappy.healthChecks} checks)`);
+	eq(events2.filter(e => e.reason === 'primary-recovered').length, 0, 'no recovery was reported');
+	agent2.dispose();
+
+	// --- 4c: primary stays healthy → switch back after the threshold probes ---
+	const recovered = new FakeProvider([{ kind: 'ok', text: 'primary is back' }]);
+	const agent3 = makeAgent(primaryCfg, new FakeProvider([{ kind: 'timeout' }], false));
+	agent3.setFallback(fallbackCfg, new FakeProvider([{ kind: 'ok' }]));
+	agent3.setProbeSchedule(60, 120);
+	const events3: IModelSwitchEvent[] = [];
+	agent3.onDidSwitchModel(e => events3.push(e));
+
+	await agent3.run('please answer');
+	eq(agent3.activeModel, 'gpt-5.6-luna', 'started on the 保底 model');
+
+	// Primary becomes reachable — swap the provider the probe will call.
+	(agent3 as unknown as { _primaryProvider: ILLMProvider })._primaryProvider = recovered;
+	await sleep(500);
+
+	eq(agent3.activeModel, 'primary-model', 'primary model is re-adopted after it recovers');
+	ok(!agent3.usingFallback, 'fallback flag cleared after recovery');
+	ok(recovered.healthChecks >= 2, `recovery was confirmed by consecutive probes (${recovered.healthChecks} checks)`);
+	const recovery = events3.find(e => e.reason === 'primary-recovered');
 	ok(!!recovery, 'recovery is reported as a model switch');
 	eq(recovery?.to, 'primary-model', 'recovery reports the model it returned to');
-	agent2.dispose();
+	ok(
+		(recovery?.detail ?? '').includes('consecutive health probes'),
+		'the switch-back detail states the confirmation requirement',
+	);
+	agent3.dispose();
 }
 
 async function testFallbackConfigResolution(): Promise<void> {
