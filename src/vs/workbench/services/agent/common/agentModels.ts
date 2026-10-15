@@ -106,6 +106,10 @@ export interface IAgentConfig {
 	model: string;
 	apiKey: string;
 	apiBase?: string;
+	/** Whether the model supports provider thinking/reasoning mode. */
+	supportsReasoning?: boolean;
+	/** Provider-specific thinking configuration from models.json. */
+	thinking?: { type: string };
 	maxSteps: number;
 	maxContextTokens: number;
 	maxOutputTokens: number;
@@ -232,7 +236,7 @@ export interface IAgentTaskLog {
 
 export const DEFAULT_AGENT_CONFIG: IAgentConfig = {
 	provider: 'openai',
-	model: 'deepseek-v4-pro',
+	model: 'glm-5.3',
 	apiKey: '',
 	maxSteps: 999999,  // Effectively unlimited
 	maxContextTokens: 200000,

@@ -102,28 +102,6 @@ interface OpenAIChatMessage {
 }
 
 /**
- * Check if a model is a reasoning/thinking model that returns reasoning_content.
- * These models require special handling for message ordering and streaming.
- *
- * IMPORTANT: deepseek-v4-flash is intentionally NOT listed here — it may occasionally
- * return reasoning_content but does not have a stable deep thinking mode.
- * deepseek-v4-pro has deep thinking enabled by default and explicitly via thinking param.
- */
-function isReasoningModel(model: string): boolean {
-	const lower = model.toLowerCase();
-	// DeepSeek reasoner variants (deepseek-reasoner, deepseek-r1, etc.)
-	if (lower.includes('reasoner') || lower.includes('deepseek-r')) return true;
-	// DeepSeek v4-pro has deep thinking capabilities (explicitly enabled via thinking param)
-	if (lower.includes('deepseek-v4-pro')) return true;
-	// Tencent Hunyuan 3 (hy3) is a hybrid-thinking model that always returns
-	// reasoning_content and accepts {"thinking":{"type":"enabled"}}.
-	if (lower === 'hy3' || lower.startsWith('hy3-') || lower.includes('hunyuan')) return true;
-	// OpenAI o-series reasoning models
-	if (lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4')) return true;
-	return false;
-}
-
-/**
  * Does this HTTP 400 come from the thinking-mode echo-back rule?
  *
  * Verified on api.enflame.cn (deepseek-flash / deepseek-v4-pro):
@@ -141,7 +119,8 @@ export class OpenAIProvider implements ILLMProvider {
 	private readonly _apiKey: string;
 	private readonly _apiBase: string;
 	private readonly _model: string;
-	private readonly _isReasoning: boolean;
+	private readonly _supportsReasoning: boolean;
+	private readonly _thinking?: { type: string };
 	private readonly _maxOutputTokens: number;
 	private readonly _maxContextTokens: number;
 
@@ -170,7 +149,8 @@ export class OpenAIProvider implements ILLMProvider {
 		this._apiKey = config.apiKey;
 		this._apiBase = config.apiBase || 'https://api.openai.com/v1';
 		this._model = config.model;
-		this._isReasoning = isReasoningModel(config.model);
+		this._supportsReasoning = config.supportsReasoning === true || config.thinking !== undefined;
+		this._thinking = config.thinking;
 		this._maxOutputTokens = config.maxOutputTokens || 65536;
 		// maxContextTokens is the model's TOTAL context window (input + output
 		// are drawn from the same pool, e.g. deepseek-v4 = 1048576 tokens).
@@ -216,8 +196,8 @@ export class OpenAIProvider implements ILLMProvider {
 
 		// Reasoning models: enable deep thinking explicitly and allow long
 		// chain-of-thought outputs (budget is clamped to remaining context above).
-		if (this._isReasoning) {
-			body.thinking = { type: 'enabled' };
+		if (this._thinking) {
+			body.thinking = this._thinking;
 		}
 
 		if (tools && tools.length > 0) {
@@ -408,8 +388,8 @@ export class OpenAIProvider implements ILLMProvider {
 		}
 		body.max_tokens = clampedMaxTokens;
 
-		if (this._isReasoning) {
-			body.thinking = { type: 'enabled' };
+		if (this._thinking) {
+			body.thinking = this._thinking;
 		}
 
 		if (tools && tools.length > 0) {
@@ -690,7 +670,7 @@ export class OpenAIProvider implements ILLMProvider {
 	/**
 	 * Does this model use reasoning_content (thinking/chain-of-thought)?
 	 *
-	 * True when the model id looks like a reasoning model OR the API has shown
+	 * True when the model configuration enables reasoning OR the API has shown
 	 * that it answers in thinking mode (it produced reasoning_content, or it
 	 * demanded the echo-back). The agent uses this to keep one model's
 	 * chain-of-thought out of another model, to avoid streaming (which loses
@@ -698,7 +678,7 @@ export class OpenAIProvider implements ILLMProvider {
 	 * the reasoning echo-back invariant.
 	 */
 	supportsReasoning(): boolean {
-		return this._isReasoning || this._sawReasoning || this._requiresReasoningEcho;
+		return this._supportsReasoning || this._sawReasoning || this._requiresReasoningEcho;
 	}
 
 	/**

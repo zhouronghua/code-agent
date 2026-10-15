@@ -497,7 +497,10 @@ async function testThinkingEchoBackOnRecovery(): Promise<void> {
 	//   assistant(tool_calls) + tool, no reasoning content on ANY assistant → 400
 	//   same history with reasoning_content:"" on ALL assistant messages   → 200
 	const http = await import('node:http');
-	type SentBody = { messages: Array<{ role: string; reasoning_content?: string }> };
+	type SentBody = {
+		messages: Array<{ role: string; reasoning_content?: string }>;
+		thinking?: unknown;
+	};
 	const sent: SentBody[] = [];
 	const server = http.createServer((req, res) => {
 		let raw = '';
@@ -537,6 +540,21 @@ async function testThinkingEchoBackOnRecovery(): Promise<void> {
 		}),
 		createMessage(MessageRole.Tool, 'a b c', { toolCallId: 'call_1' }),
 	];
+
+	// Thinking mode is controlled by the model configuration, never inferred from
+	// the model id. Verify both sides with arbitrary names.
+	const configuredThinking = new OpenAIProvider(makeConfig('arbitrary-model-name', {
+		apiBase: base,
+		thinking: { type: 'enabled' },
+	}));
+	await configuredThinking.complete([createMessage(MessageRole.User, 'config-driven thinking')]);
+	eq(JSON.stringify(sent[0].thinking), JSON.stringify({ type: 'enabled' }),
+		'the configured thinking payload is sent unchanged');
+	sent.length = 0;
+	const unconfiguredThinking = new OpenAIProvider(makeConfig('glm-5.3', { apiBase: base }));
+	await unconfiguredThinking.complete([createMessage(MessageRole.User, 'no implicit thinking')]);
+	eq(sent[0].thinking, undefined, 'thinking is not inferred from a model name');
+	sent.length = 0;
 
 	// ---- (a) The model already answered in thinking mode before the swap ----
 	const primary = new OpenAIProvider(makeConfig('deepseek-flash', { apiBase: base }));

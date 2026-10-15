@@ -24,6 +24,8 @@ const CONFIG = {
 	model: process.env.LLM_MODEL || 'gpt-4o',
 	apiKey: process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '',
 	apiBase: process.env.LLM_API_BASE || '',
+	supportsReasoning: process.env.LLM_SUPPORTS_REASONING === '1',
+	thinking: process.env.LLM_THINKING === '1' ? { type: 'enabled' } : undefined,
 	maxSteps: 999999,  // Effectively unlimited
 	maxContextTokens: 128000,
 	temperature: 0,
@@ -287,16 +289,6 @@ const TOOLS = {
 // ============================================================================
 
 async function callOpenAI(messages, tools) {
-	const isReasoning = (model) => {
-		const lower = model.toLowerCase();
-		// DeepSeek reasoner variants
-		if (lower.includes('reasoner') || lower.includes('deepseek-r')) return true;
-		// DeepSeek v4-pro has reasoning capabilities
-		if (lower.includes('deepseek-v4-pro')) return true;
-		// OpenAI o-series reasoning models
-		return lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
-	};
-
 	const body = {
 		model: CONFIG.model,
 		messages: messages.map(m => {
@@ -309,9 +301,9 @@ async function callOpenAI(messages, tools) {
 		temperature: CONFIG.temperature,
 	};
 
-	// Reasoning models need explicit max_tokens and thinking param
-	if (isReasoning(CONFIG.model)) {
-		body.thinking = { type: 'enabled' };
+	// Thinking mode is driven by the model configuration, never by the model id.
+	if (CONFIG.thinking) {
+		body.thinking = CONFIG.thinking;
 		body.max_tokens = 8192;
 	}
 

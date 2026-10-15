@@ -57,6 +57,8 @@ interface ConfigProfile {
 	top_k?: number;
 	max_input_tokens?: number;
 	max_output_tokens?: number;
+	supports_reasoning?: boolean;
+	thinking?: { type: string };
 }
 
 /**
@@ -66,11 +68,11 @@ interface ConfigProfile {
  * config.yaml:
  *   model_routing:
  *     enabled: true
- *     default: deepseek-v4-flash
+ *     default: glm-5.3-flash
  *     scenarios:
- *       reasoning: deepseek-v4-pro
- *       vision: deepseek-v4-flash-vision-exp
- *       fast: deepseek-v4-flash
+ *       reasoning: glm-5.3
+ *       vision: glm-5.3-flash
+ *       fast: glm-5.3-flash
  */
 export interface ModelRoutingConfig {
 	enabled: boolean;
@@ -348,6 +350,8 @@ function modelEntryToProfile(entry: ModelEntry): ConfigProfile {
 		api_base: apiBase,
 		max_input_tokens: entry.maxInputTokens,
 		max_output_tokens: entry.maxOutputTokens || entry.maxTokens,
+		supports_reasoning: entry.supportsReasoning,
+		thinking: entry.thinking,
 	};
 }
 
@@ -420,6 +424,8 @@ function profileToAgentConfig(profile: ConfigProfile, agent: ConfigFile['agent']
 		model: profile.model || DEFAULT_AGENT_CONFIG.model,
 		apiKey: profile.api_key || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '',
 		apiBase: profile.api_base || undefined,
+		supportsReasoning: profile.supports_reasoning,
+		thinking: profile.thinking,
 		maxSteps: agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
 		maxContextTokens: budgets.maxContextTokens,
 		maxOutputTokens: budgets.maxOutputTokens,
@@ -523,6 +529,8 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		model: process.env.LLM_MODEL || profile?.model || DEFAULT_AGENT_CONFIG.model,
 		apiKey: process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || profile?.api_key || '',
 		apiBase: process.env.LLM_API_BASE || profile?.api_base || undefined,
+		supportsReasoning: profile?.supports_reasoning,
+		thinking: profile?.thinking,
 		maxSteps: fileConfig.agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
 		maxContextTokens: budgets.maxContextTokens,
 		maxOutputTokens: budgets.maxOutputTokens,

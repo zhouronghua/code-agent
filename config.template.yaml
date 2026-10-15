@@ -20,7 +20,7 @@ active_profile: openai
 
 # Override model params here (optional, takes precedence over models.json)
 # profiles:
-#   deepseek-v4-pro:
+#   glm-5.3:
 #     temperature: 0.5
 #     top_k: 40
 
@@ -30,7 +30,7 @@ active_profile: openai
 # When this section is present, routing is enabled by default (set enabled: false to disable).
 # model_routing:
 #   enabled: true
-#   default: deepseek-v4-flash          # fallback model for unmatched scenarios
+#   default: glm-5.3-flash              # fallback model for unmatched scenarios
 #   fallback: gpt-5.6-luna               # 保底模型 (guaranteed model): auto-switched
 #                                        # when the scenario/default model hits an API
 #                                        # access timeout OR a rate limit (HTTP 429 /
@@ -48,9 +48,9 @@ active_profile: openai
 #   fallback_probe_interval_s: 30        # how often the background probe re-checks the
 #                                        # primary model (default: 30s, backing off to 120s)
 #   scenarios:
-#     reasoning: deepseek-v4-pro        # complex refactor/debug/architecture tasks
-#     vision: deepseek-v4-flash-vision-exp  # image/screenshot understanding
-#     fast: deepseek-v4-flash           # simple/quick tasks
+#     reasoning: glm-5.3                # complex refactor/debug/architecture tasks
+#     vision: glm-5.3-flash             # image/screenshot understanding
+#     fast: glm-5.3-flash               # simple/quick tasks
 
 # Agent settings
 agent:

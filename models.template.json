@@ -27,6 +27,34 @@
       "supportsReasoning": false
     },
     {
+      "id": "glm-5.3-flash",
+      "name": "custom",
+      "vendor": "enflameapi",
+      "apiKey": "your-api-key-here",
+      "url": "https://api.enflame.cn/v1/chat/completions",
+      "maxInputTokens": 131071,
+      "maxOutputTokens": 32768,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "thinking": {"type": "enabled"},
+      "maxTokens": 32768
+    },
+    {
+      "id": "glm-5.3",
+      "name": "custom",
+      "vendor": "enflameapi",
+      "apiKey": "your-api-key-here",
+      "url": "https://api.enflame.cn/v1/chat/completions",
+      "maxInputTokens": 131071,
+      "maxOutputTokens": 32768,
+      "supportsToolCall": true,
+      "supportsImages": true,
+      "supportsReasoning": true,
+      "thinking": {"type": "enabled"},
+      "maxTokens": 32768
+    },
+    {
       "id": "hy3",
       "name": "custom",
       "vendor": "enflameapi",
@@ -68,6 +96,8 @@
   "availableModels": [
     "deepseek-v4-pro",
     "deepseek-v4-flash",
+    "glm-5.3-flash",
+    "glm-5.3",
     "hy3",
     "gpt-5.6-luna",
     "gpt-4o"

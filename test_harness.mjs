@@ -34,24 +34,18 @@ function assertContains(haystack, needle, message) {
 }
 
 // ============================================================================
-// Test 1: Reasoning model detection
+// Test 1: Thinking mode is configuration-driven (never inferred from model id)
 // ============================================================================
-console.log('\n📁 Reasoning Model Detection:');
+console.log('\n📁 Config-Driven Thinking Mode:');
 
 const modelsPath = path.join(__dirname, 'src/vs/workbench/services/agent/browser/llmOpenai.ts');
 const modelsContent = fs.readFileSync(modelsPath, 'utf-8');
 
-// Extract the isReasoningModel function
-const reasoningFnMatch = modelsContent.match(/function isReasoningModel[\s\S]*?^}/m);
-assert(reasoningFnMatch !== null, 'isReasoningModel function found in llmOpenai.ts');
-
-if (reasoningFnMatch) {
-  const fnBody = reasoningFnMatch[0];
-  assertContains(fnBody, 'deepseek-v4-pro', 'deepseek-v4-pro detected as reasoning model');
-  assertContains(fnBody, 'deepseek-r', 'deepseek-r* variants detected as reasoning models');
-  assertContains(fnBody, 'reasoner', 'reasoner keyword still detected');
-  assertContains(fnBody, "startsWith('o1')", 'OpenAI o-series still detected');
-}
+assert(!/function isReasoningModel/.test(modelsContent),
+  'no model-id based reasoning detection remains in llmOpenai.ts');
+assertContains(modelsContent, 'config.thinking', 'the provider reads thinking from the model config');
+assertContains(modelsContent, 'config.supportsReasoning', 'the provider reads supportsReasoning from the model config');
+assertContains(modelsContent, 'body.thinking = this._thinking', 'the configured thinking payload is sent as-is');
 
 // ============================================================================
 // Test 2: RunTerminal zombie process prevention
@@ -122,14 +116,17 @@ assertContains(modelsContent, 'status === 502', 'Handles 502 Bad Gateway');
 console.log('\n📁 Config Integrity:');
 
 const configPath = path.join(__dirname, 'config.yaml');
-const configContent = fs.readFileSync(configPath, 'utf-8');
-
-assert(configContent.includes('max_steps: 999999'), 'config.yaml has unlimited max_steps');
-assert(configContent.includes('max_context_tokens: 200000'), 'config.yaml has 200K context tokens');
-assert(configContent.includes('step_timeout: 120000'), 'config.yaml has 2min step timeout');
-
-// Verify no API key leakage in test (just check key is present but not printing it)
-assert(configContent.includes('api_key:'), 'config.yaml has api_key configured');
+if (fs.existsSync(configPath)) {
+  const configContent = fs.readFileSync(configPath, 'utf-8');
+  assert(configContent.includes('max_steps: 999999'), 'config.yaml has unlimited max_steps');
+  assert(configContent.includes('max_context_tokens: 200000'), 'config.yaml has 200K context tokens');
+  assert(configContent.includes('step_timeout: 120000'), 'config.yaml has 2min step timeout');
+  // Verify no API key leakage in test (just check key is present but not printing it)
+  assert(configContent.includes('api_key:'), 'config.yaml has api_key configured');
+} else {
+  console.log('  ⏭️  SKIP: root config.yaml is not present (user config lives under ~/.agent)');
+  skipped++;
+}
 
 // ============================================================================
 // Test 8: All 7 tools properly registered in main.ts
@@ -192,7 +189,8 @@ if (fs.existsSync(buildPath)) {
   assertContains(buildContent, 'instance.dispose()', 'Build: terminal cleanup present');
   assertContains(buildContent, 'MAX_SUMMARY_RETRIES', 'Build: summary retry present');
   assertContains(buildContent, 'checkpointManager.clone()', 'Build: checkpoint isolation present');
-  assertContains(buildContent, 'deepseek-v4-pro', 'Build: deepseek-v4-pro reasoning detection present');
+  assertContains(buildContent, 'glm-5.3', 'Build: glm-5.3 default model present');
+  assert(!buildContent.includes('isReasoningModel'), 'Build: no model-id based reasoning detection');
   assertContains(buildContent, 'Command blocked by safety filter', 'Build: dangerous command filter present');
   
   // Verify no hardcoded step limits
