@@ -7,15 +7,17 @@
  *  - List sessions with metadata (mode, message count, timestamps)
  *  - Resume a previous session with full context restoration
  *  - Delete sessions
- *  - Storage: <agent home>/sessions/ as JSON files (~/.agent)
+ *  - Storage: <sessions dir>/ as JSON files — `<agent home>/sessions` (~/.agent)
+ *    unless the run redirected it (`--sessions-dir` / `--state-dir`, see
+ *    agentStorage.ts). The directory is resolved per call so automated runs can
+ *    point their session dumps somewhere else than the real history.
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AgentMode, IAgentMessage, IAgentPlan, IAgentSession, MessageRole } from 'vs/workbench/services/agent/common/agentModels';
-import { agentHomeDir } from './agentHome';
+import { sessionsDir as resolveSessionsDir } from './agentStorage';
 
-const SESSIONS_DIR = path.join(agentHomeDir(), 'sessions');
 const INDEX_FILE = '_index.json';
 
 interface SessionIndex {
@@ -33,21 +35,32 @@ export class AgentSessionManager {
 	private _index: SessionIndex = {};
 	private _indexLoaded = false;
 
-	constructor(private _workingDirectory: string = process.cwd()) { }
+	constructor(private _workingDirectory: string = process.cwd(), private readonly _dirOverride?: string) { }
+
+	/**
+	 * Directory this manager reads/writes.
+	 *
+	 * Resolved per call (not at import time) so `--sessions-dir` / `--state-dir`
+	 * / `AGENT_SESSIONS_DIR` redirect the store without the CLI having to thread a
+	 * path through every caller.
+	 */
+	private get _dir(): string {
+		return this._dirOverride ?? resolveSessionsDir();
+	}
 
 	/**
 	 * Ensure sessions directory exists and load index.
 	 */
 	private _ensureDir(): void {
-		if (!fs.existsSync(SESSIONS_DIR)) {
-			fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+		if (!fs.existsSync(this._dir)) {
+			fs.mkdirSync(this._dir, { recursive: true });
 		}
 	}
 
 	private _loadIndex(): void {
 		if (this._indexLoaded) return;
 		this._ensureDir();
-		const indexPath = path.join(SESSIONS_DIR, INDEX_FILE);
+		const indexPath = path.join(this._dir, INDEX_FILE);
 		if (fs.existsSync(indexPath)) {
 			try {
 				this._index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
@@ -60,7 +73,7 @@ export class AgentSessionManager {
 
 	private _saveIndex(): void {
 		this._ensureDir();
-		const indexPath = path.join(SESSIONS_DIR, INDEX_FILE);
+		const indexPath = path.join(this._dir, INDEX_FILE);
 		fs.writeFileSync(indexPath, JSON.stringify(this._index, null, 2), 'utf-8');
 	}
 
@@ -96,7 +109,7 @@ export class AgentSessionManager {
 
 		// Save session data file
 		this._ensureDir();
-		const sessionPath = path.join(SESSIONS_DIR, `${id}.json`);
+		const sessionPath = path.join(this._dir, `${id}.json`);
 		fs.writeFileSync(sessionPath, JSON.stringify(session, null, 2), 'utf-8');
 
 		// Update index
@@ -118,7 +131,7 @@ export class AgentSessionManager {
 	 */
 	loadSession(id: string): IAgentSession | undefined {
 		this._loadIndex();
-		const sessionPath = path.join(SESSIONS_DIR, `${id}.json`);
+		const sessionPath = path.join(this._dir, `${id}.json`);
 		if (!fs.existsSync(sessionPath)) {
 			return undefined;
 		}
@@ -173,7 +186,7 @@ export class AgentSessionManager {
 	 */
 	deleteSession(id: string): boolean {
 		this._loadIndex();
-		const sessionPath = path.join(SESSIONS_DIR, `${id}.json`);
+		const sessionPath = path.join(this._dir, `${id}.json`);
 		let deleted = false;
 		if (fs.existsSync(sessionPath)) {
 			fs.unlinkSync(sessionPath);

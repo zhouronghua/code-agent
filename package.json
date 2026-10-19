@@ -1,6 +1,6 @@
 {
   "name": "@zhouronghua/code-agent",
-  "version": "0.3.51",
+  "version": "0.3.52",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
@@ -43,6 +43,8 @@
     "start:mock": "MOCK_LLM=1 node standalone-demo/agent.mjs",
     "test:model-switch": "esbuild tests/model-switch.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/model-switch.test.mjs --tsconfig=tsconfig.json && node build/model-switch.test.mjs",
     "test:agent-home": "esbuild tests/agent-home.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/agent-home.test.mjs --tsconfig=tsconfig.json && node build/agent-home.test.mjs",
+    "test:storage-mock": "esbuild tests/storage-tool-mock.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/storage-tool-mock.test.mjs --tsconfig=tsconfig.json && node build/storage-tool-mock.test.mjs",
+    "test:state-mock": "node scripts/verify-state-mock.mjs",
     "test:tracing": "esbuild tests/langfuse-tracing.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/langfuse-tracing.test.mjs --tsconfig=tsconfig.json --external:@langfuse/* --external:@opentelemetry/* && node build/langfuse-tracing.test.mjs",
     "test:self-improve": "esbuild tests/self-improve.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/self-improve.test.mjs --tsconfig=tsconfig.json && node build/self-improve.test.mjs",
     "test:harness": "esbuild tests/agent-harness.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/agent-harness.test.mjs --tsconfig=tsconfig.json && node build/agent-harness.test.mjs",
@@ -50,7 +52,7 @@
     "test:pairing": "esbuild tests/tool-call-pairing.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/tool-call-pairing.test.mjs --tsconfig=tsconfig.json && node build/tool-call-pairing.test.mjs",
     "test:memory-workspace": "esbuild tests/memory-workspace.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/memory-workspace.test.mjs --tsconfig=tsconfig.json && node build/memory-workspace.test.mjs",
     "test:e2e-anthropic": "node tests/e2e-anthropic-cache.mjs",
-    "test": "npm run test:model-switch && npm run test:agent-home && npm run test:tracing && npm run test:self-improve && npm run test:harness && npm run test:btw && npm run test:pairing && npm run test:memory-workspace",
+    "test": "npm run test:model-switch && npm run test:agent-home && npm run test:storage-mock && npm run test:tracing && npm run test:self-improve && npm run test:harness && npm run test:btw && npm run test:pairing && npm run test:memory-workspace",
     "clean": "rm -rf build",
     "pack": "npm run build:release && npm pack",
     "link": "npm run build && npm link",

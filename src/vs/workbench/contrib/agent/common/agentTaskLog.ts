@@ -5,15 +5,16 @@
  *  - Auto-save after each task execution (LLM calls, tool invocations, results)
  *  - List task logs with metadata (task summary, duration, status, timestamps)
  *  - View full task execution trace (step-by-step LLM interactions + tool results)
- *  - Storage: <agent home>/tasks/ as JSON files (~/.agent)
+ *  - Storage: <tasks dir>/ as JSON files — `<agent home>/tasks` (~/.agent) unless
+ *    the run redirected it (`--tasks-dir` / `--state-dir`, see agentStorage.ts).
+ *    Resolved per call so a benchmark can keep its logs out of the real history.
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { IAgentTaskLog } from 'vs/workbench/services/agent/common/agentModels';
-import { agentHomeDir } from './agentHome';
+import { tasksDir as resolveTasksDir } from './agentStorage';
 
-const TASKS_DIR = path.join(agentHomeDir(), 'tasks');
 const TASK_INDEX_FILE = '_index.json';
 
 interface TaskIndexEntry {
@@ -37,18 +38,28 @@ export class TaskLogManager {
 	private _index: TaskIndex = {};
 	private _indexLoaded = false;
 
-	constructor() { }
+	constructor(private readonly _dirOverride?: string) { }
+
+	/**
+	 * Directory this manager reads/writes.
+	 *
+	 * Resolved per call (not at import time) so `--tasks-dir` / `--state-dir` /
+	 * `AGENT_TASKS_DIR` redirect the store without threading a path everywhere.
+	 */
+	private get _dir(): string {
+		return this._dirOverride ?? resolveTasksDir();
+	}
 
 	private _ensureDir(): void {
-		if (!fs.existsSync(TASKS_DIR)) {
-			fs.mkdirSync(TASKS_DIR, { recursive: true });
+		if (!fs.existsSync(this._dir)) {
+			fs.mkdirSync(this._dir, { recursive: true });
 		}
 	}
 
 	private _loadIndex(): void {
 		if (this._indexLoaded) return;
 		this._ensureDir();
-		const indexPath = path.join(TASKS_DIR, TASK_INDEX_FILE);
+		const indexPath = path.join(this._dir, TASK_INDEX_FILE);
 		if (fs.existsSync(indexPath)) {
 			try {
 				this._index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
@@ -61,7 +72,7 @@ export class TaskLogManager {
 
 	private _saveIndex(): void {
 		this._ensureDir();
-		const indexPath = path.join(TASKS_DIR, TASK_INDEX_FILE);
+		const indexPath = path.join(this._dir, TASK_INDEX_FILE);
 		fs.writeFileSync(indexPath, JSON.stringify(this._index, null, 2), 'utf-8');
 	}
 
@@ -72,7 +83,7 @@ export class TaskLogManager {
 		this._loadIndex();
 		this._ensureDir();
 
-		const logPath = path.join(TASKS_DIR, `${log.id}.json`);
+		const logPath = path.join(this._dir, `${log.id}.json`);
 		fs.writeFileSync(logPath, JSON.stringify(log, null, 2), 'utf-8');
 
 		// Update index
@@ -96,7 +107,7 @@ export class TaskLogManager {
 	 */
 	loadTaskLog(id: string): IAgentTaskLog | undefined {
 		this._loadIndex();
-		const logPath = path.join(TASKS_DIR, `${id}.json`);
+		const logPath = path.join(this._dir, `${id}.json`);
 		if (!fs.existsSync(logPath)) {
 			return undefined;
 		}
@@ -122,7 +133,7 @@ export class TaskLogManager {
 	 */
 	deleteTaskLog(id: string): boolean {
 		this._loadIndex();
-		const logPath = path.join(TASKS_DIR, `${id}.json`);
+		const logPath = path.join(this._dir, `${id}.json`);
 		let deleted = false;
 		if (fs.existsSync(logPath)) {
 			fs.unlinkSync(logPath);

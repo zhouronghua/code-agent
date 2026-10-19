@@ -63,6 +63,8 @@ import { SelfScanTool, AgentReleaseTool } from '../../src/vs/workbench/contrib/a
 import { getSystemPrompt } from '../../src/vs/workbench/contrib/agent/common/agentPrompts';
 import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common/agentSessions';
 import { TaskLogManager } from '../../src/vs/workbench/contrib/agent/common/agentTaskLog';
+import { configureStorage, storageNotice, storageSettings } from '../../src/vs/workbench/contrib/agent/common/agentStorage';
+import { ToolMockStore, installToolMock, resolveToolMockOptions } from '../../src/vs/workbench/contrib/agent/common/agentToolMock';
 import { NodeFileService } from './nodeFileService';
 import { NodeSearchService } from './nodeSearchService';
 import { NodeTerminalService } from './nodeTerminalService';
@@ -426,6 +428,24 @@ interface CLIOptions {
 	lockFile?: string;
 	/** --cwd <dir>: change working directory before running. */
 	cwd?: string;
+	// ---- state directory control (keep automated runs out of ~/.agent) ----
+	/** --state-dir <dir>: write sessions AND task logs under this directory. */
+	stateDir?: string;
+	/** --sessions-dir <dir>: override the sessions directory only. */
+	sessionsDir?: string;
+	/** --tasks-dir <dir>: override the task-log directory only. */
+	tasksDir?: string;
+	/** --no-session-save: never write session files (task logs unaffected). */
+	noSessionSave?: boolean;
+	// ---- deterministic tool layer (record/replay tool results) ----
+	/** --tool-mock <off|record|replay>: mock read-only tool results. */
+	toolMock?: string;
+	/** --tool-mock-file <file>: JSON fixture to record into / replay from. */
+	toolMockFile?: string;
+	/** --tool-mock-tools <read|all|csv>: which tools the mock covers. */
+	toolMockTools?: string;
+	/** --tool-mock-strict: a replay miss fails instead of executing live. */
+	toolMockStrict?: boolean;
 	/** --step-timeout <ms>: override the per-tool-call timeout. */
 	stepTimeout?: number;
 	/** --mcp <off|on|name1,name2>: enable MCP servers for this run. */
@@ -552,6 +572,36 @@ function parseArgs(): CLIOptions {
 				i++;
 				opts.cwd = args[i];
 				break;
+			case '--state-dir':
+				i++;
+				opts.stateDir = args[i];
+				break;
+			case '--sessions-dir':
+				i++;
+				opts.sessionsDir = args[i];
+				break;
+			case '--tasks-dir':
+				i++;
+				opts.tasksDir = args[i];
+				break;
+			case '--no-session-save':
+				opts.noSessionSave = true;
+				break;
+			case '--tool-mock':
+				i++;
+				opts.toolMock = args[i] || 'record';
+				break;
+			case '--tool-mock-file':
+				i++;
+				opts.toolMockFile = args[i];
+				break;
+			case '--tool-mock-tools':
+				i++;
+				opts.toolMockTools = args[i];
+				break;
+			case '--tool-mock-strict':
+				opts.toolMockStrict = true;
+				break;
 			case '--step-timeout':
 				i++;
 				opts.stepTimeout = parseInt(args[i], 10) || 0;
@@ -627,6 +677,17 @@ Options:
   --lock <file>               Skip the run if another process holds the lock
   --cwd <dir>                 Change working directory before running
   --step-timeout <ms>         Override the per-tool-call timeout
+  --state-dir <dir>           Write sessions AND task logs under <dir>
+                              (keeps benchmark runs out of ~/.agent)
+  --sessions-dir <dir>        Override the sessions directory only
+  --tasks-dir <dir>           Override the task-log directory only
+  --no-session-save           Never write session files (task logs unaffected)
+  --tool-mock <off|record|replay>  Record/replay tool results for repeatable
+                              regression runs (default: off)
+  --tool-mock-file <json>     Fixture to record into / replay from
+                              (default: <state-dir>/tool-mocks/default.json)
+  --tool-mock-tools <read|all|csv>  Tools the mock covers (default: read-only)
+  --tool-mock-strict          A replay miss fails instead of executing live
   --mcp <off|on|a,b>          Load MCP servers (on = config.yaml + mcp.json)
   --mcp-tools <a,b,c>         Only expose these MCP tools (global allowlist)
   --help                      Show this help
@@ -650,13 +711,24 @@ Session Management:
   - Auto-save: after each run, the session is saved automatically.
   - REPL commands: /save, /sessions, /resume, /new, /auto-save
   - Tab-completion: press Tab to auto-complete /resume, /mode, /profile, /skill, etc.
-  - Storage: ~/.agent/sessions/
+  - Storage: ~/.agent/sessions/ (redirect with --state-dir / --sessions-dir,
+    or switch off with --no-session-save; env AGENT_STATE_DIR / AGENT_SESSIONS_DIR
+    / AGENT_SAVE_SESSIONS, or config.yaml storage: block)
 
 Task Logs (for troubleshooting):
   - Auto-save: after each task, a detailed execution log is saved automatically.
   - Includes: LLM requests/responses, tool calls with arguments and results, timings.
   - REPL commands: /tasks, /task <id>, /delete-task <id>
-  - Storage: ~/.agent/tasks/
+  - Storage: ~/.agent/tasks/ (redirect with --state-dir / --tasks-dir, env
+    AGENT_STATE_DIR / AGENT_TASKS_DIR, or config.yaml storage: block)
+
+Deterministic tool layer (regression benchmarks):
+  --tool-mock record --tool-mock-file /tmp/bm/001.json "task"   # record once
+  --tool-mock replay --tool-mock-file /tmp/bm/001.json "task"   # same results
+  Only read-only tools are mocked by default (read_file, list_directory,
+  search_text, search_files, search_content); write/edit/terminal keep running
+  for real so the workspace verifications still hold. Workspace and home paths
+  are tokenized in the fixture, so it replays in a fresh temp workspace.
 
 Intervention:
   /btw <hint>    While the agent is running, inject a hint into its reasoning
@@ -836,6 +908,39 @@ async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 
 			} catch (e) {
 				console.log(`${C.yellow}[MCP]${C.reset} failed to load MCP servers: ${(e as Error).message}`);
 			}
+		}
+	}
+
+	// ---- Deterministic tool layer (record / replay) ----
+	// Opt-in: --tool-mock record|replay (or AGENT_TOOL_MOCK). Read-only tools are
+	// mocked by default; the fixture lives at <state-dir>/tool-mocks/default.json
+	// unless --tool-mock-file points elsewhere. Recording/replaying keeps a
+	// regression run's tool results identical, so changed benchmark numbers come
+	// from the agent, not from filesystem ordering or temp paths.
+	const mockOptions = resolveToolMockOptions(
+		{
+			mode: opts?.toolMock,
+			file: opts?.toolMockFile,
+			tools: opts?.toolMockTools,
+			strict: opts?.toolMockStrict,
+		},
+		process.env,
+		storageSettings().stateDir,
+	);
+	if (mockOptions.mode !== 'off') {
+		try {
+			const store = new ToolMockStore(mockOptions);
+			const wrapped = installToolMock(toolRegistry, store, msg => console.log(`${C.magenta}[MOCK]${C.reset} ${msg}`));
+			if (wrapped === 0) {
+				console.log(`${C.yellow}[MOCK]${C.reset} no tool matched "${mockOptions.tools?.join(',') ?? 'all'}" — mock inactive`);
+			} else if (mockOptions.mode === 'replay') {
+				const hint = store.entryCount === 0
+					? ' (fixture is EMPTY — every call will execute live and be recorded; run once with --tool-mock record first)'
+					: ` (${store.entryCount} recorded result(s))`;
+				console.log(`${C.dim}[MOCK] replay${mockOptions.strict ? ' strict' : ''}${hint}${C.reset}`);
+			}
+		} catch (e) {
+			console.log(`${C.yellow}[MOCK]${C.reset} failed to initialise the tool mock: ${(e as Error).message}`);
 		}
 	}
 
@@ -1075,6 +1180,22 @@ async function main() {
 	if (opts.cwd) {
 		try { process.chdir(expandHomePath(opts.cwd)); }
 		catch (e) { console.error(`${C.red}[BATCH]${C.reset} cannot chdir to ${opts.cwd}: ${(e as Error).message}`); process.exit(2); }
+	}
+
+	// Resolve WHERE this run writes its state before anything touches a store.
+	// Precedence: CLI flags → env (AGENT_STATE_DIR / AGENT_SESSIONS_DIR /
+	// AGENT_TASKS_DIR / AGENT_SAVE_SESSIONS) → config.yaml `storage:` → ~/.agent.
+	// Benchmark/CI runs point this at a throwaway directory, so the real
+	// ~/.agent/sessions does not fill up with hundreds of near-identical dumps.
+	const storage = configureStorage({
+		stateDir: opts.stateDir,
+		sessionsDir: opts.sessionsDir,
+		tasksDir: opts.tasksDir,
+		saveSessions: opts.noSessionSave ? false : undefined,
+	});
+	const storageInfo = storageNotice(storage);
+	if (storageInfo) {
+		console.log(`${C.dim}[STORAGE] ${storageInfo}${C.reset}`);
 	}
 
 	const sessionManager = new AgentSessionManager(process.cwd());
@@ -1325,7 +1446,7 @@ async function main() {
 	// ---- Session management ----
 	let currentSessionId: string | undefined;
 	let currentSessionName = '';
-	let autoSaveEnabled = true;
+	let autoSaveEnabled = storage.saveSessions;
 
 	// Determine if we should restore a session
 	const sessionToResume = opts.sessionId

@@ -181,6 +181,77 @@ export LLM_MODEL=gpt-4o
 agent-cli "create a hello world"
 ```
 
+### Session / 任务日志的导出目录（自动化运行不污染 `~/.agent`）
+
+默认情况下 session 与 task log 都写在 `~/.agent/sessions` / `~/.agent/tasks`。交互使用没问题，
+但**自动化场景**（benchmark、CI、cron 一次跑上百次 CLI）会在 `~/.agent/sessions` 里堆出成百上千份
+几乎一样的 session 文件，真正要看历史时反而不可用（实测曾累积 2000+ 份 / 539 MB）。
+
+可以把这两类状态**导出到别的目录**（优先级：命令行 > 环境变量 > `config.yaml` > 默认）：
+
+```bash
+# 方式一：命令行（推荐，自动化脚本里显式声明）
+code-agent --state-dir /tmp/agent-bm-state "task"     # sessions + tasks 都在该目录下
+code-agent --sessions-dir /tmp/bm-sessions "task"     # 只改 session 目录
+code-agent --tasks-dir    /tmp/bm-tasks    "task"     # 只改 task log 目录
+code-agent --no-session-save "task"                   # 完全不写 session 文件（task log 照写）
+
+# 方式二：环境变量
+export AGENT_STATE_DIR=/tmp/agent-bm-state
+export AGENT_SESSIONS_DIR=/tmp/bm-sessions     # 只覆盖 session
+export AGENT_TASKS_DIR=/tmp/bm-tasks           # 只覆盖 task log
+export AGENT_SAVE_SESSIONS=0                   # 关闭 session 落盘
+```
+
+```yaml
+# 方式三：config.yaml（适合固定用某个目录的场景）
+storage:
+  state_dir: /tmp/agent-bm-state     # 基准目录；sessions/ 与 tasks/ 在其下
+  sessions_dir: /tmp/bm-sessions
+  tasks_dir: /tmp/bm-tasks
+  save_sessions: false
+```
+
+路径支持 `~` / `~/...`，相对路径按当前工作目录解析。发生重定向时会打印一行提示，
+便于事后确认日志去了哪里：
+
+```
+[STORAGE] sessions → /tmp/agent-bm-state/sessions | tasks → /tmp/agent-bm-state/tasks (cli flag)
+```
+
+`--sessions` / `--tasks` 列表与 `/sessions`、`/tasks`、`--resume` 等命令都跟随同一套设置。
+
+### 工具 mock（让多次运行的 tool 结果保持一致）
+
+LLM 本身是非确定的，但工具层还会额外引入噪声：`list_directory` 的返回顺序、`run_terminal` 的输出、
+`read_file` 里回显的临时工作区路径……做 agent 回归基准时，这些噪声会淹没真实变化。
+
+`--tool-mock` 提供了**录制 / 回放**的工具层，使重复运行拿到**完全一致的工具结果**：
+
+```bash
+# 第一次：真实执行并录制
+code-agent --tool-mock record --tool-mock-file /tmp/bm/001.json "task"
+
+# 之后：回放录制结果（不再碰文件系统，也不再耗时）
+code-agent --tool-mock replay --tool-mock-file /tmp/bm/001.json "task"
+```
+
+要点：
+
+- **默认只 mock 只读工具**：`read_file` / `list_directory` / `search_text` / `search_files` /
+  `search_content`。`write_file` / `edit_file` / `run_terminal` / `poll` 仍然**真实执行**，
+  否则工作区不会被修改，任务自身的验收（文件存在 / 内容正确）就失效了。
+  用 `--tool-mock-tools all`（或 `read_file,list_directory`）改变覆盖范围。
+- **工作区无关**：fixture 里的绝对路径会被替换成 `{{WS}}` / `{{HOME}}` 占位符，因此在
+  `mkdtemp` 出来的新工作区里同样可以回放（benchmark 每个 task 都是新目录）。
+- **调用序号**：同一工具 + 同一参数的多次调用按顺序对应多条记录（读同一个文件两次会得到两条不同结果）。
+- **miss 行为**：回放时若 fixture 里没有对应记录，默认**真实执行一次并补录**（自愈）；
+  加 `--tool-mock-strict` 则直接返回失败结果，让缺失暴露出来。
+- 环境变量形式：`AGENT_TOOL_MOCK=record|replay`、`AGENT_TOOL_MOCK_FILE`、
+  `AGENT_TOOL_MOCK_TOOLS`、`AGENT_TOOL_MOCK_STRICT`。
+- fixture 默认落在 `<state-dir>/tool-mocks/default.json`。
+- 注意：`--parallel` 模式下多个 agent 共享同一个 fixture，调用顺序不确定，不建议组合使用。
+
 ### 多 Profile 支持
 
 可以在一个配置文件中定义多个 profile，通过 `--profile` 切换：

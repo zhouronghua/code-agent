@@ -64,6 +64,21 @@ export class ToolRegistry {
 		this._aliases.set(alias, targetName);
 	}
 
+	/**
+	 * Replace every registered tool through `fn` (aliases keep working, because
+	 * an alias resolves to the entry stored here).
+	 *
+	 * Used by the tool-mock layer (`agentToolMock.ts`) to interpose record /
+	 * replay in front of a chosen subset of tools without touching the agent
+	 * loop or the individual tool implementations.
+	 */
+	decorate(fn: (tool: AgentTool) => AgentTool): void {
+		for (const [name, tool] of this._tools) {
+			const next = fn(tool);
+			if (next !== tool) this._tools.set(name, next);
+		}
+	}
+
 	get(name: string): AgentTool | undefined {
 		// Check direct name first, then alias
 		const tool = this._tools.get(name);

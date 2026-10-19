@@ -79,6 +79,24 @@ rules:
   - ~/.agent/rules
   - .agent/rules
 
+# Where this installation writes RUNTIME STATE (session dumps + task logs).
+#
+# Default: sessions → ~/.agent/sessions, tasks → ~/.agent/tasks. That is right
+# for interactive use, but an automated/benchmark run that launches the CLI
+# hundreds of times leaves hundreds of near-identical session files behind.
+# Redirect them for those runs (CLI > env > this section > default):
+#   --state-dir <dir>       both sessions and task logs
+#   --sessions-dir <dir>    sessions only
+#   --tasks-dir <dir>       task logs only
+#   --no-session-save       never write session files
+#   AGENT_STATE_DIR / AGENT_SESSIONS_DIR / AGENT_TASKS_DIR / AGENT_SAVE_SESSIONS
+#
+# storage:
+#   state_dir: /tmp/agent-bm-state     # base dir; sessions/ and tasks/ live under it
+#   sessions_dir: /tmp/agent-bm-sessions
+#   tasks_dir: /tmp/agent-bm-tasks
+#   save_sessions: true                # false = session files are never written
+
 # MCP (Model Context Protocol) servers
 # Each server provides additional tools the agent can invoke.
 # mcp_servers:
