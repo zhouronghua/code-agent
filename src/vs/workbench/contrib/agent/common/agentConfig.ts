@@ -454,10 +454,24 @@ const MIN_INPUT_BUDGET = 4096;
  * to list every skill twice in the prompt.
  */
 function defaultDirs(kind: 'skills' | 'rules'): string[] {
-	const dirs = [
+	return [
 		...agentHomeDirs().map(dir => path.join(dir, kind)),
 		path.join(os.homedir(), '.cursor', kind),
 	];
+}
+
+/**
+ * Collapse directory lists that point at the same place.
+ *
+ * The same skills directory shows up more than once in practice: a config.yaml
+ * that lists both `~/.agents/skills` and the cwd-relative `.agents/skills`
+ * (identical when the CLI runs from `$HOME`), or the post-migration layout where
+ * `~/.agent/skills` is a symlink to `~/.agents/skills`. Every duplicate listed
+ * each skill a second time in the prompt (observed: 48 skills logged for 24
+ * real ones), so the list is de-duplicated by REAL path, keeping the first
+ * (most authoritative) entry.
+ */
+function dedupeByRealPath(dirs: string[]): string[] {
 	const seen = new Set<string>();
 	const unique: string[] = [];
 	for (const dir of dirs) {
@@ -563,8 +577,8 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		taskTimeout: fileConfig.agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,
 	};
 
-	const skillsDirs = (fileConfig.skills || defaultDirs('skills')).map(resolveHomePath);
-	const rulesDirs = (fileConfig.rules || defaultDirs('rules')).map(resolveHomePath);
+	const skillsDirs = dedupeByRealPath((fileConfig.skills || defaultDirs('skills')).map(resolveHomePath));
+	const rulesDirs = dedupeByRealPath((fileConfig.rules || defaultDirs('rules')).map(resolveHomePath));
 
 	const mcpServers: McpServerEntry[] = Object.entries(fileConfig.mcp_servers || {}).map(
 		([name, srv]) => ({ name, ...srv })

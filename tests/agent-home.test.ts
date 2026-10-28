@@ -118,6 +118,21 @@ function testHomeResolution(): void {
 		const homeRules = resolved.rulesDirs.filter(d => !d.includes(`${path.sep}.cursor${path.sep}`));
 		eq(homeRules.join(','), path.join(override, 'rules'),
 			'default rules dir is the override home only (no legacy leak)');
+
+		// A config naming the same skills dir twice — directly and through a symlink —
+		// must not list every skill twice (observed: 48 logged for 24 real skills).
+		fs.mkdirSync(path.join(override, 'skills'), { recursive: true });
+		fs.symlinkSync(path.join(override, 'skills'), path.join(override, 'skills-alias'), 'dir');
+		fs.writeFileSync(path.join(override, 'config.yaml'), [
+			'active_profile: x',
+			'skills:',
+			`  - ${path.join(override, 'skills')}`,
+			`  - ${path.join(override, 'skills')}`,
+			`  - ${path.join(override, 'skills-alias')}`,
+			'',
+		].join('\n'));
+		eq(loadConfig().skillsDirs.join(','), path.join(override, 'skills'),
+			'duplicate / symlinked skills dirs collapse to one entry');
 	} finally {
 		if (previous === undefined) delete process.env.AGENT_HOME;
 		else process.env.AGENT_HOME = previous;
