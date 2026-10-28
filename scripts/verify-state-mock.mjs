@@ -11,7 +11,7 @@
  *   run 3  --no-session-save   → no session file is written at all
  *
  * Verifies:
- *   1. nothing is written to ~/.agent/sessions or ~/.agent/tasks
+ *   1. nothing is written to ~/.agents/sessions or ~/.agents/tasks
  *   2. the session file + task log appear under --state-dir
  *   3. the fixture file appears and stores a {{WS}} token
  *   4. the FIRST read_file result of each run is identical modulo the workspace
@@ -90,8 +90,8 @@ function newestFile(dir) {
 	return path.join(dir, files[0]);
 }
 
-const realSessions = path.join(os.homedir(), '.agent', 'sessions');
-const realTasks = path.join(os.homedir(), '.agent', 'tasks');
+const realSessions = path.join(os.homedir(), '.agents', 'sessions');
+const realTasks = path.join(os.homedir(), '.agents', 'tasks');
 const before = { s: new Set(fs.existsSync(realSessions) ? fs.readdirSync(realSessions) : []), t: new Set(fs.existsSync(realTasks) ? fs.readdirSync(realTasks) : []) };
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-e2e-state-'));
@@ -132,8 +132,8 @@ try {
 
 	const newSessions = fs.existsSync(realSessions) ? fs.readdirSync(realSessions).filter(f => !before.s.has(f)) : [];
 	const newTasks = fs.existsSync(realTasks) ? fs.readdirSync(realTasks).filter(f => !before.t.has(f)) : [];
-	ok(newSessions.length === 0, `no new session leaked into ~/.agent/sessions (${newSessions.length})`);
-	ok(newTasks.length === 0, `no new task log leaked into ~/.agent/tasks (${newTasks.length})`);
+	ok(newSessions.length === 0, `no new session leaked into ~/.agents/sessions (${newSessions.length})`);
+	ok(newTasks.length === 0, `no new task log leaked into ~/.agents/tasks (${newTasks.length})`);
 
 	const log1 = JSON.parse(fs.readFileSync(taskFile, 'utf-8'));
 

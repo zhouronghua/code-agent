@@ -6,7 +6,7 @@
  *  the Memory hub (L0 conversation → L1 atom → L2 scenario → L3 persona).
  *
  *  Config resolution (highest priority first):
- *    1. config.yaml `memory:` section  (~/.agent/config.yaml or ./config.yaml)
+ *    1. config.yaml `memory:` section  (~/.agents/config.yaml or ./config.yaml)
  *    2. <agent home>/mcp.json  `mcpServers.tdai_agent_mem` entry
  *
  *  mcp.json example:

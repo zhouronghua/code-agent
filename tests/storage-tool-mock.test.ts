@@ -2,7 +2,7 @@
  *  Unit tests: state-directory control + deterministic tool layer
  *
  *  [1] `storage:` config parsing (config.yaml syntax used in the docs)
- *  [2] storage precedence: CLI → env → config.yaml → ~/.agent default
+ *  [2] storage precedence: CLI → env → config.yaml → ~/.agents default
  *  [3] the redirected directories are what the session / task-log stores write to
  *  [4] tool mock: record → replay yields identical results in a NEW workspace
  *  [5] tool mock: occurrence indexing, strict miss, live fallback on a miss
@@ -94,7 +94,7 @@ function testYamlParsing(): void {
 function testPrecedence(): void {
 	console.log('\n[2] storage resolution precedence');
 
-	const home = '/home/tester/.agent';
+	const home = '/home/tester/.agents';
 	const env: NodeJS.ProcessEnv = {};
 
 	const defaults = resolveStorageSettings({}, env, {}, home);
@@ -160,8 +160,8 @@ function testStoresFollowRedirect(): void {
 		const id = sessionManager.generateId();
 		sessionManager.saveSession(id, 'bench run', 'agent' as any, []);
 		ok(fs.existsSync(path.join(root, 'sessions', `${id}.json`)), 'the session file lands in the redirected dir');
-		ok(!fs.existsSync(path.join(os.homedir(), '.agent', 'sessions', `${id}.json`)),
-			'nothing is written to the real ~/.agent/sessions');
+		ok(!fs.existsSync(path.join(os.homedir(), '.agents', 'sessions', `${id}.json`)),
+			'nothing is written to the real ~/.agents/sessions');
 		eq(sessionManager.listSessions().length, 1, 'the redirected store indexes the new session');
 
 		const taskLogManager = new TaskLogManager();

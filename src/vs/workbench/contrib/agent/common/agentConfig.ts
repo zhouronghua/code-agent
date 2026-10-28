@@ -5,8 +5,9 @@
  *    1. CLI flags (--profile, --model, etc.)
  *    2. Environment variables (OPENAI_API_KEY, LLM_MODEL, etc.)
  *    3. Project config.yaml / config.json (in CWD)
- *    4. Global ~/.agent/config.yaml / config.json (legacy ~/.codeagent still read)
- *    5. models.json (CodeBuddy-compatible, ~/.agent/models.json or ~/.codebuddy/models.json)
+ *    4. Global ~/.agents/config.yaml / config.json (legacy ~/.agent and
+ *       ~/.codeagent are still read, and migrated on first start)
+ *    5. models.json (CodeBuddy-compatible, ~/.agents/models.json or ~/.codebuddy/models.json)
  *    6. Built-in defaults
  *--------------------------------------------------------------------------------------------*/
 
@@ -14,7 +15,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { IAgentConfig, DEFAULT_AGENT_CONFIG } from 'vs/workbench/services/agent/common/agentModels';
-import { agentHomeFileCandidates } from './agentHome';
+import { agentHomeDirs, agentHomeFileCandidates } from './agentHome';
 
 /**
  * Remove a trailing YAML comment from a scalar value.
@@ -440,12 +441,34 @@ function profileToAgentConfig(profile: ConfigProfile, agent: ConfigFile['agent']
 const MIN_INPUT_BUDGET = 4096;
 
 /**
- * Where skills/rules live when config.yaml does not say. `~/.agent` is the
- * current home; `~/.codeagent` and `~/.cursor` stay supported so an existing
- * installation keeps working without editing its config.
+ * Where skills/rules live when config.yaml does not say.
+ *
+ * Derived from the agent home (`agentHomeDirs()`) instead of hard-coded `~/...`
+ * literals so the resolution follows the home exactly: `~/.agents` (current,
+ * mainstream plural layout) first, then the legacy `~/.agent` / `~/.codeagent`,
+ * and an `AGENT_HOME` override without leaking the real user home. `~/.cursor`
+ * stays supported (Cursor-compatible installs) on top of the home.
+ *
+ * Duplicates are collapsed by REAL path: after the migration `~/.agent/skills`
+ * is a symlink to `~/.agents/skills`, and loading the same directory twice used
+ * to list every skill twice in the prompt.
  */
-const DEFAULT_SKILLS_DIRS = ['~/.agent/skills', '~/.codeagent/skills', '~/.cursor/skills'];
-const DEFAULT_RULES_DIRS = ['~/.agent/rules', '~/.codeagent/rules', '~/.cursor/rules'];
+function defaultDirs(kind: 'skills' | 'rules'): string[] {
+	const dirs = [
+		...agentHomeDirs().map(dir => path.join(dir, kind)),
+		path.join(os.homedir(), '.cursor', kind),
+	];
+	const seen = new Set<string>();
+	const unique: string[] = [];
+	for (const dir of dirs) {
+		let key = dir;
+		try { key = fs.realpathSync(dir); } catch { /* missing dir: key stays the path */ }
+		if (seen.has(key)) continue;
+		seen.add(key);
+		unique.push(dir);
+	}
+	return unique;
+}
 
 /**
  * Normalize context/output token budgets so the completion reservation can never
@@ -540,8 +563,8 @@ export function loadConfig(cliProfile?: string): ResolvedConfig {
 		taskTimeout: fileConfig.agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout,
 	};
 
-	const skillsDirs = (fileConfig.skills || DEFAULT_SKILLS_DIRS).map(resolveHomePath);
-	const rulesDirs = (fileConfig.rules || DEFAULT_RULES_DIRS).map(resolveHomePath);
+	const skillsDirs = (fileConfig.skills || defaultDirs('skills')).map(resolveHomePath);
+	const rulesDirs = (fileConfig.rules || defaultDirs('rules')).map(resolveHomePath);
 
 	const mcpServers: McpServerEntry[] = Object.entries(fileConfig.mcp_servers || {}).map(
 		([name, srv]) => ({ name, ...srv })

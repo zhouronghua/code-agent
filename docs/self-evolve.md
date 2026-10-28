@@ -112,7 +112,7 @@ of re-running until green.
 ## Configuration
 
 ```yaml
-# ~/.agent/config.yaml  (or ./config.yaml for one project)
+# ~/.agents/config.yaml  (or ./config.yaml for one project)
 self_update:
   enabled: true            # register agent_self_scan (read-only)
   allow_release: false     # register agent_release (writes the repo, commits)

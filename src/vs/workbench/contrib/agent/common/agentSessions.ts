@@ -7,7 +7,7 @@
  *  - List sessions with metadata (mode, message count, timestamps)
  *  - Resume a previous session with full context restoration
  *  - Delete sessions
- *  - Storage: <sessions dir>/ as JSON files — `<agent home>/sessions` (~/.agent)
+ *  - Storage: <sessions dir>/ as JSON files — `<agent home>/sessions` (~/.agents)
  *    unless the run redirected it (`--sessions-dir` / `--state-dir`, see
  *    agentStorage.ts). The directory is resolved per call so automated runs can
  *    point their session dumps somewhere else than the real history.

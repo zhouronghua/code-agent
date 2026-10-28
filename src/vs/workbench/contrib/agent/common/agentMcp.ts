@@ -11,7 +11,7 @@
  *
  *  Servers are resolved from:
  *    1. config.yaml `mcp_servers:`   (ResolvedConfig.mcpServers)
- *    2. <agent home>/mcp.json        (Cursor / VS Code compatible, ~/.agent)
+ *    2. <agent home>/mcp.json        (Cursor / VS Code compatible, ~/.agents)
  *
  *  Per-server `tools: [..]` is an optional allowlist. This matters because some
  *  gateways (e.g. dolphin) advertise 180+ tools; without an allowlist the prompt

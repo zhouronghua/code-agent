@@ -35,7 +35,7 @@
  *    1. environment: LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL
  *       (or LANGFUSE_HOST), LANGFUSE_TRACING_ENVIRONMENT, LANGFUSE_RELEASE,
  *       LANGFUSE_TRACING_ENABLED=0|false to force off, LANGFUSE_CAPTURE_CONTENT=0|false
- *    2. config.yaml `tracing:` section (project ./config.yaml or ~/.agent/config.yaml)
+ *    2. config.yaml `tracing:` section (project ./config.yaml or ~/.agents/config.yaml)
  *    3. CLI flag `--tracing on|off`
  *
  *  Verified against @langfuse/tracing + @langfuse/otel 5.11.1 (the current SDK

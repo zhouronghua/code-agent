@@ -93,7 +93,7 @@ chmod +x code-agent-portable-linux-x64
   `[TRACING] Langfuse SDK failed to load — tracing disabled for this run`，
   其余功能不受影响。需要 tracing 请用方法一 / 方法二（npm 安装）。
 - 使用方法三/方法四一致的配置方式：把 `config.template.yaml` 复制为
-  `~/.agent/config.yaml` 并填入 API key 即可。
+  `~/.agents/config.yaml` 并填入 API key 即可。
 
 ## 配置
 
@@ -108,8 +108,8 @@ CodeAgent 通过 YAML 配置文件管理 LLM 提供商和参数，**不需要每
 cp config.template.yaml config.yaml
 
 # 或者全局配置（所有项目共享）
-mkdir -p ~/.agent
-cp config.template.yaml ~/.agent/config.yaml
+mkdir -p ~/.agents
+cp config.template.yaml ~/.agents/config.yaml
 ```
 
 ### 第二步：填入 API 密钥
@@ -134,36 +134,40 @@ profiles:
 1. CLI 参数（`--profile`、`--mode` 等）
 2. 环境变量（`OPENAI_API_KEY`、`LLM_MODEL`、`LLM_PROVIDER`、`LLM_API_BASE`）
 3. 项目目录下的 `config.yaml`
-4. `~/.agent/config.yaml`
+4. `~/.agents/config.yaml`
 5. 内置默认值
 
-### 配置目录（`~/.agent`）与全局规则 `agent.md`
+### 配置目录（`~/.agents`）与全局规则 `agent.md`
 
-自 v0.3.37 起，全局配置目录从 `~/.codeagent` 调整为 **`~/.agent`**（对齐 Claude 的
-`~/.claude` 布局），且 **`~/.agent` 是数据的唯一所有者**：首次启动会把已有安装迁移过去，
-`~/.codeagent` 只留下软连接，确认无依赖后可以整目录删除。
+自 v0.3.53 起，全局配置目录改为主流约定的 **`~/.agents`**（复数，与 `AGENTS.md` 命名一致）。
+历史上的两个位置仍然可用：`~/.agent`（v0.3.37–v0.3.52）与 `~/.codeagent`（更早）。
+**`~/.agents` 是数据的唯一所有者**：首次启动会把已有安装迁移过去，旧目录只留下软连接，
+确认无依赖后可以整目录删除。
 
-| 内容 | 迁移方式 | 旧路径 `~/.codeagent/...` |
+| 内容 | 迁移方式 | 旧路径（`~/.agent/...`、`~/.codeagent/...`） |
 | --- | --- | --- |
-| `config.yaml` / `config.json` / `models.json` / `mcp.json` / `agent.md` | 复制到 `~/.agent` | 保留副本（仅在 `~/.agent` 缺失时兜底） |
-| `rules/` / `skills/` / `sessions/` / `tasks/`（数据主体） | **移动到 `~/.agent`** | **软连接**指向 `~/.agent/...` |
+| `config.yaml` / `config.json` / `models.json` / `mcp.json` / `agent.md` | 复制到 `~/.agents` | 保留副本（仅在 `~/.agents` 缺失时兜底） |
+| `rules/` / `skills/` / `sessions/` / `tasks/`（数据主体） | **移动到 `~/.agents`** | **软连接**指向 `~/.agents/...` |
 
-同时会把指向旧目录的**同伴软链接**（`~/.cursor/skills`、`~/.codebuddy/skills`、
-`~/.codebuddy/rules`）改指到 `~/.agent`，因此旧目录不再被任何路径依赖：
+两个旧目录按「新 → 旧」顺序迁移（先 `~/.agent`，再 `~/.codeagent`），所以两边都有数据时
+以 `~/.agent` 为准。同时会把指向旧目录的**同伴软链接**（`~/.cursor/skills`、
+`~/.codebuddy/skills`、`~/.codebuddy/rules`）改指到 `~/.agents`，因此旧目录不再被任何路径依赖：
 
 ```bash
 # 迁移完成后（旧路径全部是软连接 / 冗余副本），可安全删除：
-rm -rf ~/.codeagent
+rm -rf ~/.agent ~/.codeagent
 ```
 
 也可用环境变量 `AGENT_HOME=<dir>` 覆盖全局配置目录（便携版 / 隔离测试）。
 
-全局/项目规则支持 Claude 风格的**单文件** `agent.md`（内容始终生效）：
+全局/项目规则支持 Claude 风格的**单文件** `agent.md`（内容始终生效），加载顺序是
+「全局 → 项目」，项目级后加载，可覆盖/补充全局：
 
 ```
-~/.agent/agent.md              # 全局规则（本文档推荐的单一来源）
-<项目根>/.agent/agent.md        # 项目级规则，后加载，可覆盖/补充全局
-~/.agent/rules/*.mdc           # 兼容保留：Cursor 风格多文件规则
+~/.agents/agent.md              # 全局规则（本文档推荐的单一来源）
+<项目根>/.agents/agent.md       # 项目级规则（推荐位置）
+<项目根>/.agent/agent.md        # 旧项目位置，仍会加载（优先级低于 .agents）
+~/.agents/rules/*.mdc           # 兼容保留：Cursor 风格多文件规则
 ```
 
 `agent.md` 无需 frontmatter；若写了 frontmatter，可用 `description` 覆盖展示名，
@@ -181,10 +185,10 @@ export LLM_MODEL=gpt-4o
 agent-cli "create a hello world"
 ```
 
-### Session / 任务日志的导出目录（自动化运行不污染 `~/.agent`）
+### Session / 任务日志的导出目录（自动化运行不污染 `~/.agents`）
 
-默认情况下 session 与 task log 都写在 `~/.agent/sessions` / `~/.agent/tasks`。交互使用没问题，
-但**自动化场景**（benchmark、CI、cron 一次跑上百次 CLI）会在 `~/.agent/sessions` 里堆出成百上千份
+默认情况下 session 与 task log 都写在 `~/.agents/sessions` / `~/.agents/tasks`。交互使用没问题，
+但**自动化场景**（benchmark、CI、cron 一次跑上百次 CLI）会在 `~/.agents/sessions` 里堆出成百上千份
 几乎一样的 session 文件，真正要看历史时反而不可用（实测曾累积 2000+ 份 / 539 MB）。
 
 可以把这两类状态**导出到别的目录**（优先级：命令行 > 环境变量 > `config.yaml` > 默认）：
@@ -327,7 +331,7 @@ profile 名。存在 `model_routing` 配置段即默认启用（`enabled: false`
 [MODEL] ✓ deepseek-flash reachable again → switched back from 保底模型 gpt-5.6-luna
 ```
 
-切换的完整记录也会写入 task log 的 `modelSwitches` 字段（`~/.agent/tasks/task_*.json`），
+切换的完整记录也会写入 task log 的 `modelSwitches` 字段（`~/.agents/tasks/task_*.json`），
 便于事后定位「当时到底是哪个模型在回答」。
 
 #### 保底模型的后台探活
@@ -455,7 +459,7 @@ agent 运行中发送 `/btw <指令>` 时会先**判断这条指令与正在执�
 → 提示），无法判定时再用一次轻量 LLM 调用评估。评估超时或失败一律**降级为提示**，
 绝不误杀正在跑的工作。
 
-系统会记录 `task-superseded` 信号到任务日志（`~/.agent/tasks/`），便于事后审计。
+系统会记录 `task-superseded` 信号到任务日志（`~/.agents/tasks/`），便于事后审计。
 
 ### 查看信息
 
@@ -476,7 +480,7 @@ code-agent --batch \
   --mode agent \
   --use-skill caps-llvm-nda-daily \
   --mcp on --mcp-tools "add_gerrit_review,list_pipeline_runs,trigger_pipeline" \
-  --cwd /home/ronghua.zhou/.agent/skills/caps-llvm-nda-daily \
+  --cwd /home/ronghua.zhou/.agents/skills/caps-llvm-nda-daily \
   --batch-log   logs/daily.log \
   --batch-result logs/daily.result.json \
   --lock        logs/daily.lock \
@@ -493,7 +497,7 @@ code-agent --batch \
 | `--lock <file>` | 建议锁文件；已被其它进程持有时本次直接跳过（退出 0） |
 | `--cwd <dir>` | 运行前切换工作目录 |
 | `--step-timeout <ms>` | 覆盖单次工具调用超时（长任务可调大） |
-| `--mcp <off\|on\|a,b>` | 加载 MCP 服务器（`on` = config.yaml + ~/.agent/mcp.json） |
+| `--mcp <off\|on\|a,b>` | 加载 MCP 服务器（`on` = config.yaml + ~/.agents/mcp.json） |
 | `--mcp-tools <a,b,c>` | 只暴露这些 MCP 工具（全局白名单，强烈建议） |
 
 退出码：`0` 成功 / `1` 任务失败 / `2` 用法错误 / `124` 超时；`--lock` 被占用时跳过为 `0`。
@@ -513,7 +517,7 @@ code-agent --batch \
 `--mcp` 加载 MCP 服务器并把其工具注册为 agent 工具：
 
 - `--mcp off` / 不传：只加载 `config.yaml` 的 `mcp_servers`（默认行为）；
-- `--mcp on`：加载 `config.yaml` 的 `mcp_servers` **加上** `~/.agent/mcp.json`
+- `--mcp on`：加载 `config.yaml` 的 `mcp_servers` **加上** `~/.agents/mcp.json`
   的 `mcpServers`（dolphin / opendisplay 等）；
 - `--mcp dolphin,opendisplay`：只加载指定服务器。
 
@@ -725,9 +729,9 @@ memory:
   workspace_dir: ""                   # 可选；默认取进程工作目录
 ```
 
-### 配置方式二：MCP 配置（~/.agent/mcp.json）
+### 配置方式二：MCP 配置（~/.agents/mcp.json）
 
-用户名与凭据也可以写在 `~/.agent/mcp.json` 的 `mcpServers.tdai_agent_mem` 条目：
+用户名与凭据也可以写在 `~/.agents/mcp.json` 的 `mcpServers.tdai_agent_mem` 条目：
 
 ```json
 {
@@ -938,13 +942,13 @@ node agent-cli.js "your task"
 npm install -g @zhouronghua/code-agent
 
 # 2. 创建配置（全局，只需一次）
-mkdir -p ~/.agent
+mkdir -p ~/.agents
 code-agent --help   # 查看模板位置
 # 从安装包复制模板：
-cp $(npm root -g)/@zhouronghua/code-agent/config.template.yaml ~/.agent/config.yaml
+cp $(npm root -g)/@zhouronghua/code-agent/config.template.yaml ~/.agents/config.yaml
 
 # 3. 编辑配置，填入你的 API key
-vi ~/.agent/config.yaml
+vi ~/.agents/config.yaml
 # 修改 active_profile 和对应 profile 的 api_key
 
 # 4. 验证

@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Agent Storage - WHERE a run writes its state (sessions / task logs)
  *
- *  By default state lives inside the agent home (`~/.agent/sessions`,
- *  `~/.agent/tasks`). That is right for interactive use, but wrong for
+ *  By default state lives inside the agent home (`~/.agents/sessions`,
+ *  `~/.agents/tasks`). That is right for interactive use, but wrong for
  *  automated/benchmark runs: a benchmark that launches the CLI hundreds of
  *  times leaves hundreds of near-identical session files behind (on the author's
  *  machine: 2000+ sessions / 539 MB), which makes the real history unusable.

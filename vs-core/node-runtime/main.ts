@@ -18,7 +18,7 @@
  *    1. CLI flags
  *    2. Environment variables (OPENAI_API_KEY, LLM_MODEL, etc.)
  *    3. ./config.yaml
- *    4. ~/.agent/config.yaml (legacy ~/.codeagent still read)
+ *    4. ~/.agents/config.yaml (legacy ~/.agent / ~/.codeagent still read)
  *--------------------------------------------------------------------------------------------*/
 
 import * as readline from 'node:readline';
@@ -178,7 +178,7 @@ function mergeMcpSpecs(primary: McpServerSpec[], secondary: McpServerSpec[]): Mc
 /**
  * Resolve which MCP servers to load:
  *   --mcp off            → none
- *   --mcp on             → config.yaml `mcp_servers` + ~/.agent/mcp.json
+ *   --mcp on             → config.yaml `mcp_servers` + ~/.agents/mcp.json
  *   --mcp a,b            → only the named servers from the merged set
  *   (no --mcp flag)      → config.yaml `mcp_servers` only (docs-compatible)
  */
@@ -428,7 +428,7 @@ interface CLIOptions {
 	lockFile?: string;
 	/** --cwd <dir>: change working directory before running. */
 	cwd?: string;
-	// ---- state directory control (keep automated runs out of ~/.agent) ----
+	// ---- state directory control (keep automated runs out of ~/.agents) ----
 	/** --state-dir <dir>: write sessions AND task logs under this directory. */
 	stateDir?: string;
 	/** --sessions-dir <dir>: override the sessions directory only. */
@@ -678,7 +678,7 @@ Options:
   --cwd <dir>                 Change working directory before running
   --step-timeout <ms>         Override the per-tool-call timeout
   --state-dir <dir>           Write sessions AND task logs under <dir>
-                              (keeps benchmark runs out of ~/.agent)
+                              (keeps benchmark runs out of ~/.agents)
   --sessions-dir <dir>        Override the sessions directory only
   --tasks-dir <dir>           Override the task-log directory only
   --no-session-save           Never write session files (task logs unaffected)
@@ -702,7 +702,7 @@ Batch / Cron:
 MCP tools:
   Skills such as dolphin-mcp / caps-llvm-nda-daily call external MCP tools.
   Pass --mcp on to load servers from config.yaml mcp_servers and
-  ~/.agent/mcp.json. Without --mcp only config.yaml mcp_servers load.
+  ~/.agents/mcp.json. Without --mcp only config.yaml mcp_servers load.
   Restrict the exposed tool set with --mcp-tools (recommended: some gateways
   advertise 180+ tools). A per-server "tools: [...]" entry is honoured too.
 
@@ -711,7 +711,7 @@ Session Management:
   - Auto-save: after each run, the session is saved automatically.
   - REPL commands: /save, /sessions, /resume, /new, /auto-save
   - Tab-completion: press Tab to auto-complete /resume, /mode, /profile, /skill, etc.
-  - Storage: ~/.agent/sessions/ (redirect with --state-dir / --sessions-dir,
+  - Storage: ~/.agents/sessions/ (redirect with --state-dir / --sessions-dir,
     or switch off with --no-session-save; env AGENT_STATE_DIR / AGENT_SESSIONS_DIR
     / AGENT_SAVE_SESSIONS, or config.yaml storage: block)
 
@@ -719,7 +719,7 @@ Task Logs (for troubleshooting):
   - Auto-save: after each task, a detailed execution log is saved automatically.
   - Includes: LLM requests/responses, tool calls with arguments and results, timings.
   - REPL commands: /tasks, /task <id>, /delete-task <id>
-  - Storage: ~/.agent/tasks/ (redirect with --state-dir / --tasks-dir, env
+  - Storage: ~/.agents/tasks/ (redirect with --state-dir / --tasks-dir, env
     AGENT_STATE_DIR / AGENT_TASKS_DIR, or config.yaml storage: block)
 
 Deterministic tool layer (regression benchmarks):
@@ -750,7 +750,7 @@ Modes:
 Config (searched in order):
   1. CLI flags / env vars (OPENAI_API_KEY, LLM_MODEL, etc.)
   2. ./config.yaml
-  3. ~/.agent/config.yaml
+  3. ~/.agents/config.yaml
 `);
 }
 
@@ -820,7 +820,7 @@ async function setupTracing(release: string, cliOverride?: 'on' | 'off'): Promis
 async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 'off', opts?: CLIOptions) {
 	const config = resolved.agentConfig;
 	if (!config.apiKey) {
-		console.error(`${C.red}No API key found. Set OPENAI_API_KEY, or configure apiKey in ~/.agent/models.json or config.yaml.${C.reset}`);
+		console.error(`${C.red}No API key found. Set OPENAI_API_KEY, or configure apiKey in ~/.agents/models.json or config.yaml.${C.reset}`);
 		process.exit(1);
 	}
 
@@ -868,7 +868,7 @@ async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 
 
 	// ---- Shared memory (tdai_agent_mem) ----
 	// Tools + auto recall/capture are enabled when config.yaml `memory:` or
-	// ~/.agent/mcp.json `mcpServers.tdai_agent_mem` is present.
+	// ~/.agents/mcp.json `mcpServers.tdai_agent_mem` is present.
 	// --memory off forces the feature off (deterministic benchmarks); --memory on
 	// forces it on when the config exists.
 	const memoryConfig = memoryOverride === 'off' ? undefined : loadMemoryConfig();
@@ -1184,9 +1184,9 @@ async function main() {
 
 	// Resolve WHERE this run writes its state before anything touches a store.
 	// Precedence: CLI flags → env (AGENT_STATE_DIR / AGENT_SESSIONS_DIR /
-	// AGENT_TASKS_DIR / AGENT_SAVE_SESSIONS) → config.yaml `storage:` → ~/.agent.
+	// AGENT_TASKS_DIR / AGENT_SAVE_SESSIONS) → config.yaml `storage:` → ~/.agents.
 	// Benchmark/CI runs point this at a throwaway directory, so the real
-	// ~/.agent/sessions does not fill up with hundreds of near-identical dumps.
+	// ~/.agents/sessions does not fill up with hundreds of near-identical dumps.
 	const storage = configureStorage({
 		stateDir: opts.stateDir,
 		sessionsDir: opts.sessionsDir,
@@ -1205,7 +1205,7 @@ async function main() {
 	if (opts.showProfiles) {
 		const profiles = listProfiles();
 		if (profiles.length === 0) {
-			console.log(`${C.dim}No models.json or config.yaml found. Create ~/.agent/models.json or ~/.agent/config.yaml${C.reset}`);
+			console.log(`${C.dim}No models.json or config.yaml found. Create ~/.agents/models.json or ~/.agents/config.yaml${C.reset}`);
 		} else {
 			console.log(`\n${C.bold}Available profiles:${C.reset}`);
 			for (const p of profiles) {
@@ -1288,7 +1288,8 @@ async function main() {
 		return;
 	}
 
-	// Move an existing ~/.codeagent installation to ~/.agent (copy, never delete).
+	// Move an existing legacy installation (`~/.agent`, then `~/.codeagent`) to
+	// `~/.agents` (copy/move, never delete).
 	migrateLegacyAgentHome(message => console.log(`${C.dim}${message}${C.reset}`));
 	// Where global config/skills/sessions live — printed once so a path mistake is obvious.
 	console.log(`${C.dim}Config home: ${agentHomeDir()}${C.reset}`);
@@ -1305,7 +1306,7 @@ async function main() {
 	const skillsLoader = new SkillsLoader();
 	skillsLoader.loadSkillsFromDirs(resolved.skillsDirs);
 	skillsLoader.loadRulesFromDirs(resolved.rulesDirs);
-	// Claude-style instruction files: ~/.agent/agent.md then <project>/.agent/agent.md.
+	// Claude-style instruction files: ~/.agents/agent.md then <project>/.agents/agent.md.
 	skillsLoader.loadAgentMdFiles(agentInstructionFiles(process.cwd()));
 	setResolvedSkillDirs(resolved.skillsDirs);
 

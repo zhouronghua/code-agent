@@ -113,7 +113,7 @@ export class SkillsLoader {
 	 *
 	 * A single Markdown file replaces a directory of `.mdc` rules for the
 	 * common case, and it is meant to be ALWAYS active: global instructions live
-	 * in `~/.agent/agent.md`, project instructions in `<project>/.agent/agent.md`
+	 * in `~/.agents/agent.md`, project instructions in `<project>/.agents/agent.md`
 	 * (see agentInstructionFiles()). Frontmatter is optional; `description`, when
 	 * absent, comes from the first non-empty line so the file renders like a rule.
 	 */
@@ -332,9 +332,9 @@ export class SkillsLoader {
 	 * tools/skillTools.ts (skill_catalog / create_skill / update_skill).
 	 */
 	buildMetaSkillPromptSection(skillsDirs: string[]): string {
-		const primaryDir = skillsDirs[0] || '~/.agent/skills';
+		const primaryDir = skillsDirs[0] || '~/.agents/skills';
 		return `\n## Skill Crafting (Meta-Skill: skills of skills)
-You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL.md\` files loaded from: ${skillsDirs.join(', ') || '~/.agent/skills'} (primary: ${primaryDir}).
+You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL.md\` files loaded from: ${skillsDirs.join(', ') || '~/.agents/skills'} (primary: ${primaryDir}).
 
 ### When to create or update a skill
 - The user explicitly asks to save a workflow/constraint as a reusable skill ("保存为skill", "save this as a skill").
@@ -389,7 +389,7 @@ You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL
 	 * Classify a directory entry, FOLLOWING SYMLINKS.
 	 *
 	 * `Dirent.isDirectory()` / `isFile()` are false for a symlink, so a skill
-	 * installed the documented way (`ln -s …/skills/langfuse ~/.agent/skills/langfuse`,
+	 * installed the documented way (`ln -s …/skills/langfuse ~/.agents/skills/langfuse`,
 	 * the method the Langfuse/Anthropic skill repos prescribe) used to be skipped
 	 * silently. A broken link must stay harmless, hence the try/catch.
 	 */

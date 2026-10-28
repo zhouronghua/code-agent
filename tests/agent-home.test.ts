@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
- *  Unit tests: agent home (config dir `~/.agent` + legacy `~/.codeagent`),
- *  migration of an existing installation, and Claude-style `agent.md` rules.
+ *  Unit tests: agent home (config dir `~/.agents`, previous `~/.agent`, original
+ *  `~/.codeagent`), migration of an existing installation, and Claude-style
+ *  `agent.md` rules.
  *
  *  Run:
  *    npx esbuild tests/agent-home.test.ts --bundle --platform=node --target=node18 \
@@ -13,16 +14,20 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
 	AGENT_HOME_NAME,
+	PREVIOUS_AGENT_HOME_NAME,
 	LEGACY_AGENT_HOME_NAME,
 	agentHomeDir,
 	agentHomeFileCandidates,
 	agentInstructionFiles,
+	legacyAgentHomeDirs,
 	migrateAgentHome,
+	migrateLegacyAgentHome,
 	repointCompanionLinks,
 	findAgentHomeFile,
 	newAgentHomeDir,
 } from 'vs/workbench/contrib/agent/common/agentHome';
 import { SkillsLoader } from 'vs/workbench/contrib/agent/common/agentSkills';
+import { loadConfig } from 'vs/workbench/contrib/agent/common/agentConfig';
 
 let passed = 0;
 let failed = 0;
@@ -40,18 +45,46 @@ function tmpDir(name: string): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), `agent-home-${name}-`));
 }
 
+/** Run `fn` with `HOME` pointed at a throwaway directory (and no AGENT_HOME). */
+function withFakeHome<T>(fakeHome: string, fn: () => T): T {
+	const previousHome = process.env.HOME;
+	const previousOverride = process.env.AGENT_HOME;
+	delete process.env.AGENT_HOME;
+	process.env.HOME = fakeHome;
+	try {
+		return fn();
+	} finally {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		if (previousOverride !== undefined) process.env.AGENT_HOME = previousOverride;
+	}
+}
+
 function testHomeResolution(): void {
 	console.log('\n[1] config home resolution');
 
 	const home = os.homedir();
-	eq(AGENT_HOME_NAME, '.agent', 'the new config directory is .agent');
-	eq(LEGACY_AGENT_HOME_NAME, '.codeagent', 'the legacy config directory is still recognised');
-	eq(newAgentHomeDir(), path.join(home, '.agent'), '`~/.agent` is the new home');
+	eq(AGENT_HOME_NAME, '.agents', 'the new config directory is .agents (plural)');
+	eq(PREVIOUS_AGENT_HOME_NAME, '.agent', 'the previous config directory is still recognised');
+	eq(LEGACY_AGENT_HOME_NAME, '.codeagent', 'the original config directory is still recognised');
+	eq(newAgentHomeDir(), path.join(home, '.agents'), '`~/.agents` is the new home');
 
-	// The legacy location is still probed, after the new one.
+	// Legacy homes are probed newest first.
+	const legacyDirs = legacyAgentHomeDirs();
+	eq(legacyDirs.join(','),
+		[path.join(home, '.agent'), path.join(home, '.codeagent')].join(','),
+		'legacy homes are probed newest first (~/.agent then ~/.codeagent)');
+
 	const candidates = agentHomeFileCandidates('config.yaml');
-	eq(candidates[0], path.join(home, '.agent', 'config.yaml'), 'the new home is searched first');
-	ok(candidates.some(p => p.includes(LEGACY_AGENT_HOME_NAME)), 'the legacy home is still searched');
+	const dirs = candidates.map(p => path.dirname(p));
+	eq(candidates[0], path.join(home, '.agents', 'config.yaml'), 'the new home is searched first');
+	ok(dirs.includes(path.join(home, '.agent')), 'the previous home ~/.agent is still searched');
+	ok(dirs.includes(path.join(home, '.codeagent')), 'the original home ~/.codeagent is still searched');
+
+	// agentHomeDir() follows what actually exists on this machine, newest first.
+	// (`~/.agent` must not win over `~/.agents`: that is the whole upgrade path.)
+	const existing = [path.join(home, '.agents'), ...legacyDirs].find(d => fs.existsSync(d)) ?? path.join(home, '.agents');
+	eq(agentHomeDir(), existing, 'agentHomeDir() prefers ~/.agents and only falls back to a legacy home');
 
 	const override = tmpDir('override');
 	const previous = process.env.AGENT_HOME;
@@ -61,9 +94,30 @@ function testHomeResolution(): void {
 		eq(agentHomeDir(), override, 'AGENT_HOME overrides the home directory');
 		eq(findAgentHomeFile('config.yaml'), path.join(override, 'config.yaml'),
 			'a home-relative file resolves inside the override');
+		// A true override: isolated runs (tests, portable builds) must NOT read the
+		// real user config through `~/.agents` / `~/.agent` / `~/.codeagent`.
+		eq(agentHomeFileCandidates('config.yaml').join(','), path.join(override, 'config.yaml'),
+			'AGENT_HOME is a full override, no legacy home leaks into an isolated run');
 		const files = agentInstructionFiles('/work/project');
+		eq(files.filter(f => f.endsWith('agent.md') && !f.startsWith('/work/project')).join(','),
+			path.join(override, 'agent.md'), 'only the override supplies the global agent.md');
 		ok(files.includes(path.join(override, 'agent.md')), 'the global agent.md comes from the home directory');
-		ok(files.includes(path.join('/work/project', '.agent', 'agent.md')), 'a project agent.md is picked up too');
+		ok(files.includes(path.join('/work/project', '.agents', 'agent.md')),
+			'a project agent.md is picked up from .agents');
+		ok(files.includes(path.join('/work/project', '.agent', 'agent.md')),
+			'the previous project location <project>/.agent still loads');
+		ok(files.indexOf(path.join('/work/project', '.agents', 'agent.md'))
+			< files.indexOf(path.join('/work/project', '.agent', 'agent.md')),
+			'the project .agents file loads AFTER the legacy .agent one (so it can override it)');
+
+		// The default skills/rules dirs follow the home too (no hard-coded ~/.agent).
+		const resolved = loadConfig();
+		const homeSkills = resolved.skillsDirs.filter(d => !d.includes(`${path.sep}.cursor${path.sep}`));
+		eq(homeSkills.join(','), path.join(override, 'skills'),
+			'default skills dir is the override home only (no legacy leak)');
+		const homeRules = resolved.rulesDirs.filter(d => !d.includes(`${path.sep}.cursor${path.sep}`));
+		eq(homeRules.join(','), path.join(override, 'rules'),
+			'default rules dir is the override home only (no legacy leak)');
 	} finally {
 		if (previous === undefined) delete process.env.AGENT_HOME;
 		else process.env.AGENT_HOME = previous;
@@ -75,7 +129,7 @@ function testLegacyMigration(): void {
 	console.log('\n[2] legacy installation migration (the new home OWNS the data)');
 
 	const legacy = tmpDir('legacy');
-	const fresh = path.join(tmpDir('fresh-parent'), '.agent');
+	const fresh = path.join(tmpDir('fresh-parent'), '.agents');
 	fs.mkdirSync(path.join(legacy, 'sessions'), { recursive: true });
 	fs.writeFileSync(path.join(legacy, 'sessions', 'session_1.json'), '{}');
 	fs.writeFileSync(path.join(legacy, 'config.yaml'), 'active_profile: deepseek-flash\n');
@@ -104,7 +158,7 @@ function testLegacyMigration(): void {
 
 	// A home migrated by the PREVIOUS release (new home was the symlink) is flipped.
 	const legacy2 = tmpDir('legacy2');
-	const fresh2 = path.join(tmpDir('fresh2-parent'), '.agent');
+	const fresh2 = path.join(tmpDir('fresh2-parent'), '.agents');
 	fs.mkdirSync(path.join(legacy2, 'sessions'), { recursive: true });
 	fs.writeFileSync(path.join(legacy2, 'sessions', 's2.json'), '{}');
 	fs.mkdirSync(fresh2, { recursive: true });
@@ -133,13 +187,91 @@ function testLegacyMigration(): void {
 	fs.rmSync(path.dirname(fresh2), { recursive: true, force: true });
 }
 
+/** The two-step upgrade most users will hit: `~/.agent` AND `~/.codeagent` exist. */
+function testMigrationChain(): void {
+	console.log('\n[2b] migration chain: ~/.agent (and ~/.codeagent) → ~/.agents');
+
+	const fakeHome = tmpDir('chain-home');
+	try {
+		withFakeHome(fakeHome, () => {
+			const previous = path.join(fakeHome, '.agent');
+			const original = path.join(fakeHome, '.codeagent');
+			fs.mkdirSync(path.join(previous, 'sessions'), { recursive: true });
+			fs.writeFileSync(path.join(previous, 'sessions', 'new.json'), '{}');
+			fs.writeFileSync(path.join(previous, 'config.yaml'), 'active_profile: newer\n');
+			fs.mkdirSync(path.join(previous, 'skills', 'demo'), { recursive: true });
+			fs.writeFileSync(path.join(previous, 'skills', 'demo', 'SKILL.md'), '# demo');
+			fs.mkdirSync(path.join(original, 'sessions'), { recursive: true });
+			fs.writeFileSync(path.join(original, 'sessions', 'old.json'), '{}');
+			fs.writeFileSync(path.join(original, 'config.yaml'), 'active_profile: older\n');
+
+			// A companion link written against the previous home.
+			const cursorDir = path.join(fakeHome, '.cursor');
+			fs.mkdirSync(cursorDir, { recursive: true });
+			fs.symlinkSync(path.join(previous, 'skills'), path.join(cursorDir, 'skills'), 'dir');
+
+			// Before migrating, the previous home is what a run would use.
+			eq(agentHomeDir(), previous, 'before the migration ~/.agent is still the active home');
+
+			const logs: string[] = [];
+			migrateLegacyAgentHome(m => logs.push(m));
+
+			const fresh = path.join(fakeHome, '.agents');
+			eq(agentHomeDir(), fresh, '~/.agents becomes the active home once it exists');
+			ok(!fs.lstatSync(path.join(fresh, 'sessions')).isSymbolicLink(), '~/.agents owns the real sessions dir');
+			ok(fs.existsSync(path.join(fresh, 'sessions', 'new.json')), 'the data from ~/.agent moved over');
+			eq(fs.readFileSync(path.join(fresh, 'config.yaml'), 'utf-8').trim(), 'active_profile: newer',
+				'the NEWER ~/.agent config wins over the ~/.codeagent one');
+			ok(fs.lstatSync(path.join(previous, 'sessions')).isSymbolicLink(), '~/.agent/sessions became a pointer');
+			ok(fs.existsSync(path.join(original, 'sessions', 'old.json')),
+				'the original ~/.codeagent data is never deleted');
+			eq(fs.readlinkSync(path.join(cursorDir, 'skills')), path.join(fresh, 'skills'),
+				'the ~/.cursor/skills link now points at ~/.agents');
+			ok(logs.some(l => l.includes(fresh)), 'the migration says where the data went');
+
+			// Idempotent: a second startup changes nothing.
+			migrateLegacyAgentHome(() => { /* noop */ });
+			eq(fs.readFileSync(path.join(fresh, 'config.yaml'), 'utf-8').trim(), 'active_profile: newer',
+				'a second startup leaves the migrated config untouched');
+
+			// After the migration the legacy skills dir is a symlink to the new one:
+			// the default dirs must collapse it, or every skill is listed twice.
+			const homeSkills = loadConfig().skillsDirs.filter(d => !d.includes(`${path.sep}.cursor${path.sep}`));
+			eq(homeSkills[0], path.join(fresh, 'skills'), 'the default skills dir starts at the owning home');
+			ok(!homeSkills.includes(path.join(fakeHome, '.agent', 'skills')),
+				'the legacy ~/.agent/skills symlink is not listed a second time');
+		});
+	} finally {
+		fs.rmSync(fakeHome, { recursive: true, force: true });
+	}
+
+	// A very old install that only has `~/.codeagent` migrates straight to `~/.agents`.
+	const oldHome = tmpDir('chain-old');
+	try {
+		withFakeHome(oldHome, () => {
+			const original = path.join(oldHome, '.codeagent');
+			fs.mkdirSync(path.join(original, 'skills', 'demo'), { recursive: true });
+			fs.writeFileSync(path.join(original, 'skills', 'demo', 'SKILL.md'), '# demo');
+			migrateLegacyAgentHome(() => { /* noop */ });
+			const fresh = path.join(oldHome, '.agents');
+			ok(fs.existsSync(path.join(fresh, 'skills', 'demo', 'SKILL.md')),
+				'a ~/.codeagent-only install lands in ~/.agents');
+			ok(fs.lstatSync(path.join(original, 'skills')).isSymbolicLink(),
+				'~/.codeagent/skills is left behind as a pointer');
+			eq(agentHomeDir(), fresh, 'the migrated home is the active one');
+		});
+	} finally {
+		fs.rmSync(oldHome, { recursive: true, force: true });
+	}
+}
+
 function testAgentMdRules(): void {
 	console.log('\n[3] Claude-style agent.md instructions');
 
 	const dir = tmpDir('agentmd');
 	const globalMd = path.join(dir, 'agent.md');
 	fs.writeFileSync(globalMd, '# 全局规则\n\n总是先跑测试。\n');
-	const projectDir = path.join(dir, 'project', '.agent');
+	const projectDir = path.join(dir, 'project', '.agents');
 	fs.mkdirSync(projectDir, { recursive: true });
 	fs.writeFileSync(path.join(projectDir, 'agent.md'), '---\ndescription: project rules\n---\n\n提交前先 build。\n');
 
@@ -250,6 +382,7 @@ function testSkillDiscovery(): void {
 function main(): void {
 	testHomeResolution();
 	testLegacyMigration();
+	testMigrationChain();
 	testAgentMdRules();
 	testSkillDiscovery();
 	console.log(`\n${failed === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED'}: ${passed} passed, ${failed} failed`);

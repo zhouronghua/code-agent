@@ -5,7 +5,7 @@
  *  - Auto-save after each task execution (LLM calls, tool invocations, results)
  *  - List task logs with metadata (task summary, duration, status, timestamps)
  *  - View full task execution trace (step-by-step LLM interactions + tool results)
- *  - Storage: <tasks dir>/ as JSON files — `<agent home>/tasks` (~/.agent) unless
+ *  - Storage: <tasks dir>/ as JSON files — `<agent home>/tasks` (~/.agents) unless
  *    the run redirected it (`--tasks-dir` / `--state-dir`, see agentStorage.ts).
  *    Resolved per call so a benchmark can keep its logs out of the real history.
  *--------------------------------------------------------------------------------------------*/

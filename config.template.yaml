@@ -1,15 +1,17 @@
 # CodeAgent Configuration Template
 # Copy this file to one of the following locations:
 #   - ./config.yaml              (project-level, highest priority)
-#   - ~/.agent/config.yaml       (global, shared across projects; legacy
-#                                 ~/.codeagent/config.yaml is auto-migrated on start)
+#   - ~/.agents/config.yaml            (global, shared across projects; the legacy
+#                                      ~/.agent and ~/.codeagent configs are still
+#                                      read and auto-migrated on start)
 #
 # Global instructions / rules (Claude `CLAUDE.md` style, always active):
-#   - ~/.agent/agent.md              (global)
-#   - <project>/.agent/agent.md      (project-level, loaded after the global one)
+#   - ~/.agents/agent.md               (global)
+#   - <project>/.agents/agent.md       (project-level, loaded after the global one;
+#                                      the previous <project>/.agent/agent.md still loads)
 #
 # Model definitions are in models.json (CodeBuddy-compatible format).
-#   - ~/.agent/models.json       (global)
+#   - ~/.agents/models.json       (global)
 #   - ./models.json              (project-level)
 #
 # You can override specific model params in the profiles section below.
@@ -67,21 +69,21 @@ agent:
 # The agent scans these directories for skill definitions.
 # Each skill is a directory containing a SKILL.md file with frontmatter.
 skills:
-  - ~/.agent/skills
-  - ~/.agent/skills-cursor
-  - .agent/skills
+  - ~/.agents/skills
+  - ~/.agents/skills-cursor
+  - .agents/skills
 
 # Rules directories (Cursor-compatible .mdc rule files).
 # Rules with "alwaysApply: true" are automatically injected into every prompt.
-# NOTE: a single ~/.agent/agent.md (or <project>/.agent/agent.md) is the
+# NOTE: a single ~/.agents/agent.md (or <project>/.agents/agent.md) is the
 # recommended way to keep always-on instructions; .mdc dirs remain supported.
 rules:
-  - ~/.agent/rules
-  - .agent/rules
+  - ~/.agents/rules
+  - .agents/rules
 
 # Where this installation writes RUNTIME STATE (session dumps + task logs).
 #
-# Default: sessions → ~/.agent/sessions, tasks → ~/.agent/tasks. That is right
+# Default: sessions → ~/.agents/sessions, tasks → ~/.agents/tasks. That is right
 # for interactive use, but an automated/benchmark run that launches the CLI
 # hundreds of times leaves hundreds of near-identical session files behind.
 # Redirect them for those runs (CLI > env > this section > default):
@@ -208,7 +210,7 @@ rules:
 #                    off     → no workspace filtering at all
 #   workspace_dir: absolute override; defaults to the process working directory.
 #
-# Credentials can also live in ~/.agent/mcp.json under
+# Credentials can also live in ~/.agents/mcp.json under
 # `mcpServers.tdai_agent_mem` (url + Authorization Bearer user key +
 # x-tdai-service-id header + username/teamId/agentId/userId).
 #

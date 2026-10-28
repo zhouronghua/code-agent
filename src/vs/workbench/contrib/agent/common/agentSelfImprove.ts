@@ -8,7 +8,7 @@
  *
  *  Two halves, both deterministic — the judgement stays with the agent:
  *
- *   1. collectRunEvidence(): reads ~/.agent/tasks/*.json (the per-task execution
+ *   1. collectRunEvidence(): reads ~/.agents/tasks/*.json (the per-task execution
  *      logs the agent already writes) and returns FACTS — tool histograms,
  *      failure signatures grouped after normalization, repeated-failure counts,
  *      run signals (user /btw corrections, model fallback, context overflow,
@@ -27,7 +27,7 @@
  *  Everything here is injectable (runner, paths) so the behaviour above is unit
  *  tested rather than asserted.
  *
- *  Config (config.yaml, project first then ~/.agent):
+ *  Config (config.yaml, project first then ~/.agents):
  *    self_update:
  *      enabled: true            # register agent_self_scan (read-only evidence)
  *      allow_release: false     # register agent_release (bump/test/pack/commit)
@@ -137,7 +137,7 @@ export function parseSelfUpdateYaml(text: string): Partial<SelfUpdateConfig> | u
 	return seen ? out : undefined;
 }
 
-/** Resolve the self-update configuration (project config.yaml then ~/.agent). */
+/** Resolve the self-update configuration (project config.yaml then ~/.agents). */
 export function loadSelfUpdateConfig(): SelfUpdateConfig {
 	const candidates = [
 		path.resolve('config.yaml'),
