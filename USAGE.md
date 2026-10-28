@@ -154,7 +154,9 @@ profiles:
 `~/.codebuddy/skills`、`~/.codebuddy/rules`）改指到 `~/.agents`，因此旧目录不再被任何路径依赖：
 
 ```bash
-# 迁移完成后（旧路径全部是软连接 / 冗余副本），可安全删除：
+# 迁移完成后（旧路径全部是软连接 / 冗余副本），可安全删除；
+# 注意：`~/.agent/bench-tools`（claude / deepseek-harness 的 runtime）留在旧目录里，
+# 它不参与迁移（venv / npm prefix 改名即失效），删除前先确认不再需要：
 rm -rf ~/.agent ~/.codeagent
 ```
 
