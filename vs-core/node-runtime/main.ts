@@ -97,8 +97,9 @@ const REPL_COMMAND_HELP = [
 	'/skill <name>            Activate a skill for this session   (idle only)',
 	'/skills                  List loaded skills',
 	'/save [name]             Save the current session',
-	'/sessions                List saved sessions',
-	'/resume [id]             Resume a session   (idle only)',
+	'/sessions                List sessions for THIS directory',
+	'/sessions all            List sessions from every directory',
+	'/resume [id]             Resume a session (no id: latest here)  (idle only)',
 	'/new                     Start a new session   (idle only)',
 	'/delete-session <id>     Delete a saved session',
 	'/auto-save               Toggle session auto-save',
@@ -287,8 +288,10 @@ function createCompleter(
 				const completions = matches.map(s => `/resume ${s.id}`);
 				return [completions, line];
 			}
-			// If no specific match, show latest session as hint
-			const latest = sessionManager.getLatestSession();
+			// No specific match: offer this directory's latest, which is what a bare
+			// `/resume` would pick. Offering the global latest would suggest a session
+			// from an unrelated project.
+			const latest = sessionManager.getLatestSessionForCwd(process.cwd());
 			if (latest && !partial) {
 				return [[`/resume ${latest.id}`], line];
 			}
@@ -695,7 +698,9 @@ Options:
   --skills                    List loaded skills
   --use-skill <name>          Activate a specific skill for this session
   --session <id>              Resume a specific session by ID
-  --resume                    Resume the most recent session
+  --resume                    Resume the most recent session in the
+                              CURRENT DIRECTORY (pass --session <id> to pick
+                              one from another directory)
   --sessions                  List saved sessions
   --delete-session <id>       Delete a session
   --tasks                     List saved task logs
@@ -1303,7 +1308,12 @@ async function main() {
 		if (sessions.length === 0) {
 			console.log(`${C.dim}No saved sessions.${C.reset}`);
 		} else {
-			console.log(`\n${C.bold}Saved sessions (${sessions.length}):${C.reset}\n`);
+			// `--sessions` stays whole-store on purpose: it is the escape hatch used
+			// precisely when the session you want was created in another directory.
+			// `/sessions` in the REPL is the scoped view, because that is where the
+			// "which one will --resume pick" question is asked.
+			const here = sessionManager.listSessionsForCwd(process.cwd()).length;
+			console.log(`\n${C.bold}Saved sessions (${sessions.length} total, ${here} in this directory):${C.reset}\n`);
 			for (const s of sessions) {
 				const date = new Date(s.updatedAt).toLocaleString();
 				const modeLabel = s.mode === AgentMode.Plan ? 'Plan' : s.mode === AgentMode.Ask ? 'Ask' : 'Agent';
@@ -1315,6 +1325,7 @@ async function main() {
 				}
 				console.log('');
 			}
+			console.log(`${C.dim}--resume picks the most recent session in the current directory; use --session <id> for any other.${C.reset}\n`);
 		}
 		return;
 	}
@@ -1536,10 +1547,16 @@ async function main() {
 	let autoSaveEnabled = storage.saveSessions;
 
 	// Determine if we should restore a session
+	//
+	// A bare `--resume` means "the most recent session in the CURRENT working
+	// directory", not "the most recent session anywhere". A session belongs to the
+	// project it was created in; picking the global latest meant `--resume` inside
+	// repo A could drop the user into repo B. `--session <id>` stays explicit and
+	// directory-independent.
 	const sessionToResume = opts.sessionId
 		? sessionManager.loadSession(opts.sessionId)
 		: opts.resumeLatest
-			? sessionManager.getLatestSession()
+			? sessionManager.getLatestSessionForCwd(process.cwd())
 			: undefined;
 
 	if (sessionToResume) {
@@ -1560,12 +1577,33 @@ async function main() {
 		const date = new Date(sessionToResume.updatedAt).toLocaleString();
 		console.log(`${C.magenta}[SESSION]${C.reset} Resumed session "${currentSessionName || currentSessionId}" (${sessionToResume.messageCount} msgs, last updated ${date})`);
 		console.log(`${C.dim}  Summary: ${sessionToResume.summary || '(no summary)'}${C.reset}\n`);
-	} else if (!opts.sessionId && !opts.resumeLatest && sessionManager.count > 0) {
-		// Show a hint about the latest session
-		const latest = sessionManager.getLatestSession();
+	} else if (opts.sessionId) {
+		// An explicit id that does not exist must fail loudly rather than silently
+		// starting an empty session the user did not ask for.
+		console.error(`${C.yellow}[SESSION]${C.reset} Session "${opts.sessionId}" not found in ${storage.sessionsDir}`);
+		process.exit(1);
+	} else if (opts.resumeLatest) {
+		// `--resume` with nothing recorded for THIS directory: say so explicitly.
+		// Silent fallback to another directory's session is the bug being fixed, so
+		// report the miss and point at the ways to find the session the user meant.
+		const forCwd = sessionManager.listSessionsForCwd(process.cwd()).length;
+		const total = sessionManager.count;
+		console.error(`${C.yellow}[SESSION]${C.reset} No saved session for this directory: ${process.cwd()}`);
+		if (total > 0) {
+			console.error(`${C.dim}  ${total} session(s) exist for other directories (this one has ${forCwd}).${C.reset}`);
+			console.error(`${C.dim}  Use --sessions to list them, or --session <id> to resume one explicitly.${C.reset}`);
+		} else {
+			console.error(`${C.dim}  No sessions have been saved yet.${C.reset}`);
+		}
+		process.exit(1);
+	} else if (sessionManager.count > 0) {
+		// Hint about the latest session IN THIS DIRECTORY — the one `--resume` will
+		// actually pick. Advertising the global latest here would teach the user that
+		// `--resume` means "some other project's session".
+		const latest = sessionManager.getLatestSessionForCwd(process.cwd());
 		if (latest) {
 			const date = new Date(latest.updatedAt).toLocaleString();
-			console.log(`${C.dim}Tip: Resume your last session with --resume (${latest.name || latest.id}, ${latest.messageCount} msgs, ${date})${C.reset}\n`);
+			console.log(`${C.dim}Tip: Resume this directory's last session with --resume (${latest.name || latest.id}, ${latest.messageCount} msgs, ${date})${C.reset}\n`);
 		}
 	}
 
@@ -1598,7 +1636,7 @@ async function main() {
 		completer: createCompleter(sessionManager, skillsLoader, taskLogManager),
 	});
 	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, /help, exit${C.reset}`);
-	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save, /delete-session${C.reset}`);
+	console.log(`${C.dim}Session:  /save, /sessions [/all], /resume [id], /new, /auto-save, /delete-session${C.reset}`);
 	console.log(`${C.dim}Tasks:   /tasks, /task <id>, /delete-task <id>${C.reset}`);
 	console.log(`${C.dim}Tip: /btw <hint> works any time (even while running). Conflicting instructions (e.g. "基于最新版本重新执行") auto-cancel the running tool/plan and pivot; /btw cancel aborts the current tool${C.reset}`);
 	console.log(`${C.dim}Tip: control commands (/mode, /tasks, /sessions, /save, /help, exit) run IMMEDIATELY even while a task runs — no need to wait${C.reset}`);
@@ -1754,12 +1792,23 @@ async function main() {
 			return true;
 		}
 
-		if (trimmed === '/sessions') {
-			const sessions = sessionManager.listSessions();
+		if (trimmed === '/sessions' || trimmed === '/sessions all') {
+			// Default: this directory only (that is what `/resume` and `--resume`
+			// resume from). `/sessions all` keeps the old whole-store view for the
+			// case where the session you want was created elsewhere.
+			const all = trimmed.endsWith(' all');
+			const sessions = all
+				? sessionManager.listSessions()
+				: sessionManager.listSessionsForCwd(process.cwd());
+			const scope = all ? 'all directories' : `this directory: ${process.cwd()}`;
 			if (sessions.length === 0) {
-				console.log(`${C.dim}No saved sessions.${C.reset}`);
+				const total = sessionManager.count;
+				console.log(`${C.dim}No saved sessions for ${scope}.${C.reset}`);
+				if (!all && total > 0) {
+					console.log(`${C.dim}${total} session(s) exist for other directories — /sessions all to list them.${C.reset}`);
+				}
 			} else {
-				console.log(`\n${C.bold}Saved sessions (${sessions.length}):${C.reset}\n`);
+				console.log(`\n${C.bold}Saved sessions (${sessions.length} — ${scope}):${C.reset}\n`);
 				for (const s of sessions) {
 					const date = new Date(s.updatedAt).toLocaleString();
 					const modeLabel2 = s.mode === AgentMode.Plan ? 'Plan' : s.mode === AgentMode.Ask ? 'Ask' : 'Agent';
@@ -1778,12 +1827,19 @@ async function main() {
 
 		if (trimmed.startsWith('/resume')) {
 			const targetId = trimmed.slice(7).trim();
+			// Bare `/resume` means "the latest session in THIS directory", matching
+			// `--resume`. Falling back to the global latest would resume an
+			// unrelated project, which is exactly the bug reported for `--resume`.
 			const session = targetId
 				? sessionManager.loadSession(targetId)
-				: sessionManager.getLatestSession();
+				: sessionManager.getLatestSessionForCwd(process.cwd());
 
 			if (!session) {
-				log(C.yellow, 'SESSION', targetId ? `Session "${targetId}" not found` : 'No sessions to resume');
+				if (targetId) {
+					log(C.yellow, 'SESSION', `Session "${targetId}" not found`);
+				} else {
+					log(C.yellow, 'SESSION', `No saved session for this directory (${process.cwd()}). Use /sessions to list them all.`);
+				}
 				return true;
 			}
 

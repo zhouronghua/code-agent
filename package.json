@@ -1,6 +1,6 @@
 {
   "name": "@zhouronghua/code-agent",
-  "version": "0.3.54",
+  "version": "0.3.55",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
@@ -55,8 +55,9 @@
     "test:repl": "esbuild tests/repl-control-during-task.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/repl-control.test.mjs --tsconfig=tsconfig.json && node build/repl-control.test.mjs",
     "test:retention": "esbuild tests/result-retention.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/result-retention.test.mjs --tsconfig=tsconfig.json && node build/result-retention.test.mjs",
     "test:todo": "esbuild tests/todo-list.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/todo-list.test.mjs --tsconfig=tsconfig.json && node build/todo-list.test.mjs",
+    "test:session-cwd": "esbuild tests/session-cwd-resume.test.ts --bundle --platform=node --target=node18 --format=esm --outfile=build/session-cwd-resume.test.mjs --tsconfig=tsconfig.json && node build/session-cwd-resume.test.mjs",
     "test:e2e-anthropic": "node tests/e2e-anthropic-cache.mjs",
-    "test": "npm run test:model-switch && npm run test:agent-home && npm run test:storage-mock && npm run test:tracing && npm run test:self-improve && npm run test:harness && npm run test:btw && npm run test:pairing && npm run test:memory-workspace && npm run test:diff && npm run test:repl && npm run test:retention && npm run test:todo",
+    "test": "npm run test:model-switch && npm run test:agent-home && npm run test:storage-mock && npm run test:tracing && npm run test:self-improve && npm run test:harness && npm run test:btw && npm run test:pairing && npm run test:memory-workspace && npm run test:diff && npm run test:repl && npm run test:retention && npm run test:todo && npm run test:session-cwd",
     "clean": "rm -rf build",
     "pack": "npm run build:release && npm pack",
     "link": "npm run build && npm link",
@@ -69,6 +70,7 @@
     "docs/self-evolve.md",
     "docs/meta-harness-borrowings.md",
     "docs/deepseek-harness-borrowings.md",
+    "docs/resume-latest-session-in-cwd.md",
     "USAGE.md"
   ],
   "engines": {
