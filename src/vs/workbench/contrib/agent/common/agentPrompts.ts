@@ -49,6 +49,7 @@ Before concluding any task, you MUST:
 - Use poll for waiting on async external tasks (CI pipelines, container readiness, background jobs) with exponential backoff — NEVER just print a "waiting" message and stop
 - Use edit_file with exact string matching for precise edits
 - Use write_file only for new files or complete rewrites
+- Use todo_write to show your plan for multi-step work (3+ distinct steps): send the COMPLETE list, keep exactly one item in_progress, and mark each item completed as soon as it is done. Skip it for trivial single-step tasks.
 
 ## Polling & Waiting Strategy (CRITICAL)
 When you need to wait for an external async task to complete (CI pipeline, background job, container startup, file readiness, etc.):

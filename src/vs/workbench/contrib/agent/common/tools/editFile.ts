@@ -6,8 +6,9 @@
 import { URI } from 'vs/base/common/uri';
 import { VSBuffer } from 'vs/base/common/buffer';
 import { IFileService } from 'vs/platform/files/common/files';
-import { IToolResult } from 'vs/workbench/services/agent/common/agentModels';
+import { IToolResult, IToolDiff } from 'vs/workbench/services/agent/common/agentModels';
 import { AgentTool } from '../agentTools';
+import { buildToolDiff } from '../agentDiff';
 
 export class EditFileTool extends AgentTool {
 	readonly name = 'edit_file';
@@ -76,7 +77,13 @@ export class EditFileTool extends AgentTool {
 			await this._fileService.writeFile(uri, VSBuffer.fromString(newText));
 
 			const replacedCount = replaceAll ? occurrences : 1;
-			return this.success(toolCallId, `Replaced ${replacedCount} occurrence(s) in ${path}`);
+			// Display-only diff so a human watching the session sees exactly what
+			// changed. It never enters `output` — the model only needs the count.
+			const diff: IToolDiff | undefined = buildToolDiff(path, text, newText);
+			return {
+				...this.success(toolCallId, `Replaced ${replacedCount} occurrence(s) in ${path}`),
+				diff,
+			};
 		} catch (err) {
 			return this.failure(toolCallId, `Failed to edit file ${path}: ${(err as Error).message}`);
 		}

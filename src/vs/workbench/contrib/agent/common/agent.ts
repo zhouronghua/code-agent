@@ -21,6 +21,7 @@ import {
 	createToolResultMessage,
 	IToolResult,
 	IToolCall,
+	IToolDiff,
 	IStepRecord,
 	IToolExecutionRecord,
 	IAgentTaskLog,
@@ -35,6 +36,8 @@ import { AgentContext } from './agentContext';
 import { AgentModeManager } from './agentModes';
 import { AgentPlanner } from './agentPlanner';
 import { AgentCheckpointManager } from './agentCheckpoint';
+import { retainResult } from './agentResultRetention';
+import { ITodoItem, TodoList, TodoWriteTool } from './tools/todoWrite';
 import { getSystemPrompt } from './agentPrompts';
 import { IMemoryIntegration } from './agentMemory';
 import { IAgentTracing, IObservationHandle, ITaskMeta, NOOP_TRACING, currentUserName } from './agentTracing';
@@ -48,10 +51,10 @@ import {
 	IPendingBtwHint,
 } from './agentBtw';
 
-// Maximum characters for a single tool result sent back to the LLM.
-// Large outputs (e.g. read_file of a big file, run_terminal of a long build)
-// can easily overflow the context window. We truncate and notify the LLM.
-const MAX_TOOL_RESULT_CHARS = 8000;
+// Tool-result retention budgets live in `agentResultRetention.ts`
+// (RETENTION_DEFAULTS: 8000 chars total, 4000 head, 2000 tail). A head-only cut
+// used to live here, but it kept the least useful part of the outputs that
+// matter most — see `_truncateToolResult`.
 
 // Maximum consecutive steps that produce only tool calls with no text content.
 // If the agent calls tools repeatedly without any reasoning text for this many
@@ -282,6 +285,37 @@ export class AgentLoop {
 
 	private readonly _onDidError = new Emitter<Error>();
 	readonly onDidError: Event<Error> = this._onDidError.event;
+
+	/**
+	 * Fired after a file-mutating tool produced a displayable diff.
+	 *
+	 * Separate from `onDidReceiveMessage` on purpose: the message stream carries
+	 * what the MODEL sees, and a colored diff must never enter the context. The
+	 * CLI host subscribes here to print the diff card for the human.
+	 */
+	private readonly _onDidReceiveToolDiff = new Emitter<IToolDiff>();
+	readonly onDidReceiveToolDiff: Event<IToolDiff> = this._onDidReceiveToolDiff.event;
+
+	/**
+	 * Fired after `todo_write` replaced the checklist, so the host can render it.
+	 *
+	 * Separate from `onDidReceiveMessage` for the same reason as the diff event: the
+	 * checklist is display/planning state, and putting it in the message history
+	 * would make the model re-read its own plan as conversation on every request.
+	 */
+	private readonly _onDidUpdateTodos = new Emitter<readonly ITodoItem[]>();
+	readonly onDidUpdateTodos: Event<readonly ITodoItem[]> = this._onDidUpdateTodos.event;
+
+	/**
+	 * The model's task checklist, owned by the agent so a `todo_write` call from any
+	 * step lands in the same list and clearing it on a new task is automatic.
+	 */
+	private readonly _todoList = new TodoList();
+
+	/** Register `todo_write` and give the loop the list it should report. */
+	registerTodoTool(registry: ToolRegistry = this._toolRegistry): void {
+		registry.register(new TodoWriteTool(this._todoList));
+	}
 
 	private readonly _context: AgentContext;
 	private readonly _planner: AgentPlanner;
@@ -1042,6 +1076,12 @@ export class AgentLoop {
 		// /btw state belongs to the run that was in flight: a hint that never got
 		// delivered (or a cancel issued while idle) must not leak into this task.
 		this._resetPendingBtwState();
+		// The checklist describes THIS task's plan; a new task starts from nothing
+		// (a stale plan would otherwise look like the new task's progress).
+		if (!this._todoList.isEmpty) {
+			this._todoList.clear();
+			this._onDidUpdateTodos.fire(this._todoList.items);
+		}
 
 		try {
 			// ---- Langfuse: one trace per user task ----
@@ -1715,6 +1755,19 @@ export class AgentLoop {
 				};
 				stepRecord.toolExecutions.push(execRecord);
 
+				// Surface the file mutation to the human BEFORE the model-facing
+				// message goes out, so the diff card lands under the tool call it
+				// belongs to (and even when the rest of the run is later cancelled).
+				if (result.diff) {
+					this._onDidReceiveToolDiff.fire(result.diff);
+				}
+
+				// The checklist is host state, not conversation: fire it so the terminal can
+				// render progress without polluting the context.
+				if (toolCall.name === 'todo_write' && !this._todoList.isEmpty) {
+					this._onDidUpdateTodos.fire(this._todoList.items);
+				}
+
 				// Truncate large tool results to prevent context overflow
 				const truncatedResult = this._truncateToolResult(result);
 
@@ -1747,19 +1800,31 @@ export class AgentLoop {
 	}
 
 	/**
-	 * Truncate tool results that exceed MAX_TOOL_RESULT_CHARS.
-	 * Large outputs (build logs, file reads, search results) can overflow
-	 * the LLM context window, especially for reasoning models.
+	 * Retain oversized tool results (head + tail) so they cannot overflow the
+	 * context window.
+	 *
+	 * Large outputs (build logs, file reads, search results) can overflow the LLM
+	 * context window, especially for reasoning models. A head-only cut — what this
+	 * used to do — keeps the LEAST useful part of the outputs that matter most: a
+	 * pytest assertion and its summary, a compiler diagnostic, and `npm test`'s
+	 * pass/fail line all live in the last lines. `retainResult` keeps the ordered
+	 * head AND tail with an exact omission notice in between.
+	 *
+	 * `diff` is dropped here on purpose: it is a display payload, and rendering it
+	 * is the host's decision (already taken before this point). Keeping it would
+	 * carry a pre-rendered card through the context-window path for no benefit.
 	 */
 	private _truncateToolResult(result: IToolResult): IToolResult {
-		if (result.output && result.output.length > MAX_TOOL_RESULT_CHARS) {
-			return {
-				...result,
-				output: result.output.substring(0, MAX_TOOL_RESULT_CHARS)
-					+ `\n... (truncated, ${result.output.length} chars total)`,
-			};
-		}
-		return result;
+		const plain = {
+			toolCallId: result.toolCallId,
+			success: result.success,
+			output: result.output,
+			error: result.error,
+		};
+		if (!result.output) return plain;
+		const retained = retainResult(result.output);
+		if (!retained.truncated) return plain;
+		return { ...plain, output: retained.text };
 	}
 
 	/**

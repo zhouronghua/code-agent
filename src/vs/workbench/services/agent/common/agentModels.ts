@@ -46,6 +46,56 @@ export interface IToolResult {
 	readonly success: boolean;
 	readonly output: string;
 	readonly error?: string;
+	/**
+	 * Presentation-only payload for file mutations: the unified diff of what the
+	 * tool actually changed (rendered by `agentDiff.ts`).
+	 *
+	 * Why a separate field instead of appending the diff to `output`:
+	 *   - `output` is what the MODEL sees. A colored diff there would burn
+	 *     context on every edit and put ANSI escapes in the tokenizer's input.
+	 *   - The terminal renderer owns coloring AND path relativization (it knows
+	 *     the working directory; a tool does not), so the structured hunks travel
+	 *     and the host renders.
+	 *
+	 * HOSTS: emit this via `onDidReceiveToolDiff`; never merge it into `output`.
+	 */
+	readonly diff?: IToolDiff;
+}
+
+/** One line of a hunk, in unified-diff vocabulary. */
+export interface IToolDiffLine {
+	/** ' ' context, '-' removed, '+' added. */
+	readonly kind: ' ' | '-' | '+';
+	readonly text: string;
+	/** 1-based line number in the OLD file (absent for '+' lines). */
+	readonly oldLine?: number;
+	/** 1-based line number in the NEW file (absent for '-' lines). */
+	readonly newLine?: number;
+}
+
+/** One unified-diff hunk. */
+export interface IToolDiffHunk {
+	readonly oldStart: number;
+	readonly oldCount: number;
+	readonly newStart: number;
+	readonly newCount: number;
+	readonly lines: readonly IToolDiffLine[];
+}
+
+/**
+ * Structured file-mutation diff attached to a tool result for display.
+ *
+ * Kept as DATA (not a pre-rendered string) so the host decides the color mode and
+ * how much of the path to show — the tool that produced it knows neither.
+ */
+export interface IToolDiff {
+	/** Path exactly as the tool received it. */
+	readonly path: string;
+	readonly hunks: readonly IToolDiffHunk[];
+	readonly added: number;
+	readonly removed: number;
+	/** True when the file did not exist before this change. */
+	readonly created: boolean;
 }
 
 /** Token usage reported by an LLM API response (provider-normalized). */

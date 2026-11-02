@@ -65,6 +65,9 @@ import { AgentSessionManager } from '../../src/vs/workbench/contrib/agent/common
 import { TaskLogManager } from '../../src/vs/workbench/contrib/agent/common/agentTaskLog';
 import { configureStorage, storageNotice, storageSettings } from '../../src/vs/workbench/contrib/agent/common/agentStorage';
 import { ToolMockStore, installToolMock, resolveToolMockOptions } from '../../src/vs/workbench/contrib/agent/common/agentToolMock';
+import { ansiColorEnabled, displayPathFor, renderFileDiffAnsi, renderFileDiffPlain } from '../../src/vs/workbench/contrib/agent/common/agentDiff';
+import { decideRunningLine, refusalMessage } from '../../src/vs/workbench/contrib/agent/common/agentReplInput';
+import { formatTodoList } from '../../src/vs/workbench/contrib/agent/common/tools/todoWrite';
 import { NodeFileService } from './nodeFileService';
 import { NodeSearchService } from './nodeSearchService';
 import { NodeTerminalService } from './nodeTerminalService';
@@ -75,6 +78,40 @@ const C = {
 	blue: '\x1b[34m', cyan: '\x1b[36m', gray: '\x1b[90m',
 	magenta: '\x1b[35m',
 };
+
+/**
+ * Bare words (and their slash forms) that terminate the REPL.
+ *
+ * Landing in one place because both the idle path and the "typed while a task
+ * runs" path must recognise them: quitting is purely local (save + exit), so it
+ * must never wait for a 20-minute build to finish.
+ */
+const EXIT_WORDS = new Set(['exit', 'quit', 'q', '/exit', '/quit']);
+
+/** One-line descriptions for `/help`. Every entry has a real handler. */
+const REPL_COMMAND_HELP = [
+	'/mode <agent|plan|ask>   Switch mode (applies to subsequent tasks)',
+	'/profile <name>          Switch config profile   (idle only)',
+	'/profiles                List configured profiles',
+	'/stream                  Toggle token streaming',
+	'/skill <name>            Activate a skill for this session   (idle only)',
+	'/skills                  List loaded skills',
+	'/save [name]             Save the current session',
+	'/sessions                List saved sessions',
+	'/resume [id]             Resume a session   (idle only)',
+	'/new                     Start a new session   (idle only)',
+	'/delete-session <id>     Delete a saved session',
+	'/auto-save               Toggle session auto-save',
+	'/tasks                   List saved task logs',
+	'/task <id>               Show one task log',
+	'/delete-task <id>        Delete a task log',
+	'/continue                Resume a run that hit the step limit',
+	'/btw <hint>              Steer the running task (or start one when idle)',
+	'/btw cancel | /cancel    Abort the currently running tool',
+	'/parallel "a" "b"        Run tasks concurrently   (idle only)',
+	'/help                    Show this list',
+	'exit | quit | Ctrl+C     Save the session and leave',
+];
 
 function log(color: string, prefix: string, msg: string) {
 	console.log(`${color}${C.bold}[${prefix}]${C.reset} ${msg}`);
@@ -225,7 +262,7 @@ function createCompleter(
 		'/resume', '/mode', '/profile', '/skill', '/use-skill',
 		'/save', '/sessions', '/new', '/auto-save', '/btw',
 		'/stream', '/profiles', '/skills', '/parallel',
-		'/continue', '/session', '/delete-session', '/help',
+		'/continue', '/delete-session', '/help', '/cancel',
 		'/tasks', '/task', '/delete-task',
 	];
 
@@ -742,6 +779,18 @@ Intervention:
   /btw cancel    Cancel the currently running tool (e.g., a long build or
                  poll). The agent will continue with the next step.
 
+While a task is running (no need to wait for it to finish):
+  Immediate   /mode /stream /tasks /task /sessions /skills /save /help /cancel,
+              /profiles /delete-task /delete-session, and exit / quit.
+              These only touch REPL state or signal the agent, so they run
+              concurrently with the agent.
+  Queued      A plain prompt is put in the queue and run right after the current
+              task (two prompts cannot share one context window).
+  Refused     /profile /resume /new /parallel /skill — rejected with a reason,
+              because running them mid-task would leave the loop on a disposed
+              provider or rewrite the history it is still writing. /btw cancel
+              first, then run them.
+
 Modes:
   agent   Full autonomy: read, write, edit files, run commands
   plan    Generate implementation plan without executing
@@ -838,6 +887,8 @@ async function createServices(resolved: ResolvedConfig, memoryOverride?: 'on' | 
 	toolRegistry.register(new SearchTextTool(searchService, workspaceRoot));
 	toolRegistry.register(new SearchFilesTool(searchService, workspaceRoot));
 	toolRegistry.registerAlias('search_content', 'search_text');
+	// The checklist is registered by the AgentLoop (it owns the list and the
+	// onDidUpdateTodos event the host renders from), not here.
 	toolRegistry.register(new RunTerminalTool(terminalService, process.cwd()));
 	toolRegistry.register(new PollTool(terminalService, process.cwd()));
 
@@ -986,6 +1037,37 @@ function attachAgentListeners(agentLoop: AgentLoop, opts: CLIOptions) {
 	});
 
 	agentLoop.onDidError(err => log(C.red, 'ERROR', err.message));
+
+	// One color decision for every display-only card (diffs + checklist).
+	const colorDiff = ansiColorEnabled();
+
+	// ---- Task checklist (todo_write) ----
+	// Rendered for the human between turns so a long run shows progress instead of
+	// an endless stream of tool calls. Like the diff card, it never enters the
+	// model's context — the model gets a plain confirmation from the tool itself.
+	agentLoop.onDidUpdateTodos(todos => {
+		if (todos.length === 0) {
+			process.stdout.write(`\n${C.dim}Plan cleared.${C.reset}\n`);
+			return;
+		}
+		const rendered = formatTodoList(todos, { color: colorDiff });
+		if (rendered) process.stdout.write(`\n${rendered}\n`);
+	});
+
+	// ---- File-mutation diffs ----
+	// Every other coding agent shows what it changed; `edit_file`/`write_file`
+	// used to answer only "Replaced 1 occurrence(s)" / "wrote N lines". The card
+	// is display-only (it never enters the model's context), so it is rendered
+	// here with the host's own color + path decisions.
+	agentLoop.onDidReceiveToolDiff(toolDiff => {
+		const displayPath = displayPathFor(toolDiff.path, process.cwd(), nodePath.sep);
+		const card = colorDiff
+			? renderFileDiffAnsi(toolDiff, { color: true, displayPath })
+			: renderFileDiffPlain(toolDiff, displayPath);
+		if (!card) return;
+		process.stdout.write(`\n${card}\n`);
+	});
+
 	agentLoop.onDidComplete(() => console.log(`\n${C.dim}--- Task completed ---${C.reset}\n`));
 }
 async function runParallelMode(tasks: string[], resolved: ResolvedConfig, memoryOverride?: 'on' | 'off', opts?: CLIOptions) {
@@ -1097,6 +1179,7 @@ async function runBatchMode(opts: CLIOptions, resolved: ResolvedConfig, skillsLo
 	const modeManager = new AgentModeManager();
 	modeManager.switchMode(opts.mode);
 	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient, tracing);
+	agentLoop.registerTodoTool();
 	agentLoop.setExtraSystemPrompt(buildSkillsContext(skillsLoader, opts.useSkill, task));
 
 	// Wire the 保底 (guaranteed fallback) model: batch/cron runs must survive an
@@ -1402,6 +1485,9 @@ async function main() {
 	modeManager.switchMode(opts.mode);
 
 	const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient, tracing);
+	// The loop owns the checklist, so it registers the tool (exactly once, even
+	// though `createServices` is shared by every mode).
+	agentLoop.registerTodoTool();
 	if (opts.streaming) {
 		agentLoop.setStreaming(true);
 	}
@@ -1511,26 +1597,49 @@ async function main() {
 		output: process.stdout,
 		completer: createCompleter(sessionManager, skillsLoader, taskLogManager),
 	});
-	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, exit${C.reset}`);
-	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save${C.reset}`);
+	console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, /help, exit${C.reset}`);
+	console.log(`${C.dim}Session:  /save, /sessions, /resume, /new, /auto-save, /delete-session${C.reset}`);
 	console.log(`${C.dim}Tasks:   /tasks, /task <id>, /delete-task <id>${C.reset}`);
 	console.log(`${C.dim}Tip: /btw <hint> works any time (even while running). Conflicting instructions (e.g. "基于最新版本重新执行") auto-cancel the running tool/plan and pivot; /btw cancel aborts the current tool${C.reset}`);
+	console.log(`${C.dim}Tip: control commands (/mode, /tasks, /sessions, /save, /help, exit) run IMMEDIATELY even while a task runs — no need to wait${C.reset}`);
 	console.log(`${C.dim}Tip: press Tab to auto-complete commands like /resume, /mode, /profile, /skill${C.reset}\n`);
 
 	let agentIsRunning = false;
 	const bufferedLines: string[] = [];
 	let processingLock = false;
 
+	/**
+	 * The mode shown in the prompt.
+	 *
+	 * Read from the live `AgentModeManager` rather than `opts.mode`: `/mode` and
+	 * `/resume` both change the mode at runtime, and a frozen snapshot kept the
+	 * prompt advertising the startup mode forever.
+	 */
+	const currentModeLabel = (): string => {
+		switch (modeManager.currentMode) {
+			case AgentMode.Plan: return 'Plan';
+			case AgentMode.Ask: return 'Ask';
+			default: return 'Agent';
+		}
+	};
+
 	const displayPrompt = () => {
 		if (agentIsRunning) {
 			process.stdout.write(`${C.bold}${C.yellow}[running - /btw to intervene]${C.reset} `);
 		} else {
-			process.stdout.write(`${C.bold}${C.blue}${modeLabel}> ${C.reset}`);
+			process.stdout.write(`${C.bold}${C.blue}${currentModeLabel()}> ${C.reset}`);
 		}
 	};
 
+	/**
+	 * Run one task body: skills context, model routing, the agent loop, and the
+	 * session/task-log bookkeeping around it.
+	 *
+	 * Does NOT own `agentIsRunning` — `runAgentTask` does, so exactly one place
+	 * decides when the REPL is busy. (Two owners used to race: `processTask`
+	 * cleared the flag itself, which made a concurrent `/btw` see "idle" mid-run.)
+	 */
 	const processTask = async (task: string) => {
-		agentIsRunning = true;
 		try {
 			// Rebuild skills context with the actual task for auto-matching
 			const taskExtra = buildSkillsContext(skillsLoader, undefined, task);
@@ -1548,25 +1657,53 @@ async function main() {
 		} catch (err: any) {
 			log(C.red, 'ERROR', err.message);
 		}
-		agentIsRunning = false;
 	};
 
 	// Process any input buffered while the agent was running.
-	// With the idle /btw semantics (a hint is a direct prompt), a buffered
-	// /btw is also executed immediately as a task rather than silently accumulated.
+	//
+	// Insertion order is preserved, so prompts run in the order they were typed.
+	// A buffered line is ALSO re-classified: a control command (or a refusing one)
+	// must not become a task just because it was typed a moment too early — that is
+	// exactly the "my command did nothing / went to the LLM" bug, in the queued
+	// path. Only real prompts and /btw reach the agent.
 	const drainBufferedLines = async () => {
 		while (bufferedLines.length > 0) {
 			const next = bufferedLines.shift()!;
-			if (next.startsWith('/btw ')) {
-				const hint = next.slice(5).trim();
-				if (hint && hint !== 'cancel' && hint !== 'abort') {
-					log(C.magenta, 'BTW', `Buffered hint as prompt: "${hint.substring(0, 80)}${hint.length > 80 ? '...' : ''}"`);
-					await processTask(hint);
+			const decision = decideRunningLine(next, { agentRunning: agentIsRunning });
+
+			if (decision.route === 'immediate' || decision.route === 'refuse') {
+				if (EXIT_WORDS.has(next.toLowerCase())) {
+					void gracefulExit();
+					return;
+				}
+				if (decision.route === 'refuse') {
+					// A queued command that was refused never saw a running task at the
+					// moment it is executed, so do not claim "while a task is running".
+					log(C.yellow, 'REFUSED', refusalMessage(decision, false));
+				} else if (await handleCommand(next)) {
+					// No "executed from the queue" banner when the agent is idle: the line
+					// is simply being handled in order, and the banner read like a
+					// cancellation notice next to the command's own output.
+					if (agentIsRunning) {
+						log(C.dim, 'QUEUED', `${decision.command} — ${decision.reason ?? 'executed from the queue'}`);
+					}
+				} else {
+					log(C.yellow, 'REPL', `no handler for ${decision.command} — nothing was done`);
 				}
 				continue;
 			}
+
+			if (decision.route === 'btw') {
+				const hint = next.slice(4).trim();
+				if (hint && hint !== 'cancel' && hint !== 'abort') {
+					log(C.magenta, 'BTW', `Buffered hint as prompt: "${hint.substring(0, 80)}${hint.length > 80 ? '...' : ''}"`);
+					await runAgentTask(hint);
+				}
+				continue;
+			}
+
 			console.log(`\n${C.dim}--- Processing queued: "${next.substring(0, 80)}${next.length > 80 ? '...' : ''}" ---${C.reset}`);
-			await processTask(next);
+			await runAgentTask(next);
 		}
 	};
 
@@ -1597,45 +1734,409 @@ async function main() {
 		setTimeout(() => process.exit(0), 100);
 	};
 
+	/**
+	 * Execute one REPL line.
+	 *
+	 * Returns true when the line was a command and false when it is a prompt that
+	 * still needs to go through the agent loop.
+	 *
+	 * Split out from the readline handler so the SAME dispatcher serves both the
+	 * idle path and the "typed while the agent is running" path. Previously the
+	 * running path had its own `else { buffer }` fallback, which meant `/mode ask`,
+	 * `/tasks`, `/sessions` and even `exit` were queued until the task finished.
+	 */
+	const handleCommand = async (trimmed: string): Promise<boolean> => {
+		// ---- Session commands ----
+		if (trimmed.startsWith('/save')) {
+			const name = trimmed.slice(5).trim() || currentSessionName || '';
+			autoSaveSession(name);
+			console.log(`${C.green}Session saved: ${currentSessionId}${C.reset}${name ? ` (${name})` : ''}`);
+			return true;
+		}
+
+		if (trimmed === '/sessions') {
+			const sessions = sessionManager.listSessions();
+			if (sessions.length === 0) {
+				console.log(`${C.dim}No saved sessions.${C.reset}`);
+			} else {
+				console.log(`\n${C.bold}Saved sessions (${sessions.length}):${C.reset}\n`);
+				for (const s of sessions) {
+					const date = new Date(s.updatedAt).toLocaleString();
+					const modeLabel2 = s.mode === AgentMode.Plan ? 'Plan' : s.mode === AgentMode.Ask ? 'Ask' : 'Agent';
+					const isCurrent = s.id === currentSessionId ? ` ${C.green}(current)` : '';
+					console.log(`  ${C.cyan}${s.id}${C.reset}${isCurrent}`);
+					console.log(`    ${C.bold}Name:${C.reset} ${s.name || '(unnamed)'}  ${C.bold}Mode:${C.reset} ${modeLabel2}  ${C.bold}Msgs:${C.reset} ${s.messageCount}`);
+					console.log(`    ${C.bold}Updated:${C.reset} ${date}`);
+					if (s.summary) {
+						console.log(`    ${C.dim}${s.summary.substring(0, 120)}${C.reset}`);
+					}
+					console.log('');
+				}
+			}
+			return true;
+		}
+
+		if (trimmed.startsWith('/resume')) {
+			const targetId = trimmed.slice(7).trim();
+			const session = targetId
+				? sessionManager.loadSession(targetId)
+				: sessionManager.getLatestSession();
+
+			if (!session) {
+				log(C.yellow, 'SESSION', targetId ? `Session "${targetId}" not found` : 'No sessions to resume');
+				return true;
+			}
+
+			autoSaveSession();
+			modeManager.switchMode(session.mode);
+			// Rebuild extraSystemPrompt with current version — ignore stored old version
+			const rebuiltExtra = buildSkillsContext(skillsLoader, undefined, undefined);
+			agentLoop.restoreFromSession(
+				session.messages,
+				session.systemPrompt || '',
+				rebuiltExtra || '',
+			);
+			currentSessionId = session.id;
+			currentSessionName = session.name;
+
+			const date = new Date(session.updatedAt).toLocaleString();
+			console.log(`${C.magenta}[SESSION]${C.reset} Resumed "${session.name || session.id}" (${session.messageCount} msgs, ${date})`);
+			return true;
+		}
+
+		if (trimmed === '/new') {
+			autoSaveSession();
+			agentLoop.restoreFromSession([], '', extraPrompt || '');
+			currentSessionId = undefined;
+			currentSessionName = '';
+			console.log(`${C.magenta}[SESSION]${C.reset} Started new session`);
+			return true;
+		}
+
+		if (trimmed === '/auto-save') {
+			autoSaveEnabled = !autoSaveEnabled;
+			console.log(`${C.magenta}[SESSION]${C.reset} Auto-save ${autoSaveEnabled ? 'enabled' : 'disabled'}`);
+			return true;
+		}
+
+		// ---- Task log commands ----
+		if (trimmed === '/tasks') {
+			const taskLogs = taskLogManager.listTaskLogs();
+			if (taskLogs.length === 0) {
+				console.log(`${C.dim}No saved task logs.${C.reset}`);
+			} else {
+				console.log(`\n${C.bold}Task logs (${taskLogs.length}):${C.reset}\n`);
+				for (const t of taskLogs) {
+					const date = new Date(t.startedAt).toLocaleString();
+					const dur = (t.durationMs / 1000).toFixed(1);
+					const statusIcon = t.status === 'completed' ? `${C.green}✓` : t.status === 'failed' ? `${C.red}✗` : `${C.yellow}⊘`;
+					console.log(`  ${C.cyan}${t.id}${C.reset} ${statusIcon}${C.reset}  ${C.dim}${dur}s${C.reset}`);
+					console.log(`    ${t.task.substring(0, 100)}`);
+					console.log(`    ${C.dim}${new Date(t.startedAt).toLocaleString()} | ${t.mode} | ${t.totalSteps} steps | ${t.totalToolCalls} tools${C.reset}`);
+					console.log('');
+				}
+			}
+			return true;
+		}
+
+		if (trimmed.startsWith('/task ') || trimmed === '/task') {
+			const targetId = trimmed.slice(6).trim();
+			if (!targetId) {
+				// Previously `/task` fell through and was sent to the LLM as a task.
+				log(C.yellow, 'TASK', 'Usage: /task <id>   (use /tasks to list ids)');
+				return true;
+			}
+			const entry = taskLogManager.loadTaskLog(targetId);
+			if (!entry) {
+				console.log(`${C.yellow}Task log "${targetId}" not found${C.reset}`);
+			} else {
+				console.log(`\n${C.bold}=== Task Log: ${entry.id} ===${C.reset}\n`);
+				console.log(taskLogManager.formatTaskLog(entry));
+			}
+			return true;
+		}
+
+		if (trimmed.startsWith('/delete-task ')) {
+			const targetId = trimmed.slice(13).trim();
+			if (taskLogManager.deleteTaskLog(targetId)) {
+				console.log(`${C.green}Task log "${targetId}" deleted${C.reset}`);
+			} else {
+				console.log(`${C.yellow}Task log "${targetId}" not found${C.reset}`);
+			}
+			return true;
+		}
+
+		if (trimmed === '/delete-task') {
+			log(C.yellow, 'TASK', 'Usage: /delete-task <id>   (use /tasks to list ids)');
+			return true;
+		}
+
+		// ---- /delete-session: the completer advertises it; delete through the manager ----
+		if (trimmed.startsWith('/delete-session')) {
+			const targetId = trimmed.slice(15).trim();
+			if (!targetId) {
+				log(C.yellow, 'SESSION', 'Usage: /delete-session <id>   (use /sessions to list ids)');
+				return true;
+			}
+			const deleted = sessionManager.deleteSession(targetId);
+			if (deleted) {
+				if (currentSessionId === targetId) {
+					currentSessionId = undefined;
+					currentSessionName = '';
+				}
+				console.log(`${C.green}Session "${targetId}" deleted${C.reset}`);
+			} else {
+				console.log(`${C.yellow}Session "${targetId}" not found${C.reset}`);
+			}
+			return true;
+		}
+
+		// ---- /help: list the real commands (never forwarded to the LLM) ----
+		if (trimmed === '/help') {
+			console.log(`\n${C.bold}Commands${C.reset}`);
+			for (const line of REPL_COMMAND_HELP) console.log(`  ${line}`);
+			console.log(`\n${C.dim}Tip: /btw <hint> works even while a task runs; control commands like${C.reset}`);
+			console.log(`${C.dim}/mode, /tasks, /sessions, /save and exit run immediately without waiting.${C.reset}\n`);
+			return true;
+		}
+
+		// ---- Mode/profile commands ----
+		// Accept the bare forms too: `/mode` with no argument used to be forwarded
+		// to the LLM as a prompt ("do /mode").
+		if (trimmed.startsWith('/mode ') || trimmed === '/mode') {
+			const newMode = trimmed.slice(6).trim();
+			if (!newMode) {
+				log(C.magenta, 'MODE', `Current mode: ${currentModeLabel()}. Usage: /mode <agent|plan|ask>`);
+				return true;
+			}
+			if (newMode === 'plan') modeManager.switchMode(AgentMode.Plan);
+			else if (newMode === 'ask') modeManager.switchMode(AgentMode.Ask);
+			else modeManager.switchMode(AgentMode.Agent);
+			log(C.magenta, 'MODE', `Switched to ${newMode}`);
+			return true;
+		}
+
+		if (trimmed === '/stream') {
+			agentLoop.setStreaming(!opts.streaming);
+			opts.streaming = !opts.streaming;
+			log(C.magenta, 'STREAM', `Streaming ${opts.streaming ? 'enabled' : 'disabled'}`);
+			return true;
+		}
+
+		if (trimmed === '/profiles') {
+			const profiles = listProfiles();
+			for (const p of profiles) {
+				const active = p.name === resolved.profileName ? ` ${C.green}(active)` : '';
+				console.log(`  ${C.cyan}${p.name}${C.reset}  ${C.dim}${p.provider}/${p.model}${active}${C.reset}`);
+			}
+			return true;
+		}
+
+		if (trimmed.startsWith('/profile ')) {
+			const newProfileName = trimmed.slice(9).trim();
+			const previousProfile = resolved.profileName;
+			const previousModel = currentModel;
+			try {
+				const newResolved = loadConfigForProfile(newProfileName);
+				if (!newResolved.agentConfig.apiKey) {
+					log(C.red, 'ERROR', `Profile "${newProfileName}" has no API key configured`);
+					return true;
+				}
+				const newProvider = LLMProviderFactory.create(newResolved.agentConfig);
+				agentLoop.swapProvider(newResolved.agentConfig, newProvider, 'profile');
+				resolved = newResolved;
+				setResolvedSkillDirs(newResolved.skillsDirs);
+				modelRouter = new ModelRouter(newResolved.modelRouting, newResolved.profiles, newResolved.agentConfig);
+				currentModel = newResolved.agentConfig.model;
+				// Re-register the 保底 model for the new profile's routing config.
+				wireModelFallback(agentLoop, modelRouter);
+				const nc = newResolved.agentConfig;
+				log(C.magenta, 'PROFILE', `Switched ${previousProfile} (${previousModel}) → ${newProfileName} (${nc.provider}/${nc.model})`);
+			} catch (err: any) {
+				log(C.red, 'ERROR', `Failed to switch profile: ${err.message}`);
+			}
+			return true;
+		}
+
+		if (trimmed === '/skills') {
+			if (skillsLoader.skills.length === 0) {
+				console.log(`${C.dim}No skills loaded. Configure skills directories in config.yaml.${C.reset}`);
+			} else {
+				console.log(`\n${C.bold}Loaded skills (${skillsLoader.skills.length}):${C.reset}`);
+				for (const s of skillsLoader.skills) {
+					console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
+					if (s.whenToUse) {
+						console.log(`      whenToUse: ${C.dim}${s.whenToUse.substring(0, 100)}${C.reset}`);
+					}
+				}
+			}
+			console.log(`${C.dim}Skill tools: skill_catalog / create_skill / update_skill (ask the agent to manage skills)${C.reset}`);
+			return true;
+		}
+
+		if (trimmed.startsWith('/skill ')) {
+			const skillName = trimmed.slice(7).trim();
+			// In REPL mode, no task description yet — but pass empty so the
+			// explicitly activated skill still gets its full content via buildSkillsContext.
+			const newExtra = buildSkillsContext(skillsLoader, skillName, undefined);
+			agentLoop.setExtraSystemPrompt(newExtra);
+			log(C.magenta, 'SKILL', skillName ? `Activated skill: ${skillName}` : 'Cleared active skill');
+			return true;
+		}
+
+		// ---- /use-skill: the completer advertises it, so it must behave like /skill ----
+		if (trimmed.startsWith('/use-skill ')) {
+			const skillName = trimmed.slice(11).trim();
+			const newExtra = buildSkillsContext(skillsLoader, skillName, undefined);
+			agentLoop.setExtraSystemPrompt(newExtra);
+			const known = skillsLoader.skills.some(s => s.name === skillName);
+			log(C.magenta, 'SKILL', known
+				? `Activated skill: ${skillName}`
+				: `Activated skill: ${skillName} ${C.yellow}(not in the loaded skill list — /skills to check)${C.reset}`);
+			return true;
+		}
+
+		if (trimmed.startsWith('/parallel ')) {
+			const tasks = trimmed.slice(10).match(/"[^"]+"/g)?.map(t => t.replace(/"/g, '')) || [];
+			if (tasks.length >= 2) {
+				await runParallelMode(tasks, resolved, opts.memory);
+			} else {
+				log(C.red, 'ERROR', 'Provide at least 2 tasks in quotes: /parallel "task1" "task2"');
+			}
+			return true;
+		}
+
+		if (trimmed === '/continue' || trimmed === 'continue') {
+			try {
+				// `continueSession` runs the agent, so it is a task for the REPL's
+				// purposes: mark the REPL busy, otherwise lines typed during the
+				// resumed run would be treated as idle commands.
+				agentIsRunning = true;
+				try {
+					await agentLoop.continueSession();
+				} finally {
+					agentIsRunning = false;
+				}
+				autoSaveSession();
+				const status = agentLoop.lastTaskError ? 'failed' : 'completed';
+				const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
+				taskLogManager.saveTaskLog(taskLog);
+			} catch (err: any) {
+				log(C.red, 'ERROR', err.message);
+			}
+			return true;
+		}
+
+		// ---- /btw when agent is idle: treat as a direct prompt and respond immediately ----
+		if (trimmed.startsWith('/btw ')) {
+			const hint = trimmed.slice(5).trim();
+			if (hint) {
+				if (hint === 'cancel' || hint === 'abort') {
+					log(C.yellow, 'BTW', 'No agent currently running. Use /btw cancel while agent is running to abort a tool.');
+				} else {
+					log(C.magenta, 'BTW', `Direct prompt: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+					// Run through the serialized wrapper so lines typed while this
+					// prompt runs are still routed (and buffered) correctly.
+					await runAgentTask(hint);
+					await drainBufferedLines();
+				}
+			} else {
+				log(C.yellow, 'BTW', 'Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)');
+			}
+			return true;
+		}
+
+		// ---- /cancel (idle): nothing to cancel, but do not forward it to the LLM ----
+		if (trimmed === '/cancel') {
+			log(C.yellow, 'CANCEL', 'No task currently running.');
+			return true;
+		}
+
+		return false;
+	};
+
+	/**
+	 * Run one agent task, serialized: exactly one task owns the context window.
+	 *
+	 * `agentIsRunning` is what the line handler reads to decide whether a new line
+	 * is a prompt that must queue behind this one.
+	 */
+	const runAgentTask = async (task: string): Promise<void> => {
+		agentIsRunning = true;
+		try {
+			await processTask(task);
+		} finally {
+			agentIsRunning = false;
+		}
+	};
+
+	/** Route a `/btw …` line into the running agent (hint, supersede, or cancel). */
+	const handleBtw = async (hint: string): Promise<void> => {
+		if (!hint) {
+			log(C.yellow, 'BTW', 'Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)');
+			return;
+		}
+		if (hint === 'cancel' || hint === 'abort') {
+			if (agentLoop.cancelCurrentTool()) {
+				log(C.magenta, 'BTW', 'Cancelling current tool execution...');
+				return;
+			}
+			const outcome = await agentLoop.injectBtwHint(hint);
+			log(C.yellow, 'BTW', outcome.kind === 'superseded'
+				? 'No tool running — asking the agent to stop the current task'
+				: 'No tool currently running to cancel');
+			return;
+		}
+		// Classify first: an instruction that replaces the running task aborts the
+		// in-flight tool call and drops the plan, instead of being queued behind a
+		// long build/poll.
+		const outcome = await agentLoop.injectBtwHint(hint);
+		if (outcome.kind === 'superseded') {
+			log(C.magenta, 'BTW', `Task superseded — ${outcome.toolCancelled ? 'aborted the running tool and ' : ''}pivoting to: "${hint.substring(0, 80)}${hint.length > 80 ? '...' : ''}"`);
+			if (outcome.reason) log(C.dim, 'BTW', `reason: ${outcome.reason}`);
+		} else if (outcome.kind === 'cancelled') {
+			log(C.magenta, 'BTW', 'Cancelling current tool execution...');
+		} else {
+			log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
+		}
+	};
+
 	rl.on('line', async (input) => {
 		const trimmed = input.trim();
 
-		// ---- Agent is running: intercept /btw, buffer everything else ----
+		// ---- Agent is running: /btw steers it, safe control commands run NOW,
+		//      real prompts queue, unsafe commands are refused out loud ----
 		if (agentIsRunning) {
-			if (trimmed.startsWith('/btw ')) {
-				const hint = trimmed.slice(5).trim();
-				if (hint) {
-					// Check for cancel/abort command
-					if (hint === 'cancel' || hint === 'abort') {
-						const cancelled = agentLoop.cancelCurrentTool();
-						if (cancelled) {
-							log(C.magenta, 'BTW', 'Cancelling current tool execution...');
-						} else {
-							const outcome = await agentLoop.injectBtwHint(hint);
-							log(C.yellow, 'BTW', outcome.kind === 'superseded'
-								? 'No tool running — asking the agent to stop the current task'
-								: 'No tool currently running to cancel');
-						}
-					} else {
-						// Classify first: an instruction that replaces the running
-						// task aborts the in-flight tool call and drops the plan,
-						// instead of being queued behind a long build/poll.
-						const outcome = await agentLoop.injectBtwHint(hint);
-						if (outcome.kind === 'superseded') {
-							log(C.magenta, 'BTW', `Task superseded — ${outcome.toolCancelled ? 'aborted the running tool and ' : ''}pivoting to: "${hint.substring(0, 80)}${hint.length > 80 ? '...' : ''}"`);
-							if (outcome.reason) log(C.dim, 'BTW', `reason: ${outcome.reason}`);
-						} else if (outcome.kind === 'cancelled') {
-							log(C.magenta, 'BTW', 'Cancelling current tool execution...');
-						} else {
-							log(C.magenta, 'BTW', `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
-						}
+			const decision = decideRunningLine(trimmed, { agentRunning: true });
+
+			switch (decision.route) {
+				case 'btw':
+					await handleBtw(trimmed.slice(4).trim());
+					break;
+				case 'immediate':
+					// Runs concurrently with the agent on purpose: these commands only
+					// touch REPL state or the agent's cancellation signal, never the
+					// message history the running loop is writing to.
+					if (EXIT_WORDS.has(trimmed.toLowerCase())) {
+						void gracefulExit();
+						return;
 					}
-				} else {
-					log(C.yellow, 'BTW', 'Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)');
-				}
-			} else if (trimmed) {
-				bufferedLines.push(trimmed);
-				log(C.dim, 'QUEUED', `"${trimmed.substring(0, 60)}${trimmed.length > 60 ? '...' : ''}" — will process after current task`);
+					log(C.dim, 'NOW', `${decision.command} — ${decision.reason ?? 'running immediately'}`);
+					if (!(await handleCommand(trimmed))) {
+						// A command classified as safe must have a handler. If it does
+						// not, say so instead of silently doing nothing.
+						log(C.yellow, 'REPL', `no handler for ${decision.command} — nothing was done`);
+					}
+					break;
+				case 'refuse':
+					log(C.yellow, 'REFUSED', refusalMessage(decision));
+					break;
+				default:
+					if (trimmed) {
+						bufferedLines.push(trimmed);
+						log(C.dim, 'QUEUED', `"${trimmed.substring(0, 60)}${trimmed.length > 60 ? '...' : ''}" — will process after current task`);
+					}
+					break;
 			}
 			displayPrompt();
 			return;
@@ -1647,251 +2148,37 @@ async function main() {
 			return;
 		}
 
-		// ---- Normal REPL processing (agent is idle) ----
-		if (!trimmed || trimmed === 'exit' || trimmed === 'quit') {
+		// ---- Agent is idle ----
+		if (!trimmed) {
+			displayPrompt();
+			return;
+		}
+		if (EXIT_WORDS.has(trimmed.toLowerCase())) {
 			void gracefulExit();
 			return;
 		}
 
 		processingLock = true;
-
 		try {
-			// ---- Session commands ----
-			if (trimmed.startsWith('/save')) {
-				const name = trimmed.slice(5).trim() || currentSessionName || '';
-				autoSaveSession(name);
-				console.log(`${C.green}Session saved: ${currentSessionId}${C.reset}${name ? ` (${name})` : ''}`);
-				processingLock = false; displayPrompt(); return;
-			}
+			// Anything queued while a PREVIOUS run was finishing is handled first, in
+			// order. This is what makes a fast burst of piped/typed lines reliable:
+			// the queue used to be drained only after a task ran, so a burst of pure
+			// commands (e.g. `/help` then `/tasks`) left everything after the first in
+			// the queue forever.
+			await drainBufferedLines();
+			if (agentIsRunning) return;
 
-			if (trimmed === '/sessions') {
-				const sessions = sessionManager.listSessions();
-				if (sessions.length === 0) {
-					console.log(`${C.dim}No saved sessions.${C.reset}`);
-				} else {
-					console.log(`\n${C.bold}Saved sessions (${sessions.length}):${C.reset}\n`);
-					for (const s of sessions) {
-						const date = new Date(s.updatedAt).toLocaleString();
-						const modeLabel2 = s.mode === AgentMode.Plan ? 'Plan' : s.mode === AgentMode.Ask ? 'Ask' : 'Agent';
-						const isCurrent = s.id === currentSessionId ? ` ${C.green}(current)` : '';
-						console.log(`  ${C.cyan}${s.id}${C.reset}${isCurrent}`);
-						console.log(`    ${C.bold}Name:${C.reset} ${s.name || '(unnamed)'}  ${C.bold}Mode:${C.reset} ${modeLabel2}  ${C.bold}Msgs:${C.reset} ${s.messageCount}`);
-						console.log(`    ${C.bold}Updated:${C.reset} ${date}`);
-						if (s.summary) {
-							console.log(`    ${C.dim}${s.summary.substring(0, 120)}${C.reset}`);
-						}
-						console.log('');
-					}
-				}
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed.startsWith('/resume')) {
-				const targetId = trimmed.slice(7).trim();
-				const session = targetId
-					? sessionManager.loadSession(targetId)
-					: sessionManager.getLatestSession();
-
-				if (!session) {
-					log(C.yellow, 'SESSION', targetId ? `Session "${targetId}" not found` : 'No sessions to resume');
-					processingLock = false; displayPrompt(); return;
-				}
-
-				autoSaveSession();
-				modeManager.switchMode(session.mode);
-				// Rebuild extraSystemPrompt with current version — ignore stored old version
-				const rebuiltExtra = buildSkillsContext(skillsLoader, undefined, undefined);
-				agentLoop.restoreFromSession(
-					session.messages,
-					session.systemPrompt || '',
-					rebuiltExtra || '',
-				);
-				currentSessionId = session.id;
-				currentSessionName = session.name;
-
-				const date = new Date(session.updatedAt).toLocaleString();
-				console.log(`${C.magenta}[SESSION]${C.reset} Resumed "${session.name || session.id}" (${session.messageCount} msgs, ${date})`);
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed === '/new') {
-				autoSaveSession();
-				agentLoop.restoreFromSession([], '', extraPrompt || '');
-				currentSessionId = undefined;
-				currentSessionName = '';
-				console.log(`${C.magenta}[SESSION]${C.reset} Started new session`);
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed === '/auto-save') {
-				autoSaveEnabled = !autoSaveEnabled;
-				console.log(`${C.magenta}[SESSION]${C.reset} Auto-save ${autoSaveEnabled ? 'enabled' : 'disabled'}`);
-				processingLock = false; displayPrompt(); return;
-			}
-
-			// ---- Task log commands ----
-			if (trimmed === '/tasks') {
-				const taskLogs = taskLogManager.listTaskLogs();
-				if (taskLogs.length === 0) {
-					console.log(`${C.dim}No saved task logs.${C.reset}`);
-				} else {
-					console.log(`\n${C.bold}Task logs (${taskLogs.length}):${C.reset}\n`);
-					for (const t of taskLogs) {
-						const date = new Date(t.startedAt).toLocaleString();
-						const dur = (t.durationMs / 1000).toFixed(1);
-						const statusIcon = t.status === 'completed' ? `${C.green}✓` : t.status === 'failed' ? `${C.red}✗` : `${C.yellow}⊘`;
-						console.log(`  ${C.cyan}${t.id}${C.reset} ${statusIcon}${C.reset}  ${C.dim}${dur}s${C.reset}`);
-						console.log(`    ${t.task.substring(0, 100)}`);
-						console.log(`    ${C.dim}${new Date(t.startedAt).toLocaleString()} | ${t.mode} | ${t.totalSteps} steps | ${t.totalToolCalls} tools${C.reset}`);
-						console.log('');
-					}
-				}
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed.startsWith('/task ')) {
-				const targetId = trimmed.slice(6).trim();
-				const log = taskLogManager.loadTaskLog(targetId);
-				if (!log) {
-					console.log(`${C.yellow}Task log "${targetId}" not found${C.reset}`);
-				} else {
-					console.log(`\n${C.bold}=== Task Log: ${log.id} ===${C.reset}\n`);
-					console.log(taskLogManager.formatTaskLog(log));
-				}
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed.startsWith('/delete-task ')) {
-				const targetId = trimmed.slice(13).trim();
-				if (taskLogManager.deleteTaskLog(targetId)) {
-					console.log(`${C.green}Task log "${targetId}" deleted${C.reset}`);
-				} else {
-					console.log(`${C.yellow}Task log "${targetId}" not found${C.reset}`);
-				}
-				processingLock = false; displayPrompt(); return;
-			}
-
-			// ---- Mode/profile commands ----
-			if (trimmed.startsWith('/mode ')) {
-				const newMode = trimmed.slice(6).trim();
-				if (newMode === 'plan') modeManager.switchMode(AgentMode.Plan);
-				else if (newMode === 'ask') modeManager.switchMode(AgentMode.Ask);
-				else modeManager.switchMode(AgentMode.Agent);
-				log(C.magenta, 'MODE', `Switched to ${newMode}`);
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed === '/stream') {
-				agentLoop.setStreaming(!opts.streaming);
-				opts.streaming = !opts.streaming;
-				log(C.magenta, 'STREAM', `Streaming ${opts.streaming ? 'enabled' : 'disabled'}`);
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed === '/profiles') {
-				const profiles = listProfiles();
-				for (const p of profiles) {
-					const active = p.name === resolved.profileName ? ` ${C.green}(active)` : '';
-					console.log(`  ${C.cyan}${p.name}${C.reset}  ${C.dim}${p.provider}/${p.model}${active}${C.reset}`);
-				}
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed.startsWith('/profile ')) {
-				const newProfileName = trimmed.slice(9).trim();
-				const previousProfile = resolved.profileName;
-				const previousModel = currentModel;
-				try {
-					const newResolved = loadConfigForProfile(newProfileName);
-					if (!newResolved.agentConfig.apiKey) {
-						log(C.red, 'ERROR', `Profile "${newProfileName}" has no API key configured`);
-						processingLock = false; displayPrompt(); return;
-					}
-					const newProvider = LLMProviderFactory.create(newResolved.agentConfig);
-					agentLoop.swapProvider(newResolved.agentConfig, newProvider, 'profile');
-					resolved = newResolved;
-					setResolvedSkillDirs(newResolved.skillsDirs);
-					modelRouter = new ModelRouter(newResolved.modelRouting, newResolved.profiles, newResolved.agentConfig);
-					currentModel = newResolved.agentConfig.model;
-					// Re-register the 保底 model for the new profile's routing config.
-					wireModelFallback(agentLoop, modelRouter);
-					const nc = newResolved.agentConfig;
-					log(C.magenta, 'PROFILE', `Switched ${previousProfile} (${previousModel}) → ${newProfileName} (${nc.provider}/${nc.model})`);
-				} catch (err: any) {
-					log(C.red, 'ERROR', `Failed to switch profile: ${err.message}`);
-				}
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed === '/skills') {
-				if (skillsLoader.skills.length === 0) {
-					console.log(`${C.dim}No skills loaded. Configure skills directories in config.yaml.${C.reset}`);
-				} else {
-					console.log(`\n${C.bold}Loaded skills (${skillsLoader.skills.length}):${C.reset}`);
-					for (const s of skillsLoader.skills) {
-						console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
-						if (s.whenToUse) {
-							console.log(`      whenToUse: ${C.dim}${s.whenToUse.substring(0, 100)}${C.reset}`);
-						}
-					}
-				}
-				console.log(`${C.dim}Skill tools: skill_catalog / create_skill / update_skill (ask the agent to manage skills)${C.reset}`);
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed.startsWith('/skill ')) {
-				const skillName = trimmed.slice(7).trim();
-				// In REPL mode, no task description yet — but pass empty so the
-				// explicitly activated skill still gets its full content via buildSkillsContext.
-				const newExtra = buildSkillsContext(skillsLoader, skillName, undefined);
-				agentLoop.setExtraSystemPrompt(newExtra);
-				log(C.magenta, 'SKILL', skillName ? `Activated skill: ${skillName}` : 'Cleared active skill');
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed.startsWith('/parallel ')) {
-				const tasks = trimmed.slice(10).match(/"[^"]+"/g)?.map(t => t.replace(/"/g, '')) || [];
-				if (tasks.length >= 2) {
-					await runParallelMode(tasks, resolved, opts.memory);
-				} else {
-					log(C.red, 'ERROR', 'Provide at least 2 tasks in quotes: /parallel "task1" "task2"');
-				}
-				processingLock = false; displayPrompt(); return;
-			}
-
-			if (trimmed === '/continue' || trimmed === 'continue') {
-				try {
-					await agentLoop.continueSession();
-					autoSaveSession();
-					const status = agentLoop.lastTaskError ? 'failed' : 'completed';
-					const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
-					taskLogManager.saveTaskLog(taskLog);
-				} catch (err: any) {
-					log(C.red, 'ERROR', err.message);
-				}
-				processingLock = false; displayPrompt(); return;
-			}
-
-			// ---- /btw when agent is idle: treat as a direct prompt and respond immediately ----
-			if (trimmed.startsWith('/btw ')) {
-				const hint = trimmed.slice(5).trim();
-				if (hint) {
-					if (hint === 'cancel' || hint === 'abort') {
-						log(C.yellow, 'BTW', 'No agent currently running. Use /btw cancel while agent is running to abort a tool.');
-					} else {
-						log(C.magenta, 'BTW', `Direct prompt: "${hint.substring(0, 100)}${hint.length > 100 ? '...' : ''}"`);
-						await processTask(hint);
-						await drainBufferedLines();
-					}
-				} else {
-					log(C.yellow, 'BTW', 'Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)');
-				}
-				processingLock = false; displayPrompt(); return;
+			if (await handleCommand(trimmed)) {
+				// A command can finish while more lines were already typed/piped, e.g.
+				// `printf '/help\n/tasks\n' | code-agent`. Those went to the buffer when
+				// they arrived (processingLock was still held), so drain them here or
+				// they would sit there until some later task completed.
+				await drainBufferedLines();
+				return;
 			}
 
 			// ---- Task execution ----
-			await processTask(trimmed);
-
+			await runAgentTask(trimmed);
 			// Process any buffered input (typed during agent execution)
 			await drainBufferedLines();
 		} finally {

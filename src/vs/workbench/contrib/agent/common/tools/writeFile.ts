@@ -8,6 +8,7 @@ import { VSBuffer } from 'vs/base/common/buffer';
 import { IFileService } from 'vs/platform/files/common/files';
 import { IToolResult } from 'vs/workbench/services/agent/common/agentModels';
 import { AgentTool } from '../agentTools';
+import { buildToolDiff } from '../agentDiff';
 
 export class WriteFileTool extends AgentTool {
 	readonly name = 'write_file';
@@ -42,9 +43,29 @@ export class WriteFileTool extends AgentTool {
 
 		try {
 			const uri = URI.file(path);
+
+			// Read the previous content so the displayed diff can show a real
+			// before/after instead of "N lines written". A missing file is the
+			// create case: an empty baseline turns the whole content into `+` lines.
+			let before = '';
+			let existed = false;
+			try {
+				const existing = await this._fileService.readFile(uri);
+				before = existing.value.toString();
+				existed = true;
+			} catch {
+				// Not a failure: write_file is allowed to create the file.
+			}
+
 			await this._fileService.writeFile(uri, VSBuffer.fromString(content));
 			const lineCount = content.split('\n').length;
-			return this.success(toolCallId, `Successfully wrote ${lineCount} lines to ${path}`);
+			const headline = existed
+				? `Successfully wrote ${lineCount} lines to ${path}`
+				: `Created ${path} with ${lineCount} lines`;
+
+			// Display-only: never merged into `output` (see IToolResult.diff).
+			const diff = buildToolDiff(path, before, content);
+			return { ...this.success(toolCallId, headline), diff };
 		} catch (err) {
 			return this.failure(toolCallId, `Failed to write file ${path}: ${(err as Error).message}`);
 		}
