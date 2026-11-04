@@ -88,7 +88,13 @@ function testHomeResolution(): void {
 
 	const override = tmpDir('override');
 	const previous = process.env.AGENT_HOME;
+	const previousCwd = process.cwd();
 	process.env.AGENT_HOME = override;
+	// `findConfigFile()` prefers `<cwd>/config.yaml`, so an ambient project config
+	// (a developer's local, gitignored config.yaml listing `skills:`) would leak
+	// into the "default dirs follow the home" assertions below. Run from the
+	// override home so the assertions really test the DEFAULT computation.
+	process.chdir(override);
 	try {
 		fs.writeFileSync(path.join(override, 'config.yaml'), 'active_profile: x\n');
 		eq(agentHomeDir(), override, 'AGENT_HOME overrides the home directory');
@@ -134,6 +140,7 @@ function testHomeResolution(): void {
 		eq(loadConfig().skillsDirs.join(','), path.join(override, 'skills'),
 			'duplicate / symlinked skills dirs collapse to one entry');
 	} finally {
+		process.chdir(previousCwd);
 		if (previous === undefined) delete process.env.AGENT_HOME;
 		else process.env.AGENT_HOME = previous;
 		fs.rmSync(override, { recursive: true, force: true });
