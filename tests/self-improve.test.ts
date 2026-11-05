@@ -9,6 +9,7 @@
  *  [6] issue signals recorded by the ReAct loop (unknown tool)
  *  [7] the methodology prompt section
  *  [8] the poll tool's own waiting budget vs the generic step timeout
+ *  [9] run_terminal safety filter: target precision (no false positives)
  *
  *  Run:
  *    npx esbuild tests/self-improve.test.ts --bundle --platform=node --target=node18 \
@@ -41,6 +42,7 @@ import { AgentModeManager } from 'vs/workbench/contrib/agent/common/agentModes';
 import { AgentCheckpointManager } from 'vs/workbench/contrib/agent/common/agentCheckpoint';
 import { ToolRegistry } from 'vs/workbench/contrib/agent/common/agentTools';
 import { PollTool, pollBudgetMs } from 'vs/workbench/contrib/agent/common/tools/poll';
+import { RunTerminalTool } from 'vs/workbench/contrib/agent/common/tools/runTerminal';
 import { ITerminalInstance, ITerminalService } from 'vs/workbench/contrib/terminal/browser/terminal';
 import { Emitter } from 'vs/base/common/event';
 import { createMessage, MessageRole, IAgentConfig, IAgentMessage, IAgentTaskLog } from 'vs/workbench/services/agent/common/agentModels';
@@ -725,6 +727,88 @@ async function testPollBudget(): Promise<void> {
 		`the successful poll reports its attempts (${String(exec?.result).slice(-70)})`);
 }
 
+// ---------------------------------------------------------------------------
+// [9] safety filter: target precision
+// ---------------------------------------------------------------------------
+
+/**
+ * Terminal stub that records the commands the tool actually handed to a shell.
+ * `blocked` commands must never appear here: the filter's whole job is to stop
+ * them before execution, not to report them after the fact.
+ */
+class RecordingTerminalService implements ITerminalService {
+	readonly _serviceBrand: undefined;
+	readonly sent: string[] = [];
+	createTerminal(): ITerminalInstance {
+		const data = new Emitter<string>();
+		const exit = new Emitter<{ code?: number } | undefined>();
+		return {
+			onData: data.event,
+			onExit: exit.event,
+			sendText: (text: string) => {
+				this.sent.push(text);
+				setTimeout(() => {
+					data.fire('ok\n');
+					exit.fire({ code: 0 });
+				}, 1);
+			},
+			dispose: () => { data.dispose(); exit.dispose(); },
+		};
+	}
+}
+
+/**
+ * The filter matches on a *prefix* of a path, so `rm -rf /` also matched
+ * `rm -rf /tmp/scratch` and `rm -rf ~` also matched `rm -rf ~/.cache/x`. The
+ * task logs show 196 such blocked commands (42 in the last 14 days), of which
+ * ~170 were routine cleanup of temp/cache directories — each one cost the run a
+ * failed tool call and a retry. The dangerous targets below must keep being
+ * refused; the harmless ones must reach the shell.
+ */
+async function testSafetyFilter(): Promise<void> {
+	console.log('\n[9] run_terminal safety filter keeps its target precision');
+
+	const harmless = [
+		'rm -rf /tmp/test_install_3923502',
+		'rm -rf /tmp/ctest500/* && ls /tmp/ctest500',
+		'rm -rf ~/.cache/ms-playwright/*',
+		'rm -rf ~/.triton/cache/ILTSKKTBYBX',
+		'chmod 777 /tmp/triton_cache',
+		'dd if=SipInst_0_dump.vcd bs=8M count=64 2>/dev/null | wc -c',
+		'dd if=libgcusim.so bs=1 skip=275 count=20 | xxd',
+		'dd if=head.bin of=/dev/null bs=1M',
+	];
+	for (const command of harmless) {
+		const svc = new RecordingTerminalService();
+		const result = await new RunTerminalTool(svc, '/tmp').execute({ _toolCallId: 'h', command });
+		ok(result.success && svc.sent.length === 1,
+			`harmless command reaches the shell: ${command} (error=${result.error ?? 'none'})`);
+	}
+
+	const dangerous = [
+		'rm -rf /',
+		'rm -rf /*',
+		'rm -rf //',
+		'rm -rf / --no-preserve-root',
+		'rm -rf ~',
+		'rm -rf ~/',
+		'rm -rf ~/*',
+		'chmod 777 /',
+		'dd if=/dev/zero of=/dev/sda bs=1M',
+		'mkfs.ext4 /dev/sdb1',
+		'echo pwned >/dev/sda',
+		':(){ :|:& };:',
+		'psql -c "DROP TABLE users"',
+	];
+	for (const command of dangerous) {
+		const svc = new RecordingTerminalService();
+		const result = await new RunTerminalTool(svc, '/tmp').execute({ _toolCallId: 'd', command });
+		ok(!result.success && /safety filter/.test(String(result.error)),
+			`destructive command is still refused: ${command}`);
+		eq(svc.sent.length, 0, `the refused command never reached a shell: ${command}`);
+	}
+}
+
 async function main(): Promise<void> {
 	console.log(`self-evolution tests — node ${process.version}`);
 	testConfig();
@@ -736,6 +820,7 @@ async function main(): Promise<void> {
 	await testIssueSignals();
 	testPromptSection();
 	await testPollBudget();
+	await testSafetyFilter();
 
 	console.log(`\n${failed === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED'}: ${passed} passed, ${failed} failed`);
 	process.exit(failed === 0 ? 0 : 1);

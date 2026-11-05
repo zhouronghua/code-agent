@@ -88,7 +88,14 @@ function testHomeResolution(): void {
 
 	const override = tmpDir('override');
 	const previous = process.env.AGENT_HOME;
+	const previousCwd = process.cwd();
 	process.env.AGENT_HOME = override;
+	// findConfigFile() looks at <cwd>/config.yaml BEFORE the agent home, so a
+	// machine-local untracked config.yaml (this repo ships one) would inject its
+	// explicit skills:/rules: into the "defaults" assertions below and turn
+	// `npm run test` red for a reason that has nothing to do with the behaviour
+	// under test. An isolated run needs an isolated cwd as well.
+	process.chdir(override);
 	try {
 		fs.writeFileSync(path.join(override, 'config.yaml'), 'active_profile: x\n');
 		eq(agentHomeDir(), override, 'AGENT_HOME overrides the home directory');
@@ -134,6 +141,7 @@ function testHomeResolution(): void {
 		eq(loadConfig().skillsDirs.join(','), path.join(override, 'skills'),
 			'duplicate / symlinked skills dirs collapse to one entry');
 	} finally {
+		process.chdir(previousCwd);
 		if (previous === undefined) delete process.env.AGENT_HOME;
 		else process.env.AGENT_HOME = previous;
 		fs.rmSync(override, { recursive: true, force: true });
