@@ -114,6 +114,28 @@ function isReasoningEchoError(errorText: string): boolean {
 	return errorText.includes('reasoning_content') && errorText.includes('must be passed back');
 }
 
+/**
+ * Does this HTTP 400 say the gateway does not IMPLEMENT the `thinking` param?
+ *
+ * Verified on api.enflame.cn for `gpt-5.6-luna` (the configured 保底 model):
+ *   {"error":{"message":"Unknown parameter: 'thinking'.","type":"invalid_request_error",
+ *    "param":"thinking","code":"unknown_parameter"}}
+ * `thinking` is an optional accelerator the endpoint need not implement, so the
+ * request must be resent WITHOUT it — exactly like an unsupported `temperature`.
+ * Failing instead is what killed 7 tasks (10-27, 10-30, 5x on 11-05): the 保底
+ * switch rescued a timeout and then every follow-up request 400'd out of the run.
+ *
+ * Only the explicit "unknown/unrecognized" wording counts: the thinking-mode
+ * echo-back 400 also mentions `thinking`, and it has its own repair path.
+ */
+export function isUnknownThinkingParamError(errorText: string): boolean {
+	const lower = errorText.toLowerCase();
+	if (!lower.includes('thinking')) return false;
+	return lower.includes('unknown_parameter')
+		|| lower.includes('unknown parameter')
+		|| lower.includes('unrecognized');
+}
+
 export class OpenAIProvider implements ILLMProvider {
 	readonly name = 'openai';
 	private readonly _apiKey: string;
@@ -144,6 +166,15 @@ export class OpenAIProvider implements ILLMProvider {
 	 * stripped, or a model this provider has never talked to.
 	 */
 	private _requiresReasoningEcho = false;
+
+	/**
+	 * Set when the endpoint answered "Unknown parameter: 'thinking'" — it does not
+	 * implement the param, so it must not be sent again (same self-healing shape as
+	 * `_skipTemperature`). `models.json` may still advertise thinking for a model
+	 * whose gateway lacks support; trusting the observable answer keeps the task
+	 * alive on a 保底-model switch.
+	 */
+	private _skipThinking = false;
 
 	constructor(config: IAgentConfig) {
 		this._apiKey = config.apiKey;
@@ -196,7 +227,7 @@ export class OpenAIProvider implements ILLMProvider {
 
 		// Reasoning models: enable deep thinking explicitly and allow long
 		// chain-of-thought outputs (budget is clamped to remaining context above).
-		if (this._thinking) {
+		if (this._thinking && !this._skipThinking) {
 			body.thinking = this._thinking;
 		}
 
@@ -229,6 +260,19 @@ export class OpenAIProvider implements ILLMProvider {
 					if (allowRetry && response.status === 400 && this._isTemperatureError(errorText)) {
 						this._skipTemperature = true;
 						clearTimeout(apiTimeout);
+						return this._doComplete(messages, tools, temperature, topK, false);
+					}
+
+					// The endpoint does not implement the `thinking` param. It is an
+					// optional accelerator, so drop it and resend instead of failing
+					// the run (verified: gpt-5.6-luna on api.enflame.cn).
+					if (allowRetry && response.status === 400 && !this._skipThinking && isUnknownThinkingParamError(errorText)) {
+						this._skipThinking = true;
+						clearTimeout(apiTimeout);
+						console.warn(
+							`[LLM] ${this._model} does not implement the 'thinking' parameter — ` +
+							`resending the request without it`
+						);
 						return this._doComplete(messages, tools, temperature, topK, false);
 					}
 
@@ -388,7 +432,9 @@ export class OpenAIProvider implements ILLMProvider {
 		}
 		body.max_tokens = clampedMaxTokens;
 
-		if (this._thinking) {
+		// Reasoning models: enable deep thinking explicitly and allow long
+		// chain-of-thought outputs (budget is clamped to remaining context above).
+		if (this._thinking && !this._skipThinking) {
 			body.thinking = this._thinking;
 		}
 
@@ -423,6 +469,33 @@ export class OpenAIProvider implements ILLMProvider {
 						const retryBody = { ...body, ...this._samplingParams(temperature, topK) };
 						delete retryBody.temperature;
 						clearTimeout(apiTimeout);
+						response = await fetch(`${this._apiBase}/chat/completions`, {
+							method: 'POST',
+							headers: {
+								'Content-Type': 'application/json',
+								'Authorization': `Bearer ${this._apiKey}`,
+							},
+							body: JSON.stringify(retryBody),
+						});
+
+						if (!response.ok) {
+							const retryErrorText = await response.text();
+							throw new Error(`OpenAI API error ${response.status}: ${retryErrorText}`);
+						}
+						break;
+					}
+
+					// The endpoint does not implement the `thinking` param — drop it and
+					// resend instead of failing the run (same policy as complete()).
+					if (response.status === 400 && !this._skipThinking && isUnknownThinkingParamError(errorText)) {
+						this._skipThinking = true;
+						const retryBody = { ...body };
+						delete retryBody.thinking;
+						clearTimeout(apiTimeout);
+						console.warn(
+							`[LLM] ${this._model} does not implement the 'thinking' parameter — ` +
+							`resending the request without it`
+						);
 						response = await fetch(`${this._apiBase}/chat/completions`, {
 							method: 'POST',
 							headers: {

@@ -33,7 +33,7 @@ import {
 	IToolSchema,
 } from 'vs/workbench/services/agent/common/agentModels';
 import { ILLMProvider, IHealthCheckOptions } from 'vs/workbench/services/agent/browser/llmProvider';
-import { OpenAIProvider } from 'vs/workbench/services/agent/browser/llmOpenai';
+import { OpenAIProvider, isUnknownThinkingParamError } from 'vs/workbench/services/agent/browser/llmOpenai';
 
 let passed = 0;
 let failed = 0;
@@ -662,6 +662,125 @@ async function testRateLimitFallback(): Promise<void> {
 	agent2.dispose();
 }
 
+/**
+ * A gateway that does NOT implement the `thinking` parameter answers
+ *
+ *   400 {"error":{"message":"Unknown parameter: 'thinking'.","type":"invalid_request_error",
+ *        "param":"thinking","code":"unknown_parameter"}}
+ *
+ * This was observed verbatim on api.enflame.cn for `gpt-5.6-luna` — the very model
+ * configured as the 保底 model. Because `thinking` was enabled in models.json, every
+ * request after a fallback switch earned this 400, which is not retryable, so the
+ * task DIED instead of being rescued: 7 task logs (10-27, 10-30 and 5x on 11-05)
+ * ended with status=failed and exactly this error, all of them right after a
+ * `deepseek-flash → gpt-5.6-luna` switch.
+ *
+ * The provider already self-heals the same shape for `temperature` (a 400 about an
+ * unsupported sampling param ⇒ drop it and resend). `thinking` is likewise an
+ * OPTIONAL accelerator the endpoint may not implement, so it must degrade the same
+ * way instead of failing the run.
+ */
+async function testUnsupportedThinkingParam(): Promise<void> {
+	console.log("\n[10] a gateway without the 'thinking' param must not fail the task");
+
+	const http = await import('node:http');
+	type SentBody = { messages: Array<{ role: string; content: string | null }>; thinking?: unknown };
+	const sent: SentBody[] = [];
+	// Set to reproduce the gateway that rejects `thinking` outright.
+	let rejectsThinking = true;
+	const server = http.createServer((req, res) => {
+		let raw = '';
+		req.on('data', chunk => { raw += chunk; });
+		req.on('end', () => {
+			const body = JSON.parse(raw) as SentBody;
+			sent.push(body);
+			if (rejectsThinking && body.thinking !== undefined) {
+				res.writeHead(400, { 'Content-Type': 'application/json' });
+				res.end(JSON.stringify({ error: {
+					message: "Unknown parameter: 'thinking'.",
+					type: 'invalid_request_error', param: 'thinking', code: 'unknown_parameter',
+				} }));
+				return;
+			}
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({
+				choices: [{ message: { role: 'assistant', content: 'ok' } }],
+				usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+			}));
+		});
+	});
+	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+	const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
+
+	const cfg = makeConfig('gpt-5.6-luna', { apiBase: base, thinking: { type: 'enabled' } });
+
+	// ---- (a) the request is repaired instead of thrown ----
+	const provider = new OpenAIProvider(cfg);
+	const history: IAgentMessage[] = [
+		createMessage(MessageRole.User, 'run ls'),
+		createMessage(MessageRole.Assistant, 'ran ls', {
+			toolCalls: [{ id: 'call_1', name: 'run_terminal', arguments: { command: 'ls' } }],
+		}),
+		createMessage(MessageRole.Tool, 'a b c', { toolCallId: 'call_1' }),
+	];
+	let answer: IAgentMessage | undefined;
+	let failure: string | undefined;
+	try {
+		answer = await provider.complete(history);
+	} catch (err) {
+		failure = (err as Error).message;
+	}
+	eq(failure, undefined, 'the 400 unknown_parameter reply does not fail the task');
+	eq(answer?.content, 'ok', 'the task gets its answer from the same call');
+	ok(sent.length >= 2, `the request is resent without 'thinking' (${sent.length} attempts)`);
+
+	// ---- (b) the rejection is remembered: later requests never resend it ----
+	ok(sent.length === 2 && sent[0].thinking !== undefined && sent[1].thinking === undefined,
+		"only the first attempt carries 'thinking'; the repair resends without it");
+	const before = sent.length;
+	await provider.complete([createMessage(MessageRole.User, 'again')]);
+	eq(sent.length, before + 1, 'the next turn needs exactly one request (no second 400 round-trip)');
+	eq(sent[sent.length - 1].thinking, undefined, "the follow-up turn no longer sends 'thinking'");
+
+	// ---- (c) no behaviour change for a gateway that accepts it ----
+	rejectsThinking = false;
+	sent.length = 0;
+	const accepting = new OpenAIProvider(cfg);
+	await accepting.complete([createMessage(MessageRole.User, 'hello')]);
+	eq(sent.length, 1, 'a gateway that accepts the param still gets exactly one request');
+	ok(JSON.stringify(sent[0].thinking) === JSON.stringify({ type: 'enabled' }),
+		"the configured thinking payload is still sent when the endpoint supports it");
+
+	// ---- (d) streaming path degrades the same way ----
+	sent.length = 0;
+	const streamRejecting = new OpenAIProvider(cfg);
+	rejectsThinking = true;
+	let streamText = '';
+	let streamFailure: string | undefined;
+	try {
+		for await (const chunk of streamRejecting.stream([createMessage(MessageRole.User, 'hi')])) {
+			streamText += chunk;
+		}
+	} catch (err) {
+		streamFailure = (err as Error).message;
+	}
+	eq(streamFailure, undefined, 'the streaming path also survives a rejected thinking param');
+	ok(sent.length >= 2, 'the streaming request is resent without the rejected param');
+
+	// ---- (e) the two 400s that mention `thinking` must not be confused ----
+	// The thinking-mode echo-back 400 also contains the word `thinking`, and it is
+	// already covered by test [8] (its own repair path). What matters here is that
+	// the new detector only fires on the explicit "unknown/unrecognized" wording,
+	// so the two repairs can never be conflated.
+	const echoMessage = 'The `reasoning_content` in the thinking mode must be passed back to the API.';
+	eq(isUnknownThinkingParamError(echoMessage), false,
+		'the echo-back 400 is NOT treated as an unknown-parameter 400');
+	eq(isUnknownThinkingParamError('Unknown parameter: \'thinking\'.'), true,
+		'the observed gateway reply is detected');
+
+	await new Promise<void>(resolve => server.close(() => resolve()));
+}
+
 async function main(): Promise<void> {
 	await testDegenerateReasoningDetection();
 	testReportFormatting();
@@ -672,6 +791,7 @@ async function main(): Promise<void> {
 	await testReasoningLoopRecovery();
 	await testThinkingEchoBackOnRecovery();
 	await testRateLimitFallback();
+	await testUnsupportedThinkingParam();
 
 	console.log(`\n${failed === 0 ? 'ALL TESTS PASSED' : 'TESTS FAILED'}: ${passed} passed, ${failed} failed`);
 	process.exit(failed === 0 ? 0 : 1);
