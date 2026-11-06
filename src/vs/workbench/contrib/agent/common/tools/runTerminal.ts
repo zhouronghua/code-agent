@@ -50,16 +50,23 @@ export class RunTerminalTool extends AgentTool {
 		// Defence-in-depth: detect obviously dangerous commands before execution.
 		// The system prompt instructs the LLM to avoid these, but this acts as a
 		// safety net in case the LLM hallucinates or is jailbroken.
+		//
+		// A path pattern must match the TARGET, not a prefix of it. `rm -rf /` used
+		// to match `rm -rf /tmp/scratch`, and `rm -rf ~` matched `rm -rf ~/.cache/x`;
+		// the task logs hold 196 such blocked commands (~170 of them routine temp/
+		// cache cleanup), each costing the run a failed tool call and a retry.
+		// PATH_END is what pins a path to the root/home itself.
+		const PATH_END = String.raw`(?=$|[\s;&|)\x60'"])`;
 		const dangerousPatterns = [
-			/\brm\s+-rf\s+\//,           // rm -rf /
-			/\brm\s+-rf\s+\*\b/,          // rm -rf *
-			/\brm\s+-rf\s+~/,             // rm -rf ~
-			/\bdd\s+if=/,                 // dd destructive
-			/\bmkfs\./,                   // format filesystem
-			/\b>\/dev\/sd[a-z]\b/,       // overwrite block device
-			/\bchmod\s+(-R\s+)?777\s+\//, // chmod 777 /
-			/\b:\(\)\s*\{/,               // fork bomb
-			/\bDROP\s+(TABLE|DATABASE)\b/i, // SQL destructive
+			new RegExp(`\\brm\\s+-rf\\s+\\/+\\*?${PATH_END}`),           // rm -rf / (root itself only)
+			/\brm\s+-rf\s+\*\b/,                                         // rm -rf *
+			new RegExp(`\\brm\\s+-rf\\s+~\\/?\\*?${PATH_END}`),         // rm -rf ~ (home itself only)
+			/\bdd\b[^\n]*\bof=(?!\/dev\/(?:null|zero|stdout|stderr)\b)/,  // dd writing to a real target
+			/\bmkfs\./,                                                   // format filesystem
+			/>\/dev\/sd[a-z]/,                                           // overwrite block device
+			new RegExp(`\\bchmod\\s+(-R\\s+)?777\\s+\\/+\\*?${PATH_END}`), // chmod 777 /
+			/:\(\)\s*\{/,                                                // fork bomb
+			/\bDROP\s+(TABLE|DATABASE)\b/i,                               // SQL destructive
 		];
 		for (const pattern of dangerousPatterns) {
 			if (pattern.test(command)) {

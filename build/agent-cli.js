@@ -1,25 +1,1724 @@
 #!/usr/bin/env node
-var io=Object.create;var ks=Object.defineProperty;var ao=Object.getOwnPropertyDescriptor;var lo=Object.getOwnPropertyNames;var co=Object.getPrototypeOf,uo=Object.prototype.hasOwnProperty;var po=(s,e,t,n)=>{if(e&&typeof e=="object"||typeof e=="function")for(let r of lo(e))!uo.call(s,r)&&r!==t&&ks(s,r,{get:()=>e[r],enumerable:!(n=ao(e,r))||n.enumerable});return s};var A=(s,e,t)=>(t=s!=null?io(co(s)):{},po(e||!s||!s.__esModule?ks(t,"default",{value:s,enumerable:!0}):t,s));var to=A(require("node:readline")),$e=A(require("node:path")),no=A(require("node:os")),Q=A(require("node:fs"));var ws=A(require("node:path")),H=class s{scheme;authority;path;query;fragment;constructor(e,t,n,r,o){this.scheme=e,this.authority=t,this.path=n,this.query=r,this.fragment=o}get fsPath(){return this.path}toString(){return this.scheme==="file"?`file://${this.path}`:`${this.scheme}://${this.authority}${this.path}${this.query?"?"+this.query:""}${this.fragment?"#"+this.fragment:""}`}with(e){return new s(e.scheme??this.scheme,e.authority??this.authority,e.path??this.path,e.query??this.query,e.fragment??this.fragment)}static file(e){let t=ws.resolve(e);return new s("file","",t,"","")}static parse(e){let t=e.match(/^([a-z][a-z0-9+\-.]*):\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/i);return t?new s(t[1],t[2]||"",t[3]||"/",(t[4]||"").slice(1),(t[5]||"").slice(1)):s.file(e)}static isUri(e){return e instanceof s}};var Y={provider:"openai",model:"glm-5.3",apiKey:"",maxSteps:999999,maxContextTokens:2e5,maxOutputTokens:65536,temperature:0,topK:0,stepTimeout:3e5,taskTimeout:36e5};function D(s,e,t){return{id:yn(),role:s,content:e,timestamp:Date.now(),...t}}function bs(s){let e=s.output||s.error||"(no output)";return D("tool",e,{toolCallId:s.toolCallId})}var mo=0;function yn(){return`msg_${Date.now()}_${mo++}`}var Se=class extends Error{constructor(e){super(e),this.name="ContextOverflowError"}},fo=/[\u3000-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF\u2000-\u206F\u2E80-\u2FFF\u3040-\u30FF\u31C0-\u31EF\uF900-\uFAFF\uFE30-\uFE4F]/g;function qe(s){if(!s)return 0;let e=s.match(fo),t=e?e.length:0,n=s.length-t;return Math.ceil(t*1.5)+Math.ceil(n/3)+1}var ft=12,te=class s{static _providers=new Map;static register(e,t){s._providers.set(e,t)}static create(e){let t=s._providers.get(e.provider);if(!t)throw new Error(`Unknown LLM provider: ${e.provider}. Available: ${[...s._providers.keys()].join(", ")}`);return new t(e)}};var X=3,ve=1e3,go=new Set([429,500,502,503,504]),gt=3e5,et=2048,ho=.05,yo=8,_o=1024;function ht(s){return Math.min(et,s)}function Te(s,e){let t=Math.ceil(s/1e3),n=Date.now();return new Promise(r=>{let o=0,i=setInterval(()=>{let a=Math.floor((Date.now()-n)/1e3);if(a!==o){o=a;let l=Math.max(0,t-a);process.stdout.write(`\r  \u23F3 ${e} \u2014 waited ${a}s, ${l}s remaining...`)}},250);setTimeout(()=>{clearInterval(i),process.stdout.write(`\r  \u2705 ${e} \u2014 done after ${t}s    
-`),r()},s)})}function _n(s){return go.has(s)}function ko(s){return s.includes("reasoning_content")&&s.includes("must be passed back")}var kn=class{name="openai";_apiKey;_apiBase;_model;_supportsReasoning;_thinking;_maxOutputTokens;_maxContextTokens;_sawReasoning=!1;_requiresReasoningEcho=!1;constructor(e){this._apiKey=e.apiKey,this._apiBase=e.apiBase||"https://api.openai.com/v1",this._model=e.model,this._supportsReasoning=e.supportsReasoning===!0||e.thinking!==void 0,this._thinking=e.thinking,this._maxOutputTokens=e.maxOutputTokens||65536,this._maxContextTokens=e.maxContextTokens||this._maxOutputTokens*4}async complete(e,t,n=0,r){return this._doComplete(e,t,n,r,!0)}async _doComplete(e,t,n=0,r,o){let i={model:this._model,messages:this._convertMessages(e),...this._samplingParams(n,r)},a=this._clampMaxTokens(e,t);if(a<ht(this._maxOutputTokens))throw new Se(`Context window nearly full: estimated input leaves only ${a} tokens for completion (minimum ${ht(this._maxOutputTokens)}). Conversation history must be compacted.`);i.max_tokens=a,this._thinking&&(i.thinking=this._thinking),t&&t.length>0&&(i.tools=t,i.parallel_tool_calls=!0);let l=new AbortController,d=setTimeout(()=>l.abort(),gt),p;for(let u=0;u<=X;u++)try{let m=await fetch(`${this._apiBase}/chat/completions`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${this._apiKey}`},body:JSON.stringify(i),signal:l.signal});if(!m.ok){let _=await m.text();if(o&&m.status===400&&this._isTemperatureError(_))return this._skipTemperature=!0,clearTimeout(d),this._doComplete(e,t,n,r,!1);if(m.status===400&&this._isContextOverflowError(_)){let k=i.max_tokens;if(u<X&&k>et){let v=Math.max(et,Math.floor(k/4));i.max_tokens=v;let C=ve*Math.pow(2,u);console.warn(`[LLM Retry] Context overflow \u2014 reducing max_tokens ${k} -> ${v} (attempt ${u+1}/${X})`),p=new Error(`OpenAI API error ${m.status}: ${_}`),await Te(C,"Retry backoff");continue}throw clearTimeout(d),new Se(`Model context window exceeded: ${_}`)}if(o&&m.status===400&&!this._requiresReasoningEcho&&ko(_))return this._requiresReasoningEcho=!0,clearTimeout(d),console.warn(`[LLM] ${this._model} answers in thinking mode \u2014 resending the request with reasoning_content echoed back on every assistant message`),this._doComplete(e,t,n,r,!1);if(this._isDeepSeekRecoverableError(m.status,_,u)){let k=ve*Math.pow(2,u);console.warn(`[LLM Retry] Transient API error ${m.status} (attempt ${u+1}/${X})`),p=new Error(`OpenAI API error ${m.status}: ${_}`),await Te(k,"Retry backoff");continue}if(_n(m.status)&&u<X){let k=ve*Math.pow(2,u);console.warn(`[LLM Retry] API error ${m.status} (attempt ${u+1}/${X})`),p=new Error(`OpenAI API error ${m.status}: ${_}`),await Te(k,"Retry backoff");continue}throw clearTimeout(d),new Error(`OpenAI API error ${m.status}: ${_}`)}clearTimeout(d);let h=await m.json(),w=h.choices[0].message,b=w.tool_calls?.map(_=>({id:_.id,name:_.function.name,arguments:JSON.parse(_.function.arguments)})),S=h.usage&&typeof h.usage=="object"?{promptTokens:h.usage.prompt_tokens??0,completionTokens:h.usage.completion_tokens??0,totalTokens:h.usage.total_tokens??(h.usage.prompt_tokens??0)+(h.usage.completion_tokens??0),cachedTokens:h.usage.prompt_tokens_details?.cached_tokens??0}:void 0;return w.reasoning_content&&(this._sawReasoning=!0),D("assistant",w.content||"",{toolCalls:b,reasoningContent:w.reasoning_content,usage:S})}catch(m){let h=m;if(h.name==="AbortError")throw clearTimeout(d),new Error(`OpenAI API request timed out after ${gt}ms`);if(h.message?.includes("OpenAI API error"))throw clearTimeout(d),m;if(h.message?.includes("JSON.parse")&&u<X){let f=ve*Math.pow(2,u);console.warn(`[LLM Retry] JSON parse error (attempt ${u+1}/${X})`),p=m,await Te(f,"Retry backoff");continue}if(u<X){let f=ve*Math.pow(2,u);console.warn(`[LLM Retry] Network error (attempt ${u+1}/${X})`),p=m,await Te(f,"Retry backoff");continue}throw clearTimeout(d),m}throw clearTimeout(d),p||new Error("Max retries exceeded")}async*stream(e,t,n=0,r){let o={model:this._model,messages:this._convertMessages(e),...this._samplingParams(n,r),stream:!0},i=this._clampMaxTokens(e,t);if(i<ht(this._maxOutputTokens))throw new Se(`Context window nearly full: estimated input leaves only ${i} tokens for completion (minimum ${ht(this._maxOutputTokens)}). Conversation history must be compacted.`);o.max_tokens=i,this._thinking&&(o.thinking=this._thinking),t&&t.length>0&&(o.tools=t);let a,l,d=new AbortController,p=setTimeout(()=>d.abort(),gt);for(let f=0;f<=X;f++)try{if(a=await fetch(`${this._apiBase}/chat/completions`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${this._apiKey}`},body:JSON.stringify(o),signal:d.signal}),!a.ok){let w=await a.text();if(a.status===400&&this._isTemperatureError(w)&&!this._skipTemperature){this._skipTemperature=!0;let b={...o,...this._samplingParams(n,r)};if(delete b.temperature,clearTimeout(p),a=await fetch(`${this._apiBase}/chat/completions`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${this._apiKey}`},body:JSON.stringify(b)}),!a.ok){let S=await a.text();throw new Error(`OpenAI API error ${a.status}: ${S}`)}break}if(a.status===400&&this._isContextOverflowError(w)){let b=o.max_tokens;if(f<X&&b>et){let S=Math.max(et,Math.floor(b/4));o.max_tokens=S;let _=ve*Math.pow(2,f);console.warn(`[LLM Retry] Context overflow \u2014 reducing max_tokens ${b} -> ${S} (attempt ${f+1}/${X})`),l=new Error(`OpenAI API error ${a.status}: ${w}`),await Te(_,"Retry backoff");continue}throw clearTimeout(p),new Se(`Model context window exceeded: ${w}`)}if(this._isDeepSeekRecoverableError(a.status,w,f)){let b=ve*Math.pow(2,f);console.warn(`[LLM Retry] Transient API error ${a.status} (attempt ${f+1}/${X})`),l=new Error(`OpenAI API error ${a.status}: ${w}`),await Te(b,"Retry backoff");continue}if(_n(a.status)&&f<X){let b=ve*Math.pow(2,f);console.warn(`[LLM Retry] API error ${a.status} (attempt ${f+1}/${X})`),l=new Error(`OpenAI API error ${a.status}: ${w}`),await Te(b,"Retry backoff");continue}throw clearTimeout(p),new Error(`OpenAI API error ${a.status}: ${w}`)}break}catch(w){let b=w;if(b.name==="AbortError")throw clearTimeout(p),new Error(`OpenAI API request timed out after ${gt}ms`);if(b.message?.includes("OpenAI API error"))throw clearTimeout(p),w;if(f<X){let S=ve*Math.pow(2,f);console.warn(`[LLM Retry] Network error (attempt ${f+1}/${X})`),l=w,await Te(S,"Retry backoff");continue}throw clearTimeout(p),w}if(clearTimeout(p),!a||!a.ok)throw l||new Error("Max retries exceeded");let u=a.body.getReader(),m=new TextDecoder,h="";for(;;){let{done:f,value:w}=await u.read();if(f)break;h+=m.decode(w,{stream:!0});let b=h.split(`
-`);h=b.pop()||"";for(let S of b){let _=S.trim();if(!_||!_.startsWith("data: "))continue;let k=_.slice(6);if(k==="[DONE]")return;try{let C=JSON.parse(k).choices?.[0]?.delta;C?.content&&(yield C.content)}catch{}}}}countTokens(e){return qe(e)}_estimateInputTokens(e,t){let n=0;for(let r of e)n+=this.countTokens(r.content),r.reasoningContent&&(n+=this.countTokens(r.reasoningContent)),n+=ft;if(t)for(let r of t)n+=this.countTokens(JSON.stringify(r.function));return Math.ceil(n*1.2)+512}_clampMaxTokens(e,t){let n=this._estimateInputTokens(e,t),r=Math.max(_o,Math.floor(this._maxContextTokens*ho)),o=this._maxContextTokens-n-r;return Math.max(1,Math.min(this._maxOutputTokens,o))}_isContextOverflowError(e){let t=e.toLowerCase();return t.includes("maximum context length")||t.includes("reduce the length of the messages")||t.includes("context")&&t.includes("exceed")}_skipTemperature=!1;_samplingParams(e,t){let n={};return this._skipTemperature||(n.temperature=e),t&&t>0&&(n.top_k=t),n}_isTemperatureError(e){let t=e.toLowerCase();return t.includes("temperature")&&(t.includes("invalid")||t.includes("not allowed")||t.includes("only 1 is allowed")||t.includes("not supported"))}_isDeepSeekRecoverableError(e,t,n){if(_n(e))return!0;if(e===400){let r=t.toLowerCase();if(r.includes("insufficient_quota")&&n<2||r.includes("rate_limit")&&n<3||r.includes("temporarily")&&n<1||r.includes("tps")&&r.includes("limit")&&n<3||r.includes("overload")&&n<2||r.includes("busy")&&n<2||r.includes("concurrent")&&n<2)return!0}return e===503&&n<X||e===502&&n<2}supportsStreaming(){return!0}supportsReasoning(){return this._supportsReasoning||this._sawReasoning||this._requiresReasoningEcho}async healthCheck(e=8e3,t){if(!this._apiKey)return!1;let n=new AbortController,r=setTimeout(()=>n.abort(),e);try{let o=await fetch(`${this._apiBase}/chat/completions`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${this._apiKey}`},body:JSON.stringify({model:this._model,messages:[{role:"user",content:"ping"}],max_tokens:yo,stream:!1}),signal:n.signal});return o.ok||o.status===400?!0:o.status===429?t?.throttleSensitive!==!0:!1}catch{return!1}finally{clearTimeout(r)}}_convertMessages(e){let n=e.some(i=>i.role==="assistant"&&i.reasoningContent)||this.supportsReasoning(),r=i=>i.role!=="assistant"?!0:!!i.content||!!i.toolCalls&&i.toolCalls.length>0,o=e.filter(r);if(n)for(o=o.filter(i=>i.role==="assistant"?!!i.reasoningContent||!!i.toolCalls&&i.toolCalls.length>0:!0);o.length>0&&o[0].role==="tool";)o.shift();return o.map(i=>{let a={role:i.role,content:i.content||null};return i.toolCalls&&i.toolCalls.length>0&&(a.tool_calls=i.toolCalls.map(l=>({id:l.id,type:"function",function:{name:l.name,arguments:JSON.stringify(l.arguments)}}))),i.toolCallId&&(a.tool_call_id=i.toolCallId),i.role==="assistant"&&n&&(a.reasoning_content=i.reasoningContent||""),a})}};te.register("openai",kn);var wo=2,bo=4;function wn(){return{type:"ephemeral"}}function So(s){return[{type:"text",text:s,cache_control:wn()}]}function vo(s){let e=s.content;if(typeof e=="string")return e?(s.content=[{type:"text",text:e,cache_control:wn()}],!0):!1;if(Array.isArray(e)&&e.length>0){let t=e[e.length-1];if(t&&typeof t=="object"&&!t.cache_control)return t.cache_control=wn(),!0}return!1}var bn=class{name="anthropic";_apiKey;_apiBase;_model;_cachingDisabled=!1;_cachingDisabledReason;constructor(e){this._apiKey=e.apiKey,this._apiBase=e.apiBase||"https://api.anthropic.com",this._model=e.model||"claude-sonnet-4-20250514"}get promptCachingDisabled(){return this._cachingDisabled}get promptCachingDisabledReason(){return this._cachingDisabledReason}_buildBody(e,t){let{messages:n,systemMessage:r,tools:o,temperature:i,stream:a}=e,l={model:this._model,max_tokens:4096,temperature:i,messages:this._convertMessages(n,t)};return r&&(l.system=t?So(r.content):r.content),o&&o.length>0&&(l.tools=o.map(d=>({name:d.function.name,description:d.function.description,input_schema:d.function.parameters}))),a&&(l.stream=!0),l}async _request(e,t){let n=i=>fetch(`${this._apiBase}/v1/messages`,{method:"POST",headers:{"Content-Type":"application/json","x-api-key":this._apiKey,"anthropic-version":"2023-06-01"},body:JSON.stringify(e(i))}),r=await n(t);if(r.ok)return r;let o=await r.text();if(t&&r.status===400&&/cache_control|cache-control/i.test(o)){this._cachingDisabled=!0,this._cachingDisabledReason=o.slice(0,300),console.warn(`[Anthropic] endpoint rejected prompt caching (400) \u2014 retrying without cache breakpoints: ${o.slice(0,200)}`);let i=await n(!1);if(i.ok)return i;throw new Error(`Anthropic API error ${i.status}: ${await i.text()}`)}throw new Error(`Anthropic API error ${r.status}: ${o}`)}async complete(e,t,n=0,r){let o=e.find(p=>p.role==="system"),i=e.filter(p=>p.role!=="system"),l=await(await this._request(p=>this._buildBody({messages:i,systemMessage:o,tools:t,temperature:n},p),!this._cachingDisabled)).json(),d=l.usage&&typeof l.usage=="object"?{promptTokens:l.usage.input_tokens??0,completionTokens:l.usage.output_tokens??0,totalTokens:(l.usage.input_tokens??0)+(l.usage.output_tokens??0),cachedTokens:l.usage.cache_read_input_tokens??0,cacheCreationTokens:l.usage.cache_creation_input_tokens??0}:void 0;return this._parseResponse(l.content,d)}async*stream(e,t,n=0,r){let o=e.find(u=>u.role==="system"),i=e.filter(u=>u.role!=="system"),l=(await this._request(u=>this._buildBody({messages:i,systemMessage:o,tools:t,temperature:n,stream:!0},u),!this._cachingDisabled)).body.getReader(),d=new TextDecoder,p="";for(;;){let{done:u,value:m}=await l.read();if(u)break;p+=d.decode(m,{stream:!0});let h=p.split(`
-`);p=h.pop()||"";for(let f of h){let w=f.trim();if(!w.startsWith("data: "))continue;let b=w.slice(6);try{let S=JSON.parse(b);S.type==="content_block_delta"&&S.delta?.type==="text_delta"&&(yield S.delta.text)}catch{}}}}countTokens(e){return qe(e)}_parseResponse(e,t){let n="",r=[];for(let o of e)o.type==="text"&&o.text?n+=o.text:o.type==="tool_use"&&o.id&&o.name&&r.push({id:o.id,name:o.name,arguments:o.input||{}});return D("assistant",n,{toolCalls:r.length>0?r:void 0,usage:t})}_convertMessages(e,t=!1){let n=e.map(r=>{if(r.role==="tool")return{role:"user",content:[{type:"tool_result",tool_use_id:r.toolCallId,content:r.content}]};if(r.role==="assistant"&&r.toolCalls&&r.toolCalls.length>0){let o=[];r.content&&o.push({type:"text",text:r.content});for(let i of r.toolCalls)o.push({type:"tool_use",id:i.id,name:i.name,input:i.arguments});return{role:"assistant",content:o}}return{role:r.role==="user"?"user":"assistant",content:r.content}});if(t&&n.length>0){let r=Math.min(wo,bo-1),o=0;for(let i=n.length-1;i>=0&&o<r;i--)vo(n[i])&&o++}return n}};te.register("anthropic",bn);var Sn=class{name="ollama";_apiBase;_model;constructor(e){this._apiBase=e.apiBase||"http://localhost:11434",this._model=e.model||"llama3"}async complete(e,t,n=0,r){let o={model:this._model,messages:e.map(u=>({role:u.role,content:u.content})),stream:!1,options:{temperature:n,...r&&r>0?{top_k:r}:{}}};t&&t.length>0&&(o.tools=t.map(u=>({type:"function",function:{name:u.function.name,description:u.function.description,parameters:u.function.parameters}})));let i=await fetch(`${this._apiBase}/api/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o)});if(!i.ok){let u=await i.text();throw new Error(`Ollama API error ${i.status}: ${u}`)}let a=await i.json(),l=a.message,d=l.tool_calls?.map((u,m)=>({id:`ollama_tc_${Date.now()}_${m}`,name:u.function.name,arguments:u.function.arguments})),p=typeof a.prompt_eval_count=="number"||typeof a.eval_count=="number"?{promptTokens:a.prompt_eval_count??0,completionTokens:a.eval_count??0,totalTokens:(a.prompt_eval_count??0)+(a.eval_count??0)}:void 0;return D("assistant",l.content||"",{toolCalls:d,usage:p})}async*stream(e,t,n=0,r){let o={model:this._model,messages:e.map(p=>({role:p.role,content:p.content})),stream:!0,options:{temperature:n,...r&&r>0?{top_k:r}:{}}},i=await fetch(`${this._apiBase}/api/chat`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o)});if(!i.ok){let p=await i.text();throw new Error(`Ollama API error ${i.status}: ${p}`)}let a=i.body.getReader(),l=new TextDecoder,d="";for(;;){let{done:p,value:u}=await a.read();if(p)break;d+=l.decode(u,{stream:!0});let m=d.split(`
-`);d=m.pop()||"";for(let h of m)if(h.trim())try{let f=JSON.parse(h);f.message?.content&&(yield f.message.content)}catch{}}}countTokens(e){return qe(e)}};te.register("ollama",Sn);var O=class{timeoutFor(e,t){}toSchema(){return{type:"function",function:{name:this.name,description:this.description,parameters:this.parameters}}}success(e,t){return{toolCallId:e,success:!0,output:t}}failure(e,t){return{toolCallId:e,success:!1,output:"",error:t}}},yt=class{_tools=new Map;_aliases=new Map;register(e){this._tools.set(e.name,e)}registerAlias(e,t){if(!this._tools.has(t))throw new Error(`Cannot alias "${e}" to non-existent tool "${t}"`);this._aliases.set(e,t)}decorate(e){for(let[t,n]of this._tools){let r=e(n);r!==n&&this._tools.set(t,r)}}get(e){let t=this._tools.get(e);if(t)return t;let n=this._aliases.get(e);if(n)return this._tools.get(n)}has(e){return this._tools.has(e)||this._aliases.has(e)}listNames(){return[...this._tools.keys()]}listSchemas(){let e=[];for(let t of this._tools.values())e.push(t.toSchema());for(let[t,n]of this._aliases){let r=this._tools.get(n);if(r){let o=r.toSchema();e.push({type:"function",function:{name:t,description:o.function.description,parameters:o.function.parameters}})}}return e}getReadOnlySchemas(){let e=["read_file","list_directory","search_text","search_files","search_content"],t=[];for(let n of this._tools.values())e.includes(n.name)&&t.push(n.toSchema());for(let[n,r]of this._aliases)if(e.includes(n)){let o=this._tools.get(r);if(o){let i=o.toSchema();t.push({type:"function",function:{name:n,description:i.function.description,parameters:i.function.parameters}})}}return t}};var vn=class{_toDispose=new Set;_isDisposed=!1;add(e){return this._isDisposed?(e.dispose(),e):(this._toDispose.add(e),e)}dispose(){if(!this._isDisposed){this._isDisposed=!0;for(let e of this._toDispose)e.dispose();this._toDispose.clear()}}},Le=class{static None=Object.freeze({dispose(){}});_store=new vn;_register(e){return this._store.add(e)}dispose(){this._store.dispose()}};var _t;(e=>e.None=()=>Le.None)(_t||={});var K=class{_listeners=[];_disposed=!1;get event(){return(e,t)=>{if(this._disposed)return Le.None;let n={fn:e,thisArg:t};return this._listeners.push(n),{dispose:()=>{let r=this._listeners.indexOf(n);r>=0&&this._listeners.splice(r,1)}}}}fire(e){if(!this._disposed)for(let{fn:t,thisArg:n}of[...this._listeners])try{t.call(n,e)}catch(r){console.error("Event listener error:",r)}}dispose(){this._disposed=!0,this._listeners.length=0}};var Oe=class{_currentMode="agent";_onDidChangeMode=new K;onDidChangeMode=this._onDidChangeMode.event;get currentMode(){return this._currentMode}switchMode(e){this._currentMode!==e&&(this._currentMode=e,this._onDidChangeMode.fire(e))}get isReadOnly(){return this._currentMode==="ask"}get canExecuteTools(){return this._currentMode==="agent"}get shouldPlanFirst(){return this._currentMode==="plan"}dispose(){this._onDidChangeMode.dispose()}};var fe=class s{buffer;byteLength;constructor(e){this.buffer=e,this.byteLength=e.byteLength}toString(){return Buffer.from(this.buffer).toString("utf-8")}static fromString(e){return new s(Buffer.from(e,"utf-8"))}static fromByteArray(e){return new s(new Uint8Array(e))}static wrap(e){return new s(e)}static concat(e,t){let n=Buffer.concat(e.map(r=>Buffer.from(r.buffer)),t);return new s(n)}static alloc(e){return new s(new Uint8Array(e))}};var kt=class s{constructor(e){this._fileService=e}_checkpoints=new Map;_counter=0;clone(){return new s(this._fileService)}async captureFile(e){try{let t=H.file(e);return(await this._fileService.readFile(t)).value.toString()}catch{return}}createCheckpoint(e){let t=`ckpt_${Date.now()}_${this._counter++}`;return this._checkpoints.set(t,{id:t,timestamp:Date.now(),description:e,snapshots:new Map}),t}async snapshotFile(e,t){let n=this._checkpoints.get(e);if(!n)throw new Error(`Checkpoint not found: ${e}`);let r=await this.captureFile(t);r!==void 0&&n.snapshots.set(t,r)}async restore(e){let t=this._checkpoints.get(e);if(!t)throw new Error(`Checkpoint not found: ${e}`);let n=[];for(let[r,o]of t.snapshots)try{let i=H.file(r);await this._fileService.writeFile(i,fe.fromString(o)),n.push(r)}catch{}return n}listCheckpoints(){return[...this._checkpoints.values()].map(e=>({id:e.id,timestamp:e.timestamp,description:e.description,fileCount:e.snapshots.size}))}deleteCheckpoint(e){return this._checkpoints.delete(e)}clear(){this._checkpoints.clear()}};var To;(t=>(t.None=Object.freeze({isCancellationRequested:!1,onCancellationRequested:_t.None}),t.Cancelled=Object.freeze({isCancellationRequested:!0,onCancellationRequested:_t.None})))(To||={});var Ve=class{_token;_emitter;_cancelled=!1;get token(){return this._token||(this._emitter=new K,this._token={isCancellationRequested:this._cancelled,onCancellationRequested:this._emitter.event}),this._token}cancel(){this._cancelled||(this._cancelled=!0,this._emitter&&this._emitter.fire(void 0),this._token&&(this._token.isCancellationRequested=!0))}dispose(){this._emitter?.dispose()}};var Tn=.75,vs="[Pinned original task \u2014 always in context]",Io="[not executed] the tool call was never answered (task interrupted or cancelled)";function Ts(s){let e=[],t=0;for(;t<s.length;){let n=s[t];if(n.role==="assistant"&&n.toolCalls&&n.toolCalls.length>0){e.push(n);let r=new Set,o=t+1;for(;o<s.length&&s[o].role==="tool";){let i=s[o].toolCallId;i&&!r.has(i)&&(e.push(s[o]),r.add(i)),o++}for(let i of n.toolCalls)r.has(i.id)||e.push(D("tool",Io,{toolCallId:i.id}));t=o;continue}if(n.role==="tool"){t++;continue}e.push(n),t++}return e}var wt=class{constructor(e,t,n){this._maxTokens=e;this._maxOutputTokens=t;this._llmProvider=n}_messages=[];_systemPrompt;_taskAnchor;swapTokenCounter(e){this._llmProvider=e}get estimatedTokens(){return this._estimateTotalTokens()}get inputBudget(){return this._inputBudget}get isOverBudget(){return this._estimateTotalTokens()>this._inputBudget*Tn}setModelBudget(e,t){e&&e>0&&(this._maxTokens=e),t&&t>0&&(this._maxOutputTokens=t)}dropReasoningContent(e){let t=0;for(let n=0;n<this._messages.length;n++){let r=this._messages[n];r.reasoningContent!==void 0&&(e&&!e(r)||(this._messages[n]={...r,reasoningContent:void 0},t++))}return t}get _inputBudget(){return Math.max(1,this._maxTokens-this._maxOutputTokens)}get messages(){return this._messages}get length(){return this._messages.length}get systemPromptContent(){return this._systemPrompt?.content||""}setSystemPrompt(e){this._systemPrompt=D("system",e)}setTaskAnchor(e){let t=(e||"").trim();t&&(this._taskAnchor=D("user",`${vs}
-${t}`))}get taskAnchorContent(){if(this._taskAnchor)return this._taskAnchor.content.slice(vs.length+1)}clearTaskAnchor(){this._taskAnchor=void 0}addMessage(e){this._messages.push(e)}repairToolCallPairs(){let e=Ts(this._messages);if(e.length===this._messages.length&&e.every((r,o)=>r===this._messages[o]))return[];let t=new Set(this._messages),n=e.filter(r=>!t.has(r));return this._messages.length=0,this._messages.push(...e),n}getContextWindow(){let e=[],t=0;this._systemPrompt&&(e.push(this._systemPrompt),t+=this._estimateTokens(this._systemPrompt)),this._taskAnchor&&(e.push(this._taskAnchor),t+=this._estimateTokens(this._taskAnchor));let n=[];for(let r=this._messages.length-1;r>=0;r--){let o=this._messages[r],i=this._estimateTokens(o);if(t+i>this._inputBudget*Tn)break;n.unshift(o),t+=i}return e.push(...n),Ts(e)}async compactIfNeeded(e=!1){let t=this._estimateTotalTokens();if(!e&&t<this._inputBudget*Tn)return!1;let n=Math.floor(this._messages.length/2),r=this._messages.slice(0,n),o=this._messages.slice(n);for(;o.length>0&&o[0].role==="tool";)o=o.slice(1);let i=r.some(u=>u.role==="assistant"&&u.reasoningContent),a=r.map(u=>{let m=`[${u.role}]`;return u.role==="assistant"&&u.reasoningContent&&(m+=`(reasoning: ${u.reasoningContent.substring(0,100)})`),`${m}: ${u.content.substring(0,200)}`}).join(`
-`),l=this.taskAnchorContent,d=D("user",`Write a HANDOFF summary of the conversation below so that work can continue without the original transcript. Preserve, in this order:
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+
+// vs-core/node-runtime/main.ts
+var readline = __toESM(require("node:readline"));
+var nodePath2 = __toESM(require("node:path"));
+var nodeOs = __toESM(require("node:os"));
+var fs14 = __toESM(require("node:fs"));
+
+// vs-core/base/common/uri.ts
+var path = __toESM(require("node:path"));
+var URI = class _URI {
+  scheme;
+  authority;
+  path;
+  query;
+  fragment;
+  constructor(scheme, authority, uriPath, query, fragment) {
+    this.scheme = scheme;
+    this.authority = authority;
+    this.path = uriPath;
+    this.query = query;
+    this.fragment = fragment;
+  }
+  get fsPath() {
+    return this.path;
+  }
+  toString() {
+    if (this.scheme === "file") {
+      return `file://${this.path}`;
+    }
+    return `${this.scheme}://${this.authority}${this.path}${this.query ? "?" + this.query : ""}${this.fragment ? "#" + this.fragment : ""}`;
+  }
+  with(change) {
+    return new _URI(
+      change.scheme ?? this.scheme,
+      change.authority ?? this.authority,
+      change.path ?? this.path,
+      change.query ?? this.query,
+      change.fragment ?? this.fragment
+    );
+  }
+  static file(filePath) {
+    const resolved = path.resolve(filePath);
+    return new _URI("file", "", resolved, "", "");
+  }
+  static parse(value) {
+    const match = value.match(/^([a-z][a-z0-9+\-.]*):\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/i);
+    if (match) {
+      return new _URI(match[1], match[2] || "", match[3] || "/", (match[4] || "").slice(1), (match[5] || "").slice(1));
+    }
+    return _URI.file(value);
+  }
+  static isUri(thing) {
+    return thing instanceof _URI;
+  }
+};
+
+// src/vs/workbench/services/agent/common/agentModels.ts
+var DEFAULT_AGENT_CONFIG = {
+  provider: "openai",
+  model: "glm-5.3",
+  apiKey: "",
+  maxSteps: 999999,
+  // Effectively unlimited
+  maxContextTokens: 2e5,
+  maxOutputTokens: 65536,
+  temperature: 0,
+  topK: 0,
+  // 0 = provider default (not sent); set >0 to pin top_k for reproducible benchmarks
+  stepTimeout: 3e5,
+  // 5 minutes - allow tools with custom timeouts to complete
+  taskTimeout: 36e5
+  // 1 hour
+};
+function createMessage(role, content, extra) {
+  return {
+    id: generateId(),
+    role,
+    content,
+    timestamp: Date.now(),
+    ...extra
+  };
+}
+function createToolResultMessage(result) {
+  const content = result.output || result.error || "(no output)";
+  return createMessage("tool" /* Tool */, content, {
+    toolCallId: result.toolCallId
+  });
+}
+var _idCounter = 0;
+function generateId() {
+  return `msg_${Date.now()}_${_idCounter++}`;
+}
+
+// src/vs/workbench/services/agent/browser/llmProvider.ts
+var ContextOverflowError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ContextOverflowError";
+  }
+};
+var CJK_REGEX = /[\u3000-\u9FFF\uAC00-\uD7AF\uFF00-\uFFEF\u2000-\u206F\u2E80-\u2FFF\u3040-\u30FF\u31C0-\u31EF\uF900-\uFAFF\uFE30-\uFE4F]/g;
+function estimateTokenCount(text) {
+  if (!text) return 0;
+  const cjkMatches = text.match(CJK_REGEX);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+  const otherLen = text.length - cjkCount;
+  return Math.ceil(cjkCount * 1.5) + Math.ceil(otherLen / 3) + 1;
+}
+var TOKENS_PER_MESSAGE_OVERHEAD = 12;
+var LLMProviderFactory = class _LLMProviderFactory {
+  static _providers = /* @__PURE__ */ new Map();
+  static register(name, ctor) {
+    _LLMProviderFactory._providers.set(name, ctor);
+  }
+  static create(config) {
+    const ctor = _LLMProviderFactory._providers.get(config.provider);
+    if (!ctor) {
+      throw new Error(`Unknown LLM provider: ${config.provider}. Available: ${[..._LLMProviderFactory._providers.keys()].join(", ")}`);
+    }
+    return new ctor(config);
+  }
+};
+
+// src/vs/workbench/services/agent/browser/llmOpenai.ts
+var MAX_RETRIES = 3;
+var INITIAL_RETRY_DELAY_MS = 1e3;
+var RETRYABLE_STATUS_CODES = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
+var API_REQUEST_TIMEOUT_MS = 3e5;
+var MIN_COMPLETION_TOKENS = 2048;
+var CONTEXT_RESERVE_RATIO = 0.05;
+var HEALTH_CHECK_MAX_TOKENS = 8;
+var MIN_CONTEXT_RESERVE = 1024;
+function minCompletionFloor(maxOutputTokens) {
+  return Math.min(MIN_COMPLETION_TOKENS, maxOutputTokens);
+}
+function sleepWithProgress(ms, label) {
+  const totalSec = Math.ceil(ms / 1e3);
+  const start = Date.now();
+  return new Promise((resolve12) => {
+    let lastUpdate = 0;
+    const timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - start) / 1e3);
+      if (elapsed !== lastUpdate) {
+        lastUpdate = elapsed;
+        const remaining = Math.max(0, totalSec - elapsed);
+        process.stdout.write(`\r  \u23F3 ${label} \u2014 waited ${elapsed}s, ${remaining}s remaining...`);
+      }
+    }, 250);
+    setTimeout(() => {
+      clearInterval(timer);
+      process.stdout.write(`\r  \u2705 ${label} \u2014 done after ${totalSec}s    
+`);
+      resolve12();
+    }, ms);
+  });
+}
+function shouldRetry(statusCode) {
+  return RETRYABLE_STATUS_CODES.has(statusCode);
+}
+function isReasoningEchoError(errorText) {
+  return errorText.includes("reasoning_content") && errorText.includes("must be passed back");
+}
+var OpenAIProvider = class {
+  name = "openai";
+  _apiKey;
+  _apiBase;
+  _model;
+  _supportsReasoning;
+  _thinking;
+  _maxOutputTokens;
+  _maxContextTokens;
+  /**
+   * Set as soon as this model has actually answered with `reasoning_content`.
+   *
+   * A gateway can run a model in thinking mode without announcing it: on
+   * api.enflame.cn, `deepseek-flash` is declared `supportsReasoning: false`, no
+   * `thinking` param is sent, yet every answer carries reasoning_content — and
+   * any request that omits it is rejected with HTTP 400 ("The
+   * `reasoning_content` in the thinking mode must be passed back to the API").
+   * Trusting the observed behaviour instead of the model id is what keeps a
+   * session alive after a 保底-model switch dropped the chain-of-thought.
+   */
+  _sawReasoning = false;
+  /**
+   * Set when the API explicitly demanded the reasoning_content echo-back
+   * (see `_doComplete`). Covers a model that has not answered yet in this
+   * process — e.g. a fresh run resuming a session whose reasoning_content was
+   * stripped, or a model this provider has never talked to.
+   */
+  _requiresReasoningEcho = false;
+  constructor(config) {
+    this._apiKey = config.apiKey;
+    this._apiBase = config.apiBase || "https://api.openai.com/v1";
+    this._model = config.model;
+    this._supportsReasoning = config.supportsReasoning === true || config.thinking !== void 0;
+    this._thinking = config.thinking;
+    this._maxOutputTokens = config.maxOutputTokens || 65536;
+    this._maxContextTokens = config.maxContextTokens || this._maxOutputTokens * 4;
+  }
+  async complete(messages, tools, temperature = 0, topK) {
+    return this._doComplete(messages, tools, temperature, topK, true);
+  }
+  async _doComplete(messages, tools, temperature = 0, topK, allowRetry) {
+    const body = {
+      model: this._model,
+      messages: this._convertMessages(messages),
+      ...this._samplingParams(temperature, topK)
+    };
+    const clampedMaxTokens = this._clampMaxTokens(messages, tools);
+    if (clampedMaxTokens < minCompletionFloor(this._maxOutputTokens)) {
+      throw new ContextOverflowError(
+        `Context window nearly full: estimated input leaves only ${clampedMaxTokens} tokens for completion (minimum ${minCompletionFloor(this._maxOutputTokens)}). Conversation history must be compacted.`
+      );
+    }
+    body.max_tokens = clampedMaxTokens;
+    if (this._thinking) {
+      body.thinking = this._thinking;
+    }
+    if (tools && tools.length > 0) {
+      body.tools = tools;
+      body.parallel_tool_calls = true;
+    }
+    const abortController = new AbortController();
+    const apiTimeout = setTimeout(() => abortController.abort(), API_REQUEST_TIMEOUT_MS);
+    let lastError;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch(`${this._apiBase}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this._apiKey}`
+          },
+          body: JSON.stringify(body),
+          signal: abortController.signal
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          if (allowRetry && response.status === 400 && this._isTemperatureError(errorText)) {
+            this._skipTemperature = true;
+            clearTimeout(apiTimeout);
+            return this._doComplete(messages, tools, temperature, topK, false);
+          }
+          if (response.status === 400 && this._isContextOverflowError(errorText)) {
+            const currentMaxTokens = body.max_tokens;
+            if (attempt < MAX_RETRIES && currentMaxTokens > MIN_COMPLETION_TOKENS) {
+              const reduced = Math.max(MIN_COMPLETION_TOKENS, Math.floor(currentMaxTokens / 4));
+              body.max_tokens = reduced;
+              const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+              console.warn(`[LLM Retry] Context overflow \u2014 reducing max_tokens ${currentMaxTokens} -> ${reduced} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+              lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+              await sleepWithProgress(delay, "Retry backoff");
+              continue;
+            }
+            clearTimeout(apiTimeout);
+            throw new ContextOverflowError(`Model context window exceeded: ${errorText}`);
+          }
+          if (allowRetry && response.status === 400 && !this._requiresReasoningEcho && isReasoningEchoError(errorText)) {
+            this._requiresReasoningEcho = true;
+            clearTimeout(apiTimeout);
+            console.warn(
+              `[LLM] ${this._model} answers in thinking mode \u2014 resending the request with reasoning_content echoed back on every assistant message`
+            );
+            return this._doComplete(messages, tools, temperature, topK, false);
+          }
+          if (this._isDeepSeekRecoverableError(response.status, errorText, attempt)) {
+            const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+            console.warn(`[LLM Retry] Transient API error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+            lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+            await sleepWithProgress(delay, "Retry backoff");
+            continue;
+          }
+          if (shouldRetry(response.status) && attempt < MAX_RETRIES) {
+            const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+            console.warn(`[LLM Retry] API error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+            lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+            await sleepWithProgress(delay, "Retry backoff");
+            continue;
+          }
+          clearTimeout(apiTimeout);
+          throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+        }
+        clearTimeout(apiTimeout);
+        const data = await response.json();
+        const choice = data.choices[0];
+        const msg = choice.message;
+        const toolCalls = msg.tool_calls?.map((tc) => ({
+          id: tc.id,
+          name: tc.function.name,
+          arguments: JSON.parse(tc.function.arguments)
+        }));
+        const usage = data.usage && typeof data.usage === "object" ? {
+          promptTokens: data.usage.prompt_tokens ?? 0,
+          completionTokens: data.usage.completion_tokens ?? 0,
+          totalTokens: data.usage.total_tokens ?? (data.usage.prompt_tokens ?? 0) + (data.usage.completion_tokens ?? 0),
+          cachedTokens: data.usage.prompt_tokens_details?.cached_tokens ?? 0
+        } : void 0;
+        if (msg.reasoning_content) this._sawReasoning = true;
+        return createMessage(
+          "assistant" /* Assistant */,
+          msg.content || "",
+          { toolCalls, reasoningContent: msg.reasoning_content, usage }
+        );
+      } catch (error) {
+        const err = error;
+        if (err.name === "AbortError") {
+          clearTimeout(apiTimeout);
+          throw new Error(`OpenAI API request timed out after ${API_REQUEST_TIMEOUT_MS}ms`);
+        }
+        if (err.message?.includes("OpenAI API error")) {
+          clearTimeout(apiTimeout);
+          throw error;
+        }
+        if (err.message?.includes("JSON.parse") && attempt < MAX_RETRIES) {
+          const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[LLM Retry] JSON parse error (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          lastError = error;
+          await sleepWithProgress(delay, "Retry backoff");
+          continue;
+        }
+        if (attempt < MAX_RETRIES) {
+          const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[LLM Retry] Network error (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          lastError = error;
+          await sleepWithProgress(delay, "Retry backoff");
+          continue;
+        }
+        clearTimeout(apiTimeout);
+        throw error;
+      }
+    }
+    clearTimeout(apiTimeout);
+    throw lastError || new Error("Max retries exceeded");
+  }
+  async *stream(messages, tools, temperature = 0, topK) {
+    const body = {
+      model: this._model,
+      messages: this._convertMessages(messages),
+      ...this._samplingParams(temperature, topK),
+      stream: true
+    };
+    const clampedMaxTokens = this._clampMaxTokens(messages, tools);
+    if (clampedMaxTokens < minCompletionFloor(this._maxOutputTokens)) {
+      throw new ContextOverflowError(
+        `Context window nearly full: estimated input leaves only ${clampedMaxTokens} tokens for completion (minimum ${minCompletionFloor(this._maxOutputTokens)}). Conversation history must be compacted.`
+      );
+    }
+    body.max_tokens = clampedMaxTokens;
+    if (this._thinking) {
+      body.thinking = this._thinking;
+    }
+    if (tools && tools.length > 0) {
+      body.tools = tools;
+    }
+    let response;
+    let lastError;
+    const abortController = new AbortController();
+    const apiTimeout = setTimeout(() => abortController.abort(), API_REQUEST_TIMEOUT_MS);
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        response = await fetch(`${this._apiBase}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this._apiKey}`
+          },
+          body: JSON.stringify(body),
+          signal: abortController.signal
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          if (response.status === 400 && this._isTemperatureError(errorText) && !this._skipTemperature) {
+            this._skipTemperature = true;
+            const retryBody = { ...body, ...this._samplingParams(temperature, topK) };
+            delete retryBody.temperature;
+            clearTimeout(apiTimeout);
+            response = await fetch(`${this._apiBase}/chat/completions`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${this._apiKey}`
+              },
+              body: JSON.stringify(retryBody)
+            });
+            if (!response.ok) {
+              const retryErrorText = await response.text();
+              throw new Error(`OpenAI API error ${response.status}: ${retryErrorText}`);
+            }
+            break;
+          }
+          if (response.status === 400 && this._isContextOverflowError(errorText)) {
+            const currentMaxTokens = body.max_tokens;
+            if (attempt < MAX_RETRIES && currentMaxTokens > MIN_COMPLETION_TOKENS) {
+              const reduced = Math.max(MIN_COMPLETION_TOKENS, Math.floor(currentMaxTokens / 4));
+              body.max_tokens = reduced;
+              const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+              console.warn(`[LLM Retry] Context overflow \u2014 reducing max_tokens ${currentMaxTokens} -> ${reduced} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+              lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+              await sleepWithProgress(delay, "Retry backoff");
+              continue;
+            }
+            clearTimeout(apiTimeout);
+            throw new ContextOverflowError(`Model context window exceeded: ${errorText}`);
+          }
+          if (this._isDeepSeekRecoverableError(response.status, errorText, attempt)) {
+            const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+            console.warn(`[LLM Retry] Transient API error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+            lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+            await sleepWithProgress(delay, "Retry backoff");
+            continue;
+          }
+          if (shouldRetry(response.status) && attempt < MAX_RETRIES) {
+            const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+            console.warn(`[LLM Retry] API error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+            lastError = new Error(`OpenAI API error ${response.status}: ${errorText}`);
+            await sleepWithProgress(delay, "Retry backoff");
+            continue;
+          }
+          clearTimeout(apiTimeout);
+          throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+        }
+        break;
+      } catch (error) {
+        const err = error;
+        if (err.name === "AbortError") {
+          clearTimeout(apiTimeout);
+          throw new Error(`OpenAI API request timed out after ${API_REQUEST_TIMEOUT_MS}ms`);
+        }
+        if (err.message?.includes("OpenAI API error")) {
+          clearTimeout(apiTimeout);
+          throw error;
+        }
+        if (attempt < MAX_RETRIES) {
+          const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[LLM Retry] Network error (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          lastError = error;
+          await sleepWithProgress(delay, "Retry backoff");
+          continue;
+        }
+        clearTimeout(apiTimeout);
+        throw error;
+      }
+    }
+    clearTimeout(apiTimeout);
+    if (!response || !response.ok) {
+      throw lastError || new Error("Max retries exceeded");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) {
+          continue;
+        }
+        const payload = trimmed.slice(6);
+        if (payload === "[DONE]") {
+          return;
+        }
+        try {
+          const parsed = JSON.parse(payload);
+          const delta = parsed.choices?.[0]?.delta;
+          if (delta?.content) {
+            yield delta.content;
+          }
+        } catch {
+        }
+      }
+    }
+  }
+  countTokens(text) {
+    return estimateTokenCount(text);
+  }
+  /**
+   * Estimate the number of input tokens that will be sent to the API.
+   * Uses the same char-based heuristic as countTokens() plus a safety margin
+   * for message framing, tool schemas, and CJK text (which char-count
+   * heuristics tend to underestimate).
+   */
+  _estimateInputTokens(messages, tools) {
+    let total = 0;
+    for (const msg of messages) {
+      total += this.countTokens(msg.content);
+      if (msg.reasoningContent) {
+        total += this.countTokens(msg.reasoningContent);
+      }
+      total += TOKENS_PER_MESSAGE_OVERHEAD;
+    }
+    if (tools) {
+      for (const tool of tools) {
+        total += this.countTokens(JSON.stringify(tool.function));
+      }
+    }
+    return Math.ceil(total * 1.2) + 512;
+  }
+  /**
+   * Clamp the completion token budget so that input + max_tokens never exceeds
+   * the model's total context window. Without this, a large maxOutputTokens
+   * (e.g. deepseek-v4's 65536) combined with a near-full message window
+   * produces "This model's maximum context length is X tokens..." API errors.
+   *
+   * A hard safety reserve (5% of the window, min 4096) is kept on top of the
+   * estimate so a slightly-off estimate can never fill the window completely.
+   */
+  _clampMaxTokens(messages, tools) {
+    const inputTokens = this._estimateInputTokens(messages, tools);
+    const safetyReserve = Math.max(MIN_CONTEXT_RESERVE, Math.floor(this._maxContextTokens * CONTEXT_RESERVE_RATIO));
+    const remaining = this._maxContextTokens - inputTokens - safetyReserve;
+    return Math.max(1, Math.min(this._maxOutputTokens, remaining));
+  }
+  /**
+   * Detect "This model's maximum context length is X tokens..." API errors.
+   * These are NOT retryable as-is: the request must shrink (smaller max_tokens
+   * or a compacted message window) before it can succeed.
+   */
+  _isContextOverflowError(text) {
+    const lower = text.toLowerCase();
+    return lower.includes("maximum context length") || lower.includes("reduce the length of the messages") || lower.includes("context") && lower.includes("exceed");
+  }
+  _skipTemperature = false;
+  /**
+   * Build the sampling params for the request body. `temperature` is always
+   * sent (unless a previous request was rejected for it — see _skipTemperature);
+   * `top_k` is only sent when explicitly configured (>0) so providers that do
+   * not support it keep working with their default sampling.
+   */
+  _samplingParams(temperature, topK) {
+    const params = {};
+    if (!this._skipTemperature) {
+      params.temperature = temperature;
+    }
+    if (topK && topK > 0) {
+      params.top_k = topK;
+    }
+    return params;
+  }
+  _isTemperatureError(text) {
+    const lower = text.toLowerCase();
+    return lower.includes("temperature") && (lower.includes("invalid") || lower.includes("not allowed") || lower.includes("only 1 is allowed") || lower.includes("not supported"));
+  }
+  /**
+   * Check if a DeepSeek API error is recoverable (can retry).
+   * Some errors like "insufficient_quota" or "model overloaded" may be transient.
+   * DeepSeek V4 Pro specific: handles TPS (tokens per second) rate limiting
+   * and model overload errors gracefully.
+   */
+  _isDeepSeekRecoverableError(status, errorText, attempt) {
+    if (shouldRetry(status)) return true;
+    if (status === 400) {
+      const lower = errorText.toLowerCase();
+      if (lower.includes("insufficient_quota") && attempt < 2) return true;
+      if (lower.includes("rate_limit") && attempt < 3) return true;
+      if (lower.includes("temporarily") && attempt < 1) return true;
+      if (lower.includes("tps") && lower.includes("limit") && attempt < 3) return true;
+      if (lower.includes("overload") && attempt < 2) return true;
+      if (lower.includes("busy") && attempt < 2) return true;
+      if (lower.includes("concurrent") && attempt < 2) return true;
+    }
+    if (status === 503 && attempt < MAX_RETRIES) return true;
+    if (status === 502 && attempt < 2) return true;
+    return false;
+  }
+  supportsStreaming() {
+    return true;
+  }
+  /**
+   * Does this model use reasoning_content (thinking/chain-of-thought)?
+   *
+   * True when the model configuration enables reasoning OR the API has shown
+   * that it answers in thinking mode (it produced reasoning_content, or it
+   * demanded the echo-back). The agent uses this to keep one model's
+   * chain-of-thought out of another model, to avoid streaming (which loses
+   * reasoning_content), and to decide whether a model switch has to preserve
+   * the reasoning echo-back invariant.
+   */
+  supportsReasoning() {
+    return this._supportsReasoning || this._sawReasoning || this._requiresReasoningEcho;
+  }
+  /**
+   * Minimal reachability probe for the 保底-model supervisor: one tiny
+   * completion with its own short timeout (tens of times cheaper and faster
+   * than a real turn, and unlike a `GET /models` call it exercises the exact
+   * chat endpoint that timed out). Never throws.
+   *
+   * Evidence (api.enflame.cn gateway, measured):
+   *   - max_tokens: 1   → 400 "max_tokens ... limit was reached" for the GPT-5.x
+   *     family, i.e. a FALSE "unreachable". 4 is the smallest accepted value.
+   *   - unknown model   → 503 model_not_found (genuinely unreachable).
+   *   - reachable model → 200.
+   * So: any answer from the model server counts as reachable (2xx/400/429 —
+   * a rejected or throttled probe still proves the model is back), while 5xx,
+   * auth failures and timeouts count as unreachable.
+   */
+  async healthCheck(timeoutMs = 8e3, opts) {
+    if (!this._apiKey) return false;
+    const abortController = new AbortController();
+    const timer = setTimeout(() => abortController.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${this._apiBase}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this._apiKey}`
+        },
+        body: JSON.stringify({
+          model: this._model,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: HEALTH_CHECK_MAX_TOKENS,
+          stream: false
+        }),
+        signal: abortController.signal
+      });
+      if (response.ok) return true;
+      if (response.status === 400) return true;
+      if (response.status === 429) return opts?.throttleSensitive !== true;
+      return false;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  _convertMessages(messages) {
+    const historyHasThinking = messages.some(
+      (m) => m.role === "assistant" /* Assistant */ && m.reasoningContent
+    );
+    const thinkingMode = historyHasThinking || this.supportsReasoning();
+    const isValidAssistant = (m) => {
+      if (m.role !== "assistant" /* Assistant */) return true;
+      return !!m.content || !!m.toolCalls && m.toolCalls.length > 0;
+    };
+    let filtered = messages.filter(isValidAssistant);
+    if (thinkingMode) {
+      filtered = filtered.filter((m) => {
+        if (m.role === "assistant" /* Assistant */) {
+          return !!m.reasoningContent || !!m.toolCalls && m.toolCalls.length > 0;
+        }
+        return true;
+      });
+      while (filtered.length > 0 && filtered[0].role === "tool" /* Tool */) {
+        filtered.shift();
+      }
+    }
+    return filtered.map((msg) => {
+      const converted = {
+        role: msg.role,
+        content: msg.content || null
+      };
+      if (msg.toolCalls && msg.toolCalls.length > 0) {
+        converted.tool_calls = msg.toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function",
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.arguments)
+          }
+        }));
+      }
+      if (msg.toolCallId) {
+        converted.tool_call_id = msg.toolCallId;
+      }
+      if (msg.role === "assistant" /* Assistant */ && thinkingMode) {
+        converted.reasoning_content = msg.reasoningContent || "";
+      }
+      return converted;
+    });
+  }
+};
+LLMProviderFactory.register("openai", OpenAIProvider);
+
+// src/vs/workbench/services/agent/browser/llmAnthropic.ts
+var CACHE_TAIL_MESSAGES = 2;
+var MAX_CACHE_BREAKPOINTS = 4;
+function cacheControl() {
+  return { type: "ephemeral" };
+}
+function systemBlocksForCaching(content) {
+  return [{ type: "text", text: content, cache_control: cacheControl() }];
+}
+function markCacheBreakpoint(message) {
+  const content = message.content;
+  if (typeof content === "string") {
+    if (!content) return false;
+    message.content = [{ type: "text", text: content, cache_control: cacheControl() }];
+    return true;
+  }
+  if (Array.isArray(content) && content.length > 0) {
+    const last = content[content.length - 1];
+    if (last && typeof last === "object" && !last.cache_control) {
+      last.cache_control = cacheControl();
+      return true;
+    }
+  }
+  return false;
+}
+var AnthropicProvider = class {
+  name = "anthropic";
+  _apiKey;
+  _apiBase;
+  _model;
+  /**
+   * Set once the endpoint rejected a cache_control breakpoint (e.g. a gateway
+   * proxy that does not implement the prompt-caching extension). Caching is an
+   * optimization, never a requirement, so after the first rejection every
+   * later request is sent with no breakpoints.
+   */
+  _cachingDisabled = false;
+  _cachingDisabledReason;
+  constructor(config) {
+    this._apiKey = config.apiKey;
+    this._apiBase = config.apiBase || "https://api.anthropic.com";
+    this._model = config.model || "claude-sonnet-4-20250514";
+  }
+  /** True when prompt caching was rejected by this endpoint and switched off. */
+  get promptCachingDisabled() {
+    return this._cachingDisabled;
+  }
+  /** Why caching was switched off (kept for logs/diagnostics). */
+  get promptCachingDisabledReason() {
+    return this._cachingDisabledReason;
+  }
+  /** Build the request payload. `cache` toggles the prompt-caching breakpoints. */
+  _buildBody(options, cache) {
+    const { messages, systemMessage, tools, temperature, stream } = options;
+    const body = {
+      model: this._model,
+      max_tokens: 4096,
+      temperature,
+      messages: this._convertMessages(messages, cache)
+    };
+    if (systemMessage) {
+      body.system = cache ? systemBlocksForCaching(systemMessage.content) : systemMessage.content;
+    }
+    if (tools && tools.length > 0) {
+      body.tools = tools.map((t) => ({
+        name: t.function.name,
+        description: t.function.description,
+        input_schema: t.function.parameters
+      }));
+    }
+    if (stream) body.stream = true;
+    return body;
+  }
+  /**
+   * Send one /v1/messages request, degrading transparently to a cache-free
+   * payload when the endpoint rejects the cache breakpoints.
+   */
+  async _request(build, useCache) {
+    const send = (cache) => fetch(`${this._apiBase}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this._apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify(build(cache))
+    });
+    const response = await send(useCache);
+    if (response.ok) return response;
+    const errorText = await response.text();
+    if (useCache && response.status === 400 && /cache_control|cache-control/i.test(errorText)) {
+      this._cachingDisabled = true;
+      this._cachingDisabledReason = errorText.slice(0, 300);
+      console.warn(
+        `[Anthropic] endpoint rejected prompt caching (400) \u2014 retrying without cache breakpoints: ${errorText.slice(0, 200)}`
+      );
+      const retry = await send(false);
+      if (retry.ok) return retry;
+      throw new Error(`Anthropic API error ${retry.status}: ${await retry.text()}`);
+    }
+    throw new Error(`Anthropic API error ${response.status}: ${errorText}`);
+  }
+  async complete(messages, tools, temperature = 0, _topK) {
+    const systemMessage = messages.find((m) => m.role === "system" /* System */);
+    const nonSystemMessages = messages.filter((m) => m.role !== "system" /* System */);
+    const response = await this._request(
+      (cache) => this._buildBody(
+        { messages: nonSystemMessages, systemMessage, tools, temperature },
+        cache
+      ),
+      !this._cachingDisabled
+    );
+    const data = await response.json();
+    const usage = data.usage && typeof data.usage === "object" ? {
+      promptTokens: data.usage.input_tokens ?? 0,
+      completionTokens: data.usage.output_tokens ?? 0,
+      totalTokens: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
+      cachedTokens: data.usage.cache_read_input_tokens ?? 0,
+      cacheCreationTokens: data.usage.cache_creation_input_tokens ?? 0
+    } : void 0;
+    return this._parseResponse(data.content, usage);
+  }
+  async *stream(messages, tools, temperature = 0, _topK) {
+    const systemMessage = messages.find((m) => m.role === "system" /* System */);
+    const nonSystemMessages = messages.filter((m) => m.role !== "system" /* System */);
+    const response = await this._request(
+      (cache) => this._buildBody(
+        { messages: nonSystemMessages, systemMessage, tools, temperature, stream: true },
+        cache
+      ),
+      !this._cachingDisabled
+    );
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data: ")) {
+          continue;
+        }
+        const payload = trimmed.slice(6);
+        try {
+          const event = JSON.parse(payload);
+          if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+            yield event.delta.text;
+          }
+        } catch {
+        }
+      }
+    }
+  }
+  countTokens(text) {
+    return estimateTokenCount(text);
+  }
+  _parseResponse(content, usage) {
+    let textContent = "";
+    const toolCalls = [];
+    for (const block of content) {
+      if (block.type === "text" && block.text) {
+        textContent += block.text;
+      } else if (block.type === "tool_use" && block.id && block.name) {
+        toolCalls.push({
+          id: block.id,
+          name: block.name,
+          arguments: block.input || {}
+        });
+      }
+    }
+    return createMessage("assistant" /* Assistant */, textContent, {
+      toolCalls: toolCalls.length > 0 ? toolCalls : void 0,
+      usage
+    });
+  }
+  _convertMessages(messages, cache = false) {
+    const converted = messages.map((msg) => {
+      if (msg.role === "tool" /* Tool */) {
+        return {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: msg.toolCallId,
+            content: msg.content
+          }]
+        };
+      }
+      if (msg.role === "assistant" /* Assistant */ && msg.toolCalls && msg.toolCalls.length > 0) {
+        const content = [];
+        if (msg.content) {
+          content.push({ type: "text", text: msg.content });
+        }
+        for (const tc of msg.toolCalls) {
+          content.push({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.name,
+            input: tc.arguments
+          });
+        }
+        return { role: "assistant", content };
+      }
+      return {
+        role: msg.role === "user" /* User */ ? "user" : "assistant",
+        content: msg.content
+      };
+    });
+    if (cache && converted.length > 0) {
+      const tail2 = Math.min(CACHE_TAIL_MESSAGES, MAX_CACHE_BREAKPOINTS - 1);
+      let placed = 0;
+      for (let i = converted.length - 1; i >= 0 && placed < tail2; i--) {
+        if (markCacheBreakpoint(converted[i])) placed++;
+      }
+    }
+    return converted;
+  }
+};
+LLMProviderFactory.register("anthropic", AnthropicProvider);
+
+// src/vs/workbench/services/agent/browser/llmOllama.ts
+var OllamaProvider = class {
+  name = "ollama";
+  _apiBase;
+  _model;
+  constructor(config) {
+    this._apiBase = config.apiBase || "http://localhost:11434";
+    this._model = config.model || "llama3";
+  }
+  async complete(messages, tools, temperature = 0, topK) {
+    const body = {
+      model: this._model,
+      messages: messages.map((m) => ({
+        role: m.role,
+        content: m.content
+      })),
+      stream: false,
+      options: {
+        temperature,
+        ...topK && topK > 0 ? { top_k: topK } : {}
+      }
+    };
+    if (tools && tools.length > 0) {
+      body.tools = tools.map((t) => ({
+        type: "function",
+        function: {
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters
+        }
+      }));
+    }
+    const response = await fetch(`${this._apiBase}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Ollama API error ${response.status}: ${errorText}`);
+    }
+    const data = await response.json();
+    const msg = data.message;
+    const toolCalls = msg.tool_calls?.map((tc, i) => ({
+      id: `ollama_tc_${Date.now()}_${i}`,
+      name: tc.function.name,
+      arguments: tc.function.arguments
+    }));
+    const usage = typeof data.prompt_eval_count === "number" || typeof data.eval_count === "number" ? {
+      promptTokens: data.prompt_eval_count ?? 0,
+      completionTokens: data.eval_count ?? 0,
+      totalTokens: (data.prompt_eval_count ?? 0) + (data.eval_count ?? 0)
+    } : void 0;
+    return createMessage(
+      "assistant" /* Assistant */,
+      msg.content || "",
+      { toolCalls, usage }
+    );
+  }
+  async *stream(messages, _tools, temperature = 0, topK) {
+    const body = {
+      model: this._model,
+      messages: messages.map((m) => ({
+        role: m.role,
+        content: m.content
+      })),
+      stream: true,
+      options: {
+        temperature,
+        ...topK && topK > 0 ? { top_k: topK } : {}
+      }
+    };
+    const response = await fetch(`${this._apiBase}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Ollama API error ${response.status}: ${errorText}`);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.message?.content) {
+            yield parsed.message.content;
+          }
+        } catch {
+        }
+      }
+    }
+  }
+  countTokens(text) {
+    return estimateTokenCount(text);
+  }
+};
+LLMProviderFactory.register("ollama", OllamaProvider);
+
+// src/vs/workbench/contrib/agent/common/agentTools.ts
+var AgentTool = class {
+  /**
+   * Optional tool-declared execution budget (ms) for a single call.
+   *
+   * `AgentLoop` races every tool call against the generic `step_timeout`. A tool
+   * whose whole purpose is waiting (poll) declares its own budget here, so that
+   * generic timeout stays the outer bound instead of becoming a hard cap that
+   * kills the tool mid-wait. Returning `undefined` keeps the default behaviour;
+   * an explicit `timeout` argument always wins over this.
+   */
+  timeoutFor(_args, _config) {
+    return void 0;
+  }
+  toSchema() {
+    return {
+      type: "function",
+      function: {
+        name: this.name,
+        description: this.description,
+        parameters: this.parameters
+      }
+    };
+  }
+  success(toolCallId, output) {
+    return { toolCallId, success: true, output };
+  }
+  failure(toolCallId, error) {
+    return { toolCallId, success: false, output: "", error };
+  }
+};
+var ToolRegistry = class {
+  _tools = /* @__PURE__ */ new Map();
+  _aliases = /* @__PURE__ */ new Map();
+  register(tool) {
+    this._tools.set(tool.name, tool);
+  }
+  /**
+   * Register an alias name that maps to an existing tool.
+   * Useful for compatibility with tool names from other agent frameworks
+   * (e.g. search_content → search_text).
+   */
+  registerAlias(alias, targetName) {
+    if (!this._tools.has(targetName)) {
+      throw new Error(`Cannot alias "${alias}" to non-existent tool "${targetName}"`);
+    }
+    this._aliases.set(alias, targetName);
+  }
+  /**
+   * Replace every registered tool through `fn` (aliases keep working, because
+   * an alias resolves to the entry stored here).
+   *
+   * Used by the tool-mock layer (`agentToolMock.ts`) to interpose record /
+   * replay in front of a chosen subset of tools without touching the agent
+   * loop or the individual tool implementations.
+   */
+  decorate(fn) {
+    for (const [name, tool] of this._tools) {
+      const next = fn(tool);
+      if (next !== tool) this._tools.set(name, next);
+    }
+  }
+  get(name) {
+    const tool = this._tools.get(name);
+    if (tool) {
+      return tool;
+    }
+    const targetName = this._aliases.get(name);
+    if (targetName) {
+      return this._tools.get(targetName);
+    }
+    return void 0;
+  }
+  has(name) {
+    return this._tools.has(name) || this._aliases.has(name);
+  }
+  listNames() {
+    return [...this._tools.keys()];
+  }
+  listSchemas() {
+    const schemas = [];
+    for (const tool of this._tools.values()) {
+      schemas.push(tool.toSchema());
+    }
+    for (const [alias, targetName] of this._aliases) {
+      const target = this._tools.get(targetName);
+      if (target) {
+        const original = target.toSchema();
+        schemas.push({
+          type: "function",
+          function: {
+            name: alias,
+            description: original.function.description,
+            parameters: original.function.parameters
+          }
+        });
+      }
+    }
+    return schemas;
+  }
+  getReadOnlySchemas() {
+    const readOnlyTools = ["read_file", "list_directory", "search_text", "search_files", "search_content"];
+    const schemas = [];
+    for (const tool of this._tools.values()) {
+      if (readOnlyTools.includes(tool.name)) {
+        schemas.push(tool.toSchema());
+      }
+    }
+    for (const [alias, targetName] of this._aliases) {
+      if (readOnlyTools.includes(alias)) {
+        const target = this._tools.get(targetName);
+        if (target) {
+          const original = target.toSchema();
+          schemas.push({
+            type: "function",
+            function: {
+              name: alias,
+              description: original.function.description,
+              parameters: original.function.parameters
+            }
+          });
+        }
+      }
+    }
+    return schemas;
+  }
+};
+
+// vs-core/base/common/lifecycle.ts
+var DisposableStore = class {
+  _toDispose = /* @__PURE__ */ new Set();
+  _isDisposed = false;
+  add(o) {
+    if (this._isDisposed) {
+      o.dispose();
+      return o;
+    }
+    this._toDispose.add(o);
+    return o;
+  }
+  dispose() {
+    if (this._isDisposed) {
+      return;
+    }
+    this._isDisposed = true;
+    for (const d of this._toDispose) {
+      d.dispose();
+    }
+    this._toDispose.clear();
+  }
+};
+var Disposable = class {
+  static None = Object.freeze({ dispose() {
+  } });
+  _store = new DisposableStore();
+  _register(o) {
+    return this._store.add(o);
+  }
+  dispose() {
+    this._store.dispose();
+  }
+};
+
+// vs-core/base/common/event.ts
+var Event;
+((Event6) => {
+  Event6.None = () => Disposable.None;
+})(Event || (Event = {}));
+var Emitter = class {
+  _listeners = [];
+  _disposed = false;
+  get event() {
+    return (listener, thisArgs) => {
+      if (this._disposed) {
+        return Disposable.None;
+      }
+      const entry = { fn: listener, thisArg: thisArgs };
+      this._listeners.push(entry);
+      return {
+        dispose: () => {
+          const idx = this._listeners.indexOf(entry);
+          if (idx >= 0) {
+            this._listeners.splice(idx, 1);
+          }
+        }
+      };
+    };
+  }
+  fire(event) {
+    if (this._disposed) {
+      return;
+    }
+    for (const { fn, thisArg } of [...this._listeners]) {
+      try {
+        fn.call(thisArg, event);
+      } catch (e) {
+        console.error("Event listener error:", e);
+      }
+    }
+  }
+  dispose() {
+    this._disposed = true;
+    this._listeners.length = 0;
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentModes.ts
+var AgentModeManager = class {
+  _currentMode = "agent" /* Agent */;
+  _onDidChangeMode = new Emitter();
+  onDidChangeMode = this._onDidChangeMode.event;
+  get currentMode() {
+    return this._currentMode;
+  }
+  switchMode(mode) {
+    if (this._currentMode === mode) {
+      return;
+    }
+    this._currentMode = mode;
+    this._onDidChangeMode.fire(mode);
+  }
+  get isReadOnly() {
+    return this._currentMode === "ask" /* Ask */;
+  }
+  get canExecuteTools() {
+    return this._currentMode === "agent" /* Agent */;
+  }
+  get shouldPlanFirst() {
+    return this._currentMode === "plan" /* Plan */;
+  }
+  dispose() {
+    this._onDidChangeMode.dispose();
+  }
+};
+
+// vs-core/base/common/buffer.ts
+var VSBuffer = class _VSBuffer {
+  buffer;
+  byteLength;
+  constructor(buffer) {
+    this.buffer = buffer;
+    this.byteLength = buffer.byteLength;
+  }
+  toString() {
+    return Buffer.from(this.buffer).toString("utf-8");
+  }
+  static fromString(source) {
+    return new _VSBuffer(Buffer.from(source, "utf-8"));
+  }
+  static fromByteArray(source) {
+    return new _VSBuffer(new Uint8Array(source));
+  }
+  static wrap(buffer) {
+    return new _VSBuffer(buffer);
+  }
+  static concat(buffers, totalLength) {
+    const result = Buffer.concat(buffers.map((b) => Buffer.from(b.buffer)), totalLength);
+    return new _VSBuffer(result);
+  }
+  static alloc(byteLength) {
+    return new _VSBuffer(new Uint8Array(byteLength));
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentCheckpoint.ts
+var AgentCheckpointManager = class _AgentCheckpointManager {
+  constructor(_fileService) {
+    this._fileService = _fileService;
+  }
+  _checkpoints = /* @__PURE__ */ new Map();
+  _counter = 0;
+  /**
+   * Create an independent checkpoint manager sharing the same file service.
+   * Used by parallel agents to avoid race conditions on shared checkpoint state.
+   */
+  clone() {
+    return new _AgentCheckpointManager(this._fileService);
+  }
+  async captureFile(filePath) {
+    try {
+      const uri = URI.file(filePath);
+      const content = await this._fileService.readFile(uri);
+      return content.value.toString();
+    } catch {
+      return void 0;
+    }
+  }
+  createCheckpoint(description) {
+    const id = `ckpt_${Date.now()}_${this._counter++}`;
+    this._checkpoints.set(id, {
+      id,
+      timestamp: Date.now(),
+      description,
+      snapshots: /* @__PURE__ */ new Map()
+    });
+    return id;
+  }
+  async snapshotFile(checkpointId, filePath) {
+    const checkpoint = this._checkpoints.get(checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint not found: ${checkpointId}`);
+    }
+    const content = await this.captureFile(filePath);
+    if (content !== void 0) {
+      checkpoint.snapshots.set(filePath, content);
+    }
+  }
+  async restore(checkpointId) {
+    const checkpoint = this._checkpoints.get(checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint not found: ${checkpointId}`);
+    }
+    const restoredFiles = [];
+    for (const [filePath, content] of checkpoint.snapshots) {
+      try {
+        const uri = URI.file(filePath);
+        await this._fileService.writeFile(uri, VSBuffer.fromString(content));
+        restoredFiles.push(filePath);
+      } catch {
+      }
+    }
+    return restoredFiles;
+  }
+  listCheckpoints() {
+    return [...this._checkpoints.values()].map((cp) => ({
+      id: cp.id,
+      timestamp: cp.timestamp,
+      description: cp.description,
+      fileCount: cp.snapshots.size
+    }));
+  }
+  deleteCheckpoint(checkpointId) {
+    return this._checkpoints.delete(checkpointId);
+  }
+  clear() {
+    this._checkpoints.clear();
+  }
+};
+
+// vs-core/base/common/cancellation.ts
+var CancellationToken;
+((CancellationToken3) => {
+  CancellationToken3.None = Object.freeze({
+    isCancellationRequested: false,
+    onCancellationRequested: Event.None
+  });
+  CancellationToken3.Cancelled = Object.freeze({
+    isCancellationRequested: true,
+    onCancellationRequested: Event.None
+  });
+})(CancellationToken || (CancellationToken = {}));
+var CancellationTokenSource = class {
+  _token;
+  _emitter;
+  _cancelled = false;
+  get token() {
+    if (!this._token) {
+      this._emitter = new Emitter();
+      this._token = {
+        isCancellationRequested: this._cancelled,
+        onCancellationRequested: this._emitter.event
+      };
+    }
+    return this._token;
+  }
+  cancel() {
+    if (!this._cancelled) {
+      this._cancelled = true;
+      if (this._emitter) {
+        this._emitter.fire(void 0);
+      }
+      if (this._token) {
+        this._token.isCancellationRequested = true;
+      }
+    }
+  }
+  dispose() {
+    this._emitter?.dispose();
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentContext.ts
+var WINDOW_UTILIZATION = 0.75;
+var TASK_ANCHOR_PREFIX = "[Pinned original task \u2014 always in context]";
+var UNANSWERED_TOOL_CALL = "[not executed] the tool call was never answered (task interrupted or cancelled)";
+function sanitizeToolCallPairs(messages) {
+  const out = [];
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i];
+    if (msg.role === "assistant" /* Assistant */ && msg.toolCalls && msg.toolCalls.length > 0) {
+      out.push(msg);
+      const answered = /* @__PURE__ */ new Set();
+      let j = i + 1;
+      while (j < messages.length && messages[j].role === "tool" /* Tool */) {
+        const id = messages[j].toolCallId;
+        if (id && !answered.has(id)) {
+          out.push(messages[j]);
+          answered.add(id);
+        }
+        j++;
+      }
+      for (const tc of msg.toolCalls) {
+        if (!answered.has(tc.id)) {
+          out.push(createMessage("tool" /* Tool */, UNANSWERED_TOOL_CALL, { toolCallId: tc.id }));
+        }
+      }
+      i = j;
+      continue;
+    }
+    if (msg.role === "tool" /* Tool */) {
+      i++;
+      continue;
+    }
+    out.push(msg);
+    i++;
+  }
+  return out;
+}
+var AgentContext = class {
+  constructor(_maxTokens, _maxOutputTokens, _llmProvider) {
+    this._maxTokens = _maxTokens;
+    this._maxOutputTokens = _maxOutputTokens;
+    this._llmProvider = _llmProvider;
+  }
+  _messages = [];
+  _systemPrompt;
+  /**
+   * The original task statement, pinned OUTSIDE the sliding window.
+   *
+   * The sliding window drops the OLDEST messages first and compaction
+   * summarizes the older half away — both of them drop the statement the user
+   * actually asked for, so a long run can end up optimizing a half-remembered
+   * goal. The reference harness guards against exactly this by rebuilding its
+   * post-overflow prompt as "original_instruction + current state"; here the
+   * anchor is simply re-sent verbatim on every request instead of being
+   * summarized.
+   */
+  _taskAnchor;
+  swapTokenCounter(provider) {
+    this._llmProvider = provider;
+  }
+  /** Estimated total tokens held in the message history (incl. system prompt). */
+  get estimatedTokens() {
+    return this._estimateTotalTokens();
+  }
+  /** Token budget available for input messages under the ACTIVE model. */
+  get inputBudget() {
+    return this._inputBudget;
+  }
+  /** True when the history no longer fits the active model's input budget. */
+  get isOverBudget() {
+    return this._estimateTotalTokens() > this._inputBudget * WINDOW_UTILIZATION;
+  }
+  /**
+   * Re-target the context to another model after a runtime model switch
+   * (scenario routing, /profile, or the 保底 fallback).
+   *
+   * The window budgets MUST follow the new model. Keeping the previous model's
+   * (usually larger) window after switching to a smaller one is a silent
+   * context-corruption bug: the sliding window happily keeps more history than
+   * the new model accepts, so its completion budget is clamped to ~0, the
+   * request fails with ContextOverflowError, and the loop force-compacts —
+   * collapsing the conversation the user was relying on.
+   */
+  setModelBudget(maxTokens, maxOutputTokens) {
+    if (maxTokens && maxTokens > 0) this._maxTokens = maxTokens;
+    if (maxOutputTokens && maxOutputTokens > 0) this._maxOutputTokens = maxOutputTokens;
+  }
+  /**
+   * Drop reasoning_content produced by a PREVIOUS model.
+   *
+   * Chain-of-thought is model-private. Replaying one model's thinking into a
+   * different one both breaks the thinking-mode API invariant (reasoning_content
+   * must be present on ALL assistant messages, or on none) and is a known way to
+   * derail the new model: it latches onto the foreign plan and re-emits it
+   * (observed: hy3 repeating "Hmm — let me find lit. / Let me do it." 1600+ times
+   * until it burned its whole output budget and answered nothing).
+   *
+   * `content` and `toolCalls` are preserved, so no tool-result message becomes
+   * orphaned and no assistant message turns invalid.
+   */
+  dropReasoningContent(predicate) {
+    let dropped = 0;
+    for (let i = 0; i < this._messages.length; i++) {
+      const msg = this._messages[i];
+      if (msg.reasoningContent === void 0) continue;
+      if (predicate && !predicate(msg)) continue;
+      this._messages[i] = { ...msg, reasoningContent: void 0 };
+      dropped++;
+    }
+    return dropped;
+  }
+  /**
+   * Token budget reserved for input messages. The model's context window is
+   * shared between input (messages) and output (max_tokens), so the sliding
+   * window must reserve the completion budget — otherwise a near-full message
+   * window plus a large max_tokens triggers "maximum context length" API errors.
+   */
+  get _inputBudget() {
+    return Math.max(1, this._maxTokens - this._maxOutputTokens);
+  }
+  get messages() {
+    return this._messages;
+  }
+  get length() {
+    return this._messages.length;
+  }
+  get systemPromptContent() {
+    return this._systemPrompt?.content || "";
+  }
+  setSystemPrompt(content) {
+    this._systemPrompt = createMessage("system" /* System */, content);
+  }
+  /**
+   * Pin the original task statement so neither the sliding window nor
+   * compaction can lose it. Called once per task, with the user's own words.
+   */
+  setTaskAnchor(content) {
+    const trimmed = (content || "").trim();
+    if (!trimmed) return;
+    this._taskAnchor = createMessage("user" /* User */, `${TASK_ANCHOR_PREFIX}
+${trimmed}`);
+  }
+  /** The pinned task text as the user wrote it, or undefined when nothing is pinned. */
+  get taskAnchorContent() {
+    if (!this._taskAnchor) return void 0;
+    return this._taskAnchor.content.slice(TASK_ANCHOR_PREFIX.length + 1);
+  }
+  /** Forget the pinned task (used when a new conversation replaces this one). */
+  clearTaskAnchor() {
+    this._taskAnchor = void 0;
+  }
+  addMessage(message) {
+    this._messages.push(message);
+  }
+  /**
+   * Apply `sanitizeToolCallPairs` to the LIVE history and return the tool
+   * results that had to be synthesized (empty when the history was already
+   * valid).
+   *
+   * Called when a task ends (cancel/crash included), so what gets persisted is
+   * a resumable conversation instead of one that 400s forever.
+   */
+  repairToolCallPairs() {
+    const repaired = sanitizeToolCallPairs(this._messages);
+    if (repaired.length === this._messages.length && repaired.every((m, i) => m === this._messages[i])) {
+      return [];
+    }
+    const original = new Set(this._messages);
+    const inserted = repaired.filter((m) => !original.has(m));
+    this._messages.length = 0;
+    this._messages.push(...repaired);
+    return inserted;
+  }
+  getContextWindow() {
+    const result = [];
+    let tokenCount = 0;
+    if (this._systemPrompt) {
+      result.push(this._systemPrompt);
+      tokenCount += this._estimateTokens(this._systemPrompt);
+    }
+    if (this._taskAnchor) {
+      result.push(this._taskAnchor);
+      tokenCount += this._estimateTokens(this._taskAnchor);
+    }
+    const contextMessages = [];
+    for (let i = this._messages.length - 1; i >= 0; i--) {
+      const msg = this._messages[i];
+      const msgTokens = this._estimateTokens(msg);
+      if (tokenCount + msgTokens > this._inputBudget * WINDOW_UTILIZATION) {
+        break;
+      }
+      contextMessages.unshift(msg);
+      tokenCount += msgTokens;
+    }
+    result.push(...contextMessages);
+    return sanitizeToolCallPairs(result);
+  }
+  /**
+   * Compact the conversation history when it grows too large (or always, when
+   * `force` is set — used to recover from a context-overflow API error).
+   * Older messages are summarized via the LLM; if summarization fails, the
+   * oldest messages are truncated instead. Returns true if a compaction ran.
+   */
+  async compactIfNeeded(force = false) {
+    const totalTokens = this._estimateTotalTokens();
+    if (!force && totalTokens < this._inputBudget * WINDOW_UTILIZATION) {
+      return false;
+    }
+    const splitPoint = Math.floor(this._messages.length / 2);
+    const oldMessages = this._messages.slice(0, splitPoint);
+    let recentMessages = this._messages.slice(splitPoint);
+    while (recentMessages.length > 0 && recentMessages[0].role === "tool" /* Tool */) {
+      recentMessages = recentMessages.slice(1);
+    }
+    const hasThinking = oldMessages.some(
+      (m) => m.role === "assistant" /* Assistant */ && m.reasoningContent
+    );
+    const summaryContent = oldMessages.map((m) => {
+      let prefix = `[${m.role}]`;
+      if (m.role === "assistant" /* Assistant */ && m.reasoningContent) {
+        prefix += `(reasoning: ${m.reasoningContent.substring(0, 100)})`;
+      }
+      return `${prefix}: ${m.content.substring(0, 200)}`;
+    }).join("\n");
+    const anchorContent = this.taskAnchorContent;
+    const summaryPrompt = createMessage(
+      "user" /* User */,
+      `Write a HANDOFF summary of the conversation below so that work can continue without the original transcript. Preserve, in this order:
 1. the original task and every explicit requirement (verbatim where wording matters),
 2. decisions already made and files created or changed,
 3. commands or tests already run and their results,
 4. what is still unfinished or unverified, and the next concrete step.
 Do not invent progress that did not happen.
 
-`+(l?`Pinned original task:
-${l}
+` + (anchorContent ? `Pinned original task:
+${anchorContent}
 
-`:"")+`Conversation to summarize:
+` : "") + `Conversation to summarize:
 
-${a}`),p=2;for(let u=0;u<=p;u++)try{let m=await this._llmProvider.complete([D("system","You are a conversation summarizer. Provide a concise summary preserving all technical details."),d],void 0,0);this._messages.length=0;let h=i?D("assistant",`[Previous context summary]
-${m.content}`,{reasoningContent:m.reasoningContent||"(compressed summary)"}):D("assistant",`[Previous context summary]
-${m.content}`);return this._messages.push(h,...o),!0}catch(m){if(u<p){console.warn(`[Context Summarization] Attempt ${u+1} failed, retrying: ${m.message}`),await new Promise(h=>setTimeout(h,1e3));continue}for(console.warn("[Context Summarization] All retries exhausted, falling back to truncation"),this._messages.splice(0,n);this._messages.length>0&&this._messages[0].role==="tool";)this._messages.shift();return!0}return!0}clear(){this._messages.length=0,this._systemPrompt=void 0,this._taskAnchor=void 0}_estimateTokens(e){let t=this._llmProvider.countTokens(e.content);return e.reasoningContent&&(t+=this._llmProvider.countTokens(e.reasoningContent)),t+ft}_estimateTotalTokens(){let e=this._systemPrompt?this._estimateTokens(this._systemPrompt):0;this._taskAnchor&&(e+=this._estimateTokens(this._taskAnchor));for(let t of this._messages)e+=this._estimateTokens(t);return e}};var xo=`Given the user's task, create a structured implementation plan as JSON.
+${summaryContent}`
+    );
+    const MAX_SUMMARY_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_SUMMARY_RETRIES; attempt++) {
+      try {
+        const summaryResponse = await this._llmProvider.complete([
+          createMessage(
+            "system" /* System */,
+            "You are a conversation summarizer. Provide a concise summary preserving all technical details."
+          ),
+          summaryPrompt
+        ], void 0, 0);
+        this._messages.length = 0;
+        const summaryMsg = hasThinking ? createMessage("assistant" /* Assistant */, `[Previous context summary]
+${summaryResponse.content}`, {
+          reasoningContent: summaryResponse.reasoningContent || "(compressed summary)"
+        }) : createMessage("assistant" /* Assistant */, `[Previous context summary]
+${summaryResponse.content}`);
+        this._messages.push(summaryMsg, ...recentMessages);
+        return true;
+      } catch (err) {
+        if (attempt < MAX_SUMMARY_RETRIES) {
+          console.warn(`[Context Summarization] Attempt ${attempt + 1} failed, retrying: ${err.message}`);
+          await new Promise((r) => setTimeout(r, 1e3));
+          continue;
+        }
+        console.warn(`[Context Summarization] All retries exhausted, falling back to truncation`);
+        this._messages.splice(0, splitPoint);
+        while (this._messages.length > 0 && this._messages[0].role === "tool" /* Tool */) {
+          this._messages.shift();
+        }
+        return true;
+      }
+    }
+    return true;
+  }
+  clear() {
+    this._messages.length = 0;
+    this._systemPrompt = void 0;
+    this._taskAnchor = void 0;
+  }
+  _estimateTokens(message) {
+    let total = this._llmProvider.countTokens(message.content);
+    if (message.reasoningContent) {
+      total += this._llmProvider.countTokens(message.reasoningContent);
+    }
+    return total + TOKENS_PER_MESSAGE_OVERHEAD;
+  }
+  _estimateTotalTokens() {
+    let total = this._systemPrompt ? this._estimateTokens(this._systemPrompt) : 0;
+    if (this._taskAnchor) {
+      total += this._estimateTokens(this._taskAnchor);
+    }
+    for (const msg of this._messages) {
+      total += this._estimateTokens(msg);
+    }
+    return total;
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentPlanner.ts
+var PLAN_GENERATION_PROMPT = `Given the user's task, create a structured implementation plan as JSON.
 
 Output format (strict JSON, no markdown):
 {
@@ -38,16 +1737,325 @@ Rules:
 - Break complex tasks into 3-15 concrete steps
 - Each step should be a single, verifiable action
 - Start with exploration (read/search), then implement, then verify
-- Include a final verification step (run tests or check output)`,bt=class{constructor(e){this._llmProvider=e}_currentPlan;_onDidUpdatePlan=new K;onDidUpdatePlan=this._onDidUpdatePlan.event;swapProvider(e){this._llmProvider=e}get currentPlan(){return this._currentPlan}async createPlan(e,t){let n=[D("system",xo)];t?n.push(D("user",`Codebase context:
-${t}
+- Include a final verification step (run tests or check output)`;
+var AgentPlanner = class {
+  constructor(_llmProvider) {
+    this._llmProvider = _llmProvider;
+  }
+  _currentPlan;
+  _onDidUpdatePlan = new Emitter();
+  onDidUpdatePlan = this._onDidUpdatePlan.event;
+  swapProvider(provider) {
+    this._llmProvider = provider;
+  }
+  get currentPlan() {
+    return this._currentPlan;
+  }
+  async createPlan(task, codebaseContext) {
+    const messages = [
+      createMessage("system" /* System */, PLAN_GENERATION_PROMPT)
+    ];
+    if (codebaseContext) {
+      messages.push(createMessage(
+        "user" /* User */,
+        `Codebase context:
+${codebaseContext}
 
-Task: ${e}`)):n.push(D("user",`Task: ${e}`));let r=await this._llmProvider.complete(n);try{let o=r.content.match(/\{[\s\S]*\}/);if(!o)throw new Error("No JSON found in response");let i=JSON.parse(o[0]),a=i.steps.map((l,d)=>({id:l.id||d+1,description:l.description,status:"pending",toolName:l.toolName||void 0,toolArgs:l.toolArgs||void 0}));return this._currentPlan={task:i.task||e,steps:a,currentStep:0},this._onDidUpdatePlan.fire(this._currentPlan),this._currentPlan}catch{return this._currentPlan={task:e,steps:[{id:1,description:`Execute task directly: ${e}`,status:"pending"}],currentStep:0},this._onDidUpdatePlan.fire(this._currentPlan),this._currentPlan}}advanceStep(){if(!this._currentPlan)return;let e=this._currentPlan;if(e.currentStep>0){let n=e.steps[e.currentStep-1];n&&n.status==="running"&&(n.status="done")}if(e.currentStep>=e.steps.length)return;let t=e.steps[e.currentStep];return t.status="running",e.currentStep++,this._onDidUpdatePlan.fire(e),t}markStepFailed(e,t){if(!this._currentPlan)return;let n=this._currentPlan.steps.find(r=>r.id===e);n&&(n.status="failed",n.result=t,this._onDidUpdatePlan.fire(this._currentPlan))}markStepDone(e,t){if(!this._currentPlan)return;let n=this._currentPlan.steps.find(r=>r.id===e);n&&(n.status="done",n.result=t,this._onDidUpdatePlan.fire(this._currentPlan))}isComplete(){return this._currentPlan?this._currentPlan.currentStep>=this._currentPlan.steps.length:!0}reset(){this._currentPlan=void 0}dispose(){this._onDidUpdatePlan.dispose()}};var In={maxChars:8e3,headChars:4e3,tailChars:2e3},$o=`
+Task: ${task}`
+      ));
+    } else {
+      messages.push(createMessage("user" /* User */, `Task: ${task}`));
+    }
+    const response = await this._llmProvider.complete(messages);
+    try {
+      const jsonMatch = response.content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error("No JSON found in response");
+      }
+      const parsed = JSON.parse(jsonMatch[0]);
+      const steps = parsed.steps.map((s, i) => ({
+        id: s.id || i + 1,
+        description: s.description,
+        status: "pending" /* Pending */,
+        toolName: s.toolName || void 0,
+        toolArgs: s.toolArgs || void 0
+      }));
+      this._currentPlan = {
+        task: parsed.task || task,
+        steps,
+        currentStep: 0
+      };
+      this._onDidUpdatePlan.fire(this._currentPlan);
+      return this._currentPlan;
+    } catch (err) {
+      this._currentPlan = {
+        task,
+        steps: [{
+          id: 1,
+          description: `Execute task directly: ${task}`,
+          status: "pending" /* Pending */
+        }],
+        currentStep: 0
+      };
+      this._onDidUpdatePlan.fire(this._currentPlan);
+      return this._currentPlan;
+    }
+  }
+  advanceStep() {
+    if (!this._currentPlan) {
+      return void 0;
+    }
+    const plan = this._currentPlan;
+    if (plan.currentStep > 0) {
+      const prevStep = plan.steps[plan.currentStep - 1];
+      if (prevStep && prevStep.status === "running" /* Running */) {
+        prevStep.status = "done" /* Done */;
+      }
+    }
+    if (plan.currentStep >= plan.steps.length) {
+      return void 0;
+    }
+    const step = plan.steps[plan.currentStep];
+    step.status = "running" /* Running */;
+    plan.currentStep++;
+    this._onDidUpdatePlan.fire(plan);
+    return step;
+  }
+  markStepFailed(stepId, error) {
+    if (!this._currentPlan) {
+      return;
+    }
+    const step = this._currentPlan.steps.find((s) => s.id === stepId);
+    if (step) {
+      step.status = "failed" /* Failed */;
+      step.result = error;
+      this._onDidUpdatePlan.fire(this._currentPlan);
+    }
+  }
+  markStepDone(stepId, result) {
+    if (!this._currentPlan) {
+      return;
+    }
+    const step = this._currentPlan.steps.find((s) => s.id === stepId);
+    if (step) {
+      step.status = "done" /* Done */;
+      step.result = result;
+      this._onDidUpdatePlan.fire(this._currentPlan);
+    }
+  }
+  isComplete() {
+    if (!this._currentPlan) {
+      return true;
+    }
+    return this._currentPlan.currentStep >= this._currentPlan.steps.length;
+  }
+  reset() {
+    this._currentPlan = void 0;
+  }
+  dispose() {
+    this._onDidUpdatePlan.dispose();
+  }
+};
 
-[... tool result middle omitted, {OMITTED} characters ...]
+// src/vs/workbench/contrib/agent/common/agentResultRetention.ts
+var RETENTION_DEFAULTS = {
+  maxChars: 8e3,
+  headChars: 4e3,
+  tailChars: 2e3
+};
+var MARKER = "\n\n[... tool result middle omitted, {OMITTED} characters ...]\n\n";
+function safeSlice(text, start, end) {
+  let from = Math.max(0, start);
+  let to = Math.min(text.length, end);
+  if (from > 0 && from < text.length) {
+    const code = text.charCodeAt(from);
+    if (code >= 56320 && code <= 57343) from++;
+  }
+  if (to > 0 && to < text.length) {
+    const code = text.charCodeAt(to - 1);
+    if (code >= 55296 && code <= 56319) to--;
+  }
+  if (to <= from) return "";
+  return text.slice(from, to);
+}
+function assertBudgets(maxChars, headChars, tailChars) {
+  if (!Number.isInteger(maxChars) || maxChars <= 0) {
+    throw new Error(`result retention: maxChars (${maxChars}) must be a positive integer`);
+  }
+  if (!Number.isInteger(headChars) || headChars < 0) {
+    throw new Error(`result retention: headChars (${headChars}) must be a non-negative integer`);
+  }
+  if (!Number.isInteger(tailChars) || tailChars < 0) {
+    throw new Error(`result retention: tailChars (${tailChars}) must be a non-negative integer`);
+  }
+  if (headChars + tailChars >= maxChars) {
+    throw new Error(
+      `result retention: headChars (${headChars}) + tailChars (${tailChars}) must be less than maxChars (${maxChars})`
+    );
+  }
+}
+function retainResult(text, options = {}) {
+  const maxChars = options.maxChars ?? RETENTION_DEFAULTS.maxChars;
+  const headChars = options.headChars ?? RETENTION_DEFAULTS.headChars;
+  const tailChars = options.tailChars ?? RETENTION_DEFAULTS.tailChars;
+  const markerTemplate = options.marker ?? MARKER;
+  assertBudgets(maxChars, headChars, tailChars);
+  if (text.length <= maxChars) {
+    return { text, truncated: false, omittedChars: 0, headChars: text.length, tailChars: 0 };
+  }
+  const head = safeSlice(text, 0, headChars);
+  const tail2 = safeSlice(text, text.length - tailChars, text.length);
+  const omitted = text.length - head.length - tail2.length;
+  const marker = markerTemplate.split("{OMITTED}").join(String(omitted));
+  return {
+    text: head + marker + tail2,
+    truncated: true,
+    omittedChars: omitted,
+    headChars: head.length,
+    tailChars: tail2.length
+  };
+}
 
-`;function Is(s,e,t){let n=Math.max(0,e),r=Math.min(s.length,t);if(n>0&&n<s.length){let o=s.charCodeAt(n);o>=56320&&o<=57343&&n++}if(r>0&&r<s.length){let o=s.charCodeAt(r-1);o>=55296&&o<=56319&&r--}return r<=n?"":s.slice(n,r)}function Co(s,e,t){if(!Number.isInteger(s)||s<=0)throw new Error(`result retention: maxChars (${s}) must be a positive integer`);if(!Number.isInteger(e)||e<0)throw new Error(`result retention: headChars (${e}) must be a non-negative integer`);if(!Number.isInteger(t)||t<0)throw new Error(`result retention: tailChars (${t}) must be a non-negative integer`);if(e+t>=s)throw new Error(`result retention: headChars (${e}) + tailChars (${t}) must be less than maxChars (${s})`)}function xs(s,e={}){let t=e.maxChars??In.maxChars,n=e.headChars??In.headChars,r=e.tailChars??In.tailChars,o=e.marker??$o;if(Co(t,n,r),s.length<=t)return{text:s,truncated:!1,omittedChars:0,headChars:s.length,tailChars:0};let i=Is(s,0,n),a=Is(s,s.length-r,s.length),l=s.length-i.length-a.length,d=o.split("{OMITTED}").join(String(l));return{text:i+d+a,truncated:!0,omittedChars:l,headChars:i.length,tailChars:a.length}}var $s=["pending","in_progress","completed"],Ao={pending:"[ ]",in_progress:"[~]",completed:"[x]"};function Ro(s,e=!1){if(!Array.isArray(s))throw new Error("`todos` must be an array");let t=[],n=new Set,r=0;for(let o of s){if(typeof o!="object"||o===null)throw new Error("each todo must be an object with `content` and `status`");let i=o,a=typeof i.content=="string"?i.content.trim():"";if(!a)throw new Error("`content` must be a non-empty string");if(n.has(a))throw new Error(`duplicate todo content ${JSON.stringify(a)}`);n.add(a);let l=i.status;if(!$s.includes(l))throw new Error(`invalid status ${JSON.stringify(i.status)} (expected pending, in_progress, or completed)`);l==="in_progress"&&r++,t.push({content:a,status:l})}if(!e&&r>1)throw new Error(`at most one task may be in_progress (got ${r})`);return t}function Cs(s){let e=s.filter(r=>r.status==="completed").length,t=s.filter(r=>r.status==="in_progress").length,n=[`${e}/${s.length} done`];return t>0&&n.push(`${t} in progress`),n.join(", ")}function As(s,e={}){if(s.length===0)return"";let t=e.color??!1,n=t?"\x1B[0m":"",r=t?"\x1B[2m":"",o=t?"\x1B[32m":"",i=t?"\x1B[33m":"",a=t?"\x1B[1m":"",l=s.map(d=>{let p=Ao[d.status];return d.status==="completed"?`  ${o}${p}${n} ${r}${d.content}${n}`:d.status==="in_progress"?`  ${i}${p} ${a}${d.content}${n}`:`  ${r}${p}${n} ${d.content}`});return`${a}Plan${n} ${r}(${Cs(s)})${n}
-${l.join(`
-`)}`}var St=class{_items=[];get items(){return this._items}get isEmpty(){return this._items.length===0}replace(e){this._items=[...e]}clear(){this._items=[]}},vt=class extends O{constructor(t){super();this._list=t}name="todo_write";description="Record and update a task list to plan multi-step work and show progress; skip it for trivial single-step tasks. Add one todo per concrete step before you start. While work remains, keep exactly one todo `in_progress`. Mark each todo `completed` as soon as it is done.";parameters={type:"object",properties:{todos:{type:"array",description:"The COMPLETE task list, replacing any previous list.",items:{type:"object",additionalProperties:!1,properties:{content:{type:"string",description:"What the task is \u2014 a short imperative line."},status:{type:"string",enum:[...$s],description:"pending (not started) | in_progress (now) | completed (done)."}},required:["content","status"]}}},required:["todos"]};async execute(t,n){let r=t._toolCallId||"";if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");let o;try{o=Ro(t.todos)}catch(l){return this.failure(r,`invalid todos: ${l.message}`)}if(this._list.replace(o),o.length===0)return this.success(r,"Cleared the task list.");let i=o.filter(l=>l.status!=="completed").length,a=o.find(l=>l.status==="in_progress");return this.success(r,`Task list updated: ${Cs(o)}.`+(a?` Current: ${a.content}`:"")+(i===0?" All steps are complete.":""))}};var Eo=`You are an autonomous coding agent integrated into VS Code. You can read files, write files, edit files, search code, list directories, and run terminal commands.
+// src/vs/workbench/contrib/agent/common/tools/todoWrite.ts
+var STATUSES = ["pending", "in_progress", "completed"];
+var GLYPH = {
+  pending: "[ ]",
+  in_progress: "[~]",
+  completed: "[x]"
+};
+function canonicalizeTodos(raw, allowParallel = false) {
+  if (!Array.isArray(raw)) {
+    throw new Error("`todos` must be an array");
+  }
+  const todos = [];
+  const seen = /* @__PURE__ */ new Set();
+  let active = 0;
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) {
+      throw new Error("each todo must be an object with `content` and `status`");
+    }
+    const record = item;
+    const content = typeof record.content === "string" ? record.content.trim() : "";
+    if (!content) {
+      throw new Error("`content` must be a non-empty string");
+    }
+    if (seen.has(content)) {
+      throw new Error(`duplicate todo content ${JSON.stringify(content)}`);
+    }
+    seen.add(content);
+    const status = record.status;
+    if (!STATUSES.includes(status)) {
+      throw new Error(`invalid status ${JSON.stringify(record.status)} (expected pending, in_progress, or completed)`);
+    }
+    if (status === "in_progress") active++;
+    todos.push({ content, status });
+  }
+  if (!allowParallel && active > 1) {
+    throw new Error(`at most one task may be in_progress (got ${active})`);
+  }
+  return todos;
+}
+function summarizeTodos(todos) {
+  const done = todos.filter((t) => t.status === "completed").length;
+  const active = todos.filter((t) => t.status === "in_progress").length;
+  const parts = [`${done}/${todos.length} done`];
+  if (active > 0) parts.push(`${active} in progress`);
+  return parts.join(", ");
+}
+function formatTodoList(todos, options = {}) {
+  if (todos.length === 0) return "";
+  const color = options.color ?? false;
+  const reset = color ? "\x1B[0m" : "";
+  const dim = color ? "\x1B[2m" : "";
+  const green = color ? "\x1B[32m" : "";
+  const yellow = color ? "\x1B[33m" : "";
+  const bold = color ? "\x1B[1m" : "";
+  const lines = todos.map((todo) => {
+    const glyph = GLYPH[todo.status];
+    if (todo.status === "completed") return `  ${green}${glyph}${reset} ${dim}${todo.content}${reset}`;
+    if (todo.status === "in_progress") return `  ${yellow}${glyph} ${bold}${todo.content}${reset}`;
+    return `  ${dim}${glyph}${reset} ${todo.content}`;
+  });
+  return `${bold}Plan${reset} ${dim}(${summarizeTodos(todos)})${reset}
+${lines.join("\n")}`;
+}
+var TodoList = class {
+  _items = [];
+  get items() {
+    return this._items;
+  }
+  get isEmpty() {
+    return this._items.length === 0;
+  }
+  /** Replace the whole list (last write wins, matching dsh's replay semantics). */
+  replace(items) {
+    this._items = [...items];
+  }
+  clear() {
+    this._items = [];
+  }
+};
+var TodoWriteTool = class extends AgentTool {
+  constructor(_list) {
+    super();
+    this._list = _list;
+  }
+  name = "todo_write";
+  // The active-status clause is the only part that varies with configuration;
+  // this CLI is serial, so it asks for exactly one active item.
+  description = "Record and update a task list to plan multi-step work and show progress; skip it for trivial single-step tasks. Add one todo per concrete step before you start. While work remains, keep exactly one todo `in_progress`. Mark each todo `completed` as soon as it is done.";
+  parameters = {
+    type: "object",
+    properties: {
+      todos: {
+        type: "array",
+        description: "The COMPLETE task list, replacing any previous list.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            content: {
+              type: "string",
+              description: "What the task is \u2014 a short imperative line."
+            },
+            status: {
+              type: "string",
+              enum: [...STATUSES],
+              description: "pending (not started) | in_progress (now) | completed (done)."
+            }
+          },
+          required: ["content", "status"]
+        }
+      }
+    },
+    required: ["todos"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    let todos;
+    try {
+      todos = canonicalizeTodos(args.todos);
+    } catch (err) {
+      return this.failure(toolCallId, `invalid todos: ${err.message}`);
+    }
+    this._list.replace(todos);
+    if (todos.length === 0) {
+      return this.success(toolCallId, "Cleared the task list.");
+    }
+    const remaining = todos.filter((t) => t.status !== "completed").length;
+    const active = todos.find((t) => t.status === "in_progress");
+    return this.success(
+      toolCallId,
+      `Task list updated: ${summarizeTodos(todos)}.` + (active ? ` Current: ${active.content}` : "") + (remaining === 0 ? " All steps are complete." : "")
+    );
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentPrompts.ts
+var AGENT_MODE_PROMPT = `You are an autonomous coding agent integrated into VS Code. You can read files, write files, edit files, search code, list directories, and run terminal commands.
 
 ## Working Directory
 - Current working directory: {{CWD}}
@@ -130,7 +2138,8 @@ When you need to wait for an external async task to complete (CI pipeline, backg
 - At the start of every task, check the **Preloaded Rules** section below. If any rule's description matches the user's request, automatically apply that rule's content.
 - Check the **Available Skills** section below. Skills whose description, **Triggers**, or name match the task have their **full instructions preloaded** (marked "auto-activated"). You MUST follow these instructions as mandatory guidance \u2014 they are not suggestions.
 - For skills listed without auto-activated content, if their description or triggers match the task, use the provided Path to read_file the full SKILL.md content and incorporate its guidance.
-- Rules marked "(Always Active)" should always be followed regardless of the task.`,Mo=`You are a code exploration assistant integrated into VS Code. You can read files, search code, and list directories to answer questions about the codebase.
+- Rules marked "(Always Active)" should always be followed regardless of the task.`;
+var ASK_MODE_PROMPT = `You are a code exploration assistant integrated into VS Code. You can read files, search code, and list directories to answer questions about the codebase.
 
 ## Core Behavior
 1. Analyze the user's question
@@ -141,7 +2150,8 @@ When you need to wait for an external async task to complete (CI pipeline, backg
 ## Constraints
 - You are in READ-ONLY mode: you cannot edit files, write files, or run commands
 - Focus on understanding and explaining, not modifying
-- Reference specific file paths and line numbers in your answers`,Po=`You are a technical planning assistant integrated into VS Code. You help users design implementation plans for coding tasks.
+- Reference specific file paths and line numbers in your answers`;
+var PLAN_MODE_PROMPT = `You are a technical planning assistant integrated into VS Code. You help users design implementation plans for coding tasks.
 
 ## Core Behavior
 1. Understand the user's goal
@@ -161,10 +2171,1129 @@ Output a structured plan with:
 
 ## Constraints
 - Do not execute the plan, only design it
-- The plan should be actionable by Agent mode`;function tt(s,e){let t;switch(s){case"agent":t=Eo;break;case"ask":t=Mo;break;case"plan":t=Po;break}return e&&(t=t.replace(/\{\{CWD\}\}/g,e)),t}var Mt=A(require("node:fs")),qs=A(require("node:os")),En=A(require("node:path"));var N=A(require("fs")),nt=A(require("os")),U=A(require("path")),Rs=".agents",Do=Rs,Es=".agent",Lo=".codeagent",Oo=["config.yaml","config.json","models.json","mcp.json",".mcp.json","agent.md"],No=["rules","skills","sessions","tasks"],Fo=[".cursor",".codebuddy"],Uo=["skills","skills-cursor","rules"];function xt(){let s=process.env.AGENT_HOME||process.env.CODE_AGENT_HOME;return s?U.resolve(s):void 0}function xn(){return xt()||U.join(nt.homedir(),Rs)}function It(){let s=[U.join(nt.homedir(),Es),U.join(nt.homedir(),Lo)];return s.filter((e,t)=>s.indexOf(e)===t)}function $t(){let s=xt();if(s)return[s];let e=[xn(),...It()];return e.filter((t,n)=>e.indexOf(t)===n)}function ge(){let s=xt();if(s)return s;let e=xn();return N.existsSync(e)?e:It().find(n=>N.existsSync(n))??e}function z(s){return $t().map(e=>U.join(e,s))}function Ms(s=process.cwd()){let e=[...$t().map(t=>U.join(t,"agent.md")),U.join(s,Do,"agent.md"),U.join(s,Es,"agent.md")];return e.filter((t,n)=>e.indexOf(t)===n)}function Ps(s){if(xt())return;let e=xn(),t=Fo.map(n=>U.join(nt.homedir(),n));for(let n of It())jo(n,e,s);for(let n of It())Bo(n,e,t,s)}function jo(s,e,t){try{if(!N.existsSync(s))return 0;let n=N.existsSync(e);N.mkdirSync(e,{recursive:!0});let r=0,o=0,i=0,a=0;if(!n)for(let d of Oo){let p=U.join(s,d);if(!N.existsSync(p)||Tt(p))continue;let u=U.join(e,d);N.existsSync(u)||(N.cpSync(p,u,{recursive:!0}),r++)}for(let d of No){let p=U.join(s,d),u=U.join(e,d);if(Tt(u)){let m=N.readlinkSync(u);if(U.resolve(U.dirname(u),m).startsWith(s+U.sep)){if(!N.existsSync(p))continue;N.unlinkSync(u),i++}else continue}if(!N.existsSync(u)&&!(!N.existsSync(p)||Tt(p))){try{N.renameSync(p,u),o++}catch{N.cpSync(p,u,{recursive:!0}),r++,a++;continue}try{N.symlinkSync(u,p,"dir")}catch{}}}let l=r+o+i;return(l>0||n===!1)&&t(`Config home: ${e} now owns the configuration (${o} moved, ${r} copied, ${i} links flipped${a>0?`, ${a} kept in ${s}`:""}) \u2014 ${s} is now a pointer and can be deleted`),l}catch(n){return t(`Config home: could not migrate ${s} \u2192 ${e}: ${n.message}`),0}}function Tt(s){try{return N.lstatSync(s).isSymbolicLink()}catch{return!1}}function Bo(s,e,t,n){let r=0;for(let o of t)for(let i of Uo){let a=U.join(o,i);if(Tt(a))try{let l=U.resolve(U.dirname(a),N.readlinkSync(a));if(!l.startsWith(s+U.sep))continue;let d=U.join(e,U.relative(s,l));if(!N.existsSync(d))continue;N.unlinkSync(a),N.symlinkSync(d,a,"dir"),r++,n(`Config home: re-pointed ${a} \u2192 ${d}`)}catch{}}return r}var Ie=A(require("node:fs")),he=A(require("node:path")),Ct=A(require("node:os"));function $n(s){let e="";for(let t=0;t<s.length;t++){let n=s[t];if(e){n===e&&(e="");continue}if(n==='"'||n==="'"){e=n;continue}if(n==="#"&&(t===0||/\s/.test(s[t-1])))return s.slice(0,t)}return s}function Ne(s){return $n(s).trim().replace(/^["']|["']$/g,"")}function Ns(s){let e={},t=s.split(`
-`),n="",r="",o=!1,i="",a=!1,l=!1;for(let d of t){let p=d.trimEnd();if(!p||p.trimStart().startsWith("#"))continue;let u=d.length-d.trimStart().length;if(u===0&&p.endsWith(":")){n=p.slice(0,-1),r="",o=!1,n==="profiles"&&(e.profiles=e.profiles||{}),n==="agent"&&(e.agent=e.agent||{}),n==="model_routing"&&(e.model_routing=e.model_routing||{});continue}if(u===0&&p.includes(":")){let[m,...h]=p.split(":"),f=h.join(":").trim();m.trim()==="active_profile"&&(e.active_profile=f);continue}if(n==="profiles"&&u===2&&p.endsWith(":")){r=p.slice(0,-1).trim(),e.profiles[r]={provider:"",model:"",api_key:""};continue}if(n==="profiles"&&u===4&&r){let[m,...h]=p.split(":"),f=h.join(":").trim(),w=m.trim(),b=e.profiles[r];w==="provider"?b.provider=f:w==="model"?b.model=f:w==="api_key"?b.api_key=f.replace(/^["']|["']$/g,""):w==="api_base"?b.api_base=f:w==="temperature"?b.temperature=parseFloat(f):w==="top_k"?b.top_k=parseInt(f,10):w==="max_input_tokens"?b.max_input_tokens=parseInt(f,10):w==="max_output_tokens"&&(b.max_output_tokens=parseInt(f,10));continue}if(n==="agent"&&u===2){let[m,...h]=p.split(":"),f=h.join(":").trim(),w=m.trim();e.agent||(e.agent={}),w==="max_steps"?e.agent.max_steps=parseInt(f,10):w==="max_context_tokens"?e.agent.max_context_tokens=parseInt(f,10):w==="temperature"?e.agent.temperature=parseFloat(f):w==="top_k"?e.agent.top_k=parseInt(f,10):w==="step_timeout"?e.agent.step_timeout=parseInt(f,10):w==="task_timeout"&&(e.agent.task_timeout=parseInt(f,10));continue}if(n==="model_routing"){if(e.model_routing||(e.model_routing={}),u===2&&p.endsWith(":")){a=p.slice(0,-1).trim()==="scenarios",a&&(e.model_routing.scenarios=e.model_routing.scenarios||{});continue}if(u===2){let[m,...h]=p.split(":"),f=h.join(":").trim(),w=m.trim();w==="enabled"?e.model_routing.enabled=f==="true"||f==="1"||f==="yes":w==="default"?e.model_routing.default=f:w==="fallback"?e.model_routing.fallback=f:w==="fallback_probe_interval_s"&&(e.model_routing.fallback_probe_interval_s=parseFloat(f));continue}if(u===4&&a){let[m,...h]=p.split(":"),f=h.join(":").trim();e.model_routing.scenarios&&(e.model_routing.scenarios[m.trim()]=f);continue}}if(n==="mcp_servers"&&u===2&&p.endsWith(":")){r=p.slice(0,-1).trim(),e.mcp_servers||(e.mcp_servers={}),e.mcp_servers[r]={};continue}if(n==="mcp_servers"&&u===4&&r){let[m,...h]=p.split(":"),f=h.join(":").trim(),w=m.trim(),b=e.mcp_servers[r];l=w==="tools",w==="command"?b.command=f:w==="url"?b.url=f:w==="type"?b.type=f:w==="headers"?b.headers||(b.headers={}):w==="tools"?b.tools||(b.tools=[]):w==="args"&&f&&(b.args=f.split(/\s+/));continue}if(n==="mcp_servers"&&u===6&&r){let m=e.mcp_servers?.[r];if(m&&l&&p.trimStart().startsWith("- "))m.tools||(m.tools=[]),m.tools.push(p.trimStart().slice(2).trim());else if(m&&p.trimStart().startsWith("- ")){let h=p.trimStart().slice(2).trim();m.args||(m.args=[]),m.args.push(h)}else if(m&&m.headers!==void 0){let[h,...f]=p.split(":"),w=f.join(":").trim();m.headers[h.trim()]=w}continue}if(n==="mcp_servers"&&u===6&&p.trimStart().startsWith("- ")){let m=p.trimStart().slice(2).trim(),h=e.mcp_servers?.[r];h&&(h.args||(h.args=[]),h.args.push(m));continue}if((n==="skills"||n==="rules")&&p.trimStart().startsWith("- ")){let m=p.trimStart().slice(2).trim();e[n]||(e[n]=[]),e[n].push(m);continue}}return e}function Fs(){return[he.join(process.cwd(),"config.yaml"),he.join(process.cwd(),"config.json"),...z("config.yaml"),...z("config.json")].find(e=>Ie.existsSync(e))}function Wo(){return[he.join(process.cwd(),"models.json"),...z("models.json"),he.join(Ct.homedir(),".codebuddy","models.json")].find(e=>Ie.existsSync(e))}function Ho(s){let e=s.url.replace(/\/chat\/completions\/?$/,"");return{provider:"openai",model:s.id,api_key:s.apiKey,api_base:e,max_input_tokens:s.maxInputTokens,max_output_tokens:s.maxOutputTokens||s.maxTokens,supports_reasoning:s.supportsReasoning,thinking:s.thinking}}function Us(){let s=Wo();if(s)try{let e=Ie.readFileSync(s,"utf-8"),t=JSON.parse(e),n={};for(let r of t.models)n[r.id]=Ho(r);return n}catch{return}}function Ds(s){return s.startsWith("~/")||s.startsWith("~\\")?he.join(Ct.homedir(),s.slice(2)):he.resolve(s)}function Ko(s,e){let t=js(s.max_input_tokens||e?.max_context_tokens||Y.maxContextTokens,s.max_output_tokens||Y.maxOutputTokens);return{...Y,provider:s.provider||Y.provider,model:s.model||Y.model,apiKey:s.api_key||process.env.OPENAI_API_KEY||process.env.ANTHROPIC_API_KEY||"",apiBase:s.api_base||void 0,supportsReasoning:s.supports_reasoning,thinking:s.thinking,maxSteps:e?.max_steps||Y.maxSteps,maxContextTokens:t.maxContextTokens,maxOutputTokens:t.maxOutputTokens,temperature:s.temperature??e?.temperature??Y.temperature,topK:s.top_k??e?.top_k??Y.topK,stepTimeout:e?.step_timeout||Y.stepTimeout,taskTimeout:e?.task_timeout||Y.taskTimeout}}var Go=4096;function Ls(s){return[...$t().map(e=>he.join(e,s)),he.join(Ct.homedir(),".cursor",s)]}function Os(s){let e=new Set,t=[];for(let n of s){let r=n;try{r=Ie.realpathSync(n)}catch{}e.has(r)||(e.add(r),t.push(n))}return t}function js(s,e){let t=Math.max(1,s||0),n=Math.max(1,e||0),r=Math.max(1,t-Go);return{maxContextTokens:t,maxOutputTokens:Math.min(n,r)}}function Cn(s){let e={},t=Fs();if(t)try{let b=Ie.readFileSync(t,"utf-8");e=t.endsWith(".json")?JSON.parse(b):Ns(b)}catch{}let n=Us();n&&(e.profiles={...n,...e.profiles});let r=s||process.env.AGENT_PROFILE||e.active_profile||void 0,o=!!s;!r&&e.profiles&&Object.keys(e.profiles).length>0?r=Object.keys(e.profiles)[0]:r||(r="default");let i=e.profiles?.[r];if(e.profiles&&!i&&r!=="default"){let b=Object.keys(e.profiles).join(", ");console.warn(`Warning: profile "${r}" not found in config. Available: ${b}`),r=Object.keys(e.profiles)[0],i=e.profiles?.[r],console.warn(`         Falling back to: "${r}"`)}let a=js(i?.max_input_tokens||e.agent?.max_context_tokens||Y.maxContextTokens,i?.max_output_tokens||Y.maxOutputTokens),l={...Y,provider:process.env.LLM_PROVIDER||i?.provider||Y.provider,model:process.env.LLM_MODEL||i?.model||Y.model,apiKey:process.env.OPENAI_API_KEY||process.env.ANTHROPIC_API_KEY||i?.api_key||"",apiBase:process.env.LLM_API_BASE||i?.api_base||void 0,supportsReasoning:i?.supports_reasoning,thinking:i?.thinking,maxSteps:e.agent?.max_steps||Y.maxSteps,maxContextTokens:a.maxContextTokens,maxOutputTokens:a.maxOutputTokens,temperature:i?.temperature??e.agent?.temperature??Y.temperature,topK:i?.top_k??e.agent?.top_k??Y.topK,stepTimeout:e.agent?.step_timeout||Y.stepTimeout,taskTimeout:e.agent?.task_timeout||Y.taskTimeout},d=Os((e.skills||Ls("skills")).map(Ds)),p=Os((e.rules||Ls("rules")).map(Ds)),u=Object.entries(e.mcp_servers||{}).map(([b,S])=>({name:b,...S})),m={};for(let[b,S]of Object.entries(e.profiles||{}))m[b]=Ko(S,e.agent);let h=e.model_routing!==void 0,f=e.model_routing?.fallback_probe_interval_s,w={enabled:h&&e.model_routing?.enabled!==!1&&!o,defaultModel:e.model_routing?.default,fallbackModel:e.model_routing?.fallback,probeIntervalMs:typeof f=="number"&&f>0?f*1e3:void 0,scenarios:e.model_routing?.scenarios||{}};return{agentConfig:l,skillsDirs:d,rulesDirs:p,profileName:r,configFilePath:t,mcpServers:u,profiles:m,modelRouting:w,profileExplicit:o}}function Bs(s){return Cn(s)}function At(){let s=Us();if(s)return Object.entries(s).map(([t,n])=>({name:t,provider:n.provider,model:n.model}));let e=Fs();if(!e)return[];try{let t=Ie.readFileSync(e,"utf-8"),n=Ns(t);return Object.entries(n.profiles||{}).map(([r,o])=>({name:r,provider:o.provider,model:o.model}))}catch{return[]}}var Ws=200,Rt=200,Hs=2e4,qo=8e3;function Re(...s){for(let e of s){let t=process.env[e];if(t&&t.trim())return t.trim()}}function Ks(...s){for(let e of s){let t=process.env[e];if(t===void 0)continue;let n=t.trim().toLowerCase();if(["1","true","yes","on"].includes(n))return!0;if(["0","false","no","off"].includes(n))return!1}}function Gs(s){if(typeof s=="boolean")return s;if(typeof s!="string")return;let e=s.trim().toLowerCase();if(["1","true","yes","on"].includes(e))return!0;if(["0","false","no","off"].includes(e))return!1}function Vo(s){let e=!1,t=!1,n={};for(let r of s.split(`
-`)){let o=r.trim();if(!o||o.startsWith("#"))continue;let i=r.length-r.trimStart().length;if(i===0&&o.endsWith(":")){e=o==="tracing:",t=!1;continue}if(!e)continue;if(i===2&&o.startsWith("- ")){t&&(n.tags=n.tags||[],n.tags.push(Ne(o.slice(2))));continue}if(i>2&&o.startsWith("- ")){t&&(n.tags=n.tags||[],n.tags.push(Ne(o.slice(2))));continue}if(i!==2)continue;let a=o.indexOf(":");if(a<=0)continue;let l=o.slice(0,a).trim(),d=Ne(o.slice(a+1));t=l==="tags",l==="enabled"?n.enabled=Gs(d):l==="public_key"?n.public_key=d:l==="secret_key"?n.secret_key=d:l==="base_url"?n.base_url=d:l==="host"?n.host=d:l==="environment"?n.environment=d:l==="release"?n.release=d:l==="capture_content"?n.capture_content=Gs(d):l==="user_id"?n.user_id=d:l==="session_id"&&(n.session_id=d)}return Object.keys(n).length>0?n:void 0}function Yo(){let s=[En.resolve("config.yaml"),En.resolve("config.json"),...z("config.yaml"),...z("config.json")];for(let e of s)try{if(!Mt.existsSync(e))continue;let t=Mt.readFileSync(e,"utf-8");if(e.endsWith(".json")){let r=JSON.parse(t);if(r?.tracing&&typeof r.tracing=="object")return r.tracing;continue}let n=Vo(t);if(n)return n}catch{}}function zo(s,e){if(s==="off")return{enabled:!1,reason:"disabled by --tracing off"};let t=Yo();if(Ks("LANGFUSE_TRACING_ENABLED")===!1)return{enabled:!1,reason:"disabled by LANGFUSE_TRACING_ENABLED=false"};if(t?.enabled===!1&&s!=="on")return{enabled:!1,reason:"disabled by config.yaml tracing.enabled=false"};let o=Re("LANGFUSE_PUBLIC_KEY")||t?.public_key||"",i=Re("LANGFUSE_SECRET_KEY")||t?.secret_key||"",a=Re("LANGFUSE_BASE_URL","LANGFUSE_HOST")||t?.base_url||t?.host||"https://cloud.langfuse.com";if(!o||!i)return{enabled:!1,reason:"no Langfuse API keys (set LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY, or config.yaml tracing.public_key/secret_key)"};let l=Re("LANGFUSE_PUBLIC_KEY")?"environment (LANGFUSE_*)":"config.yaml tracing section",d=Ks("LANGFUSE_CAPTURE_CONTENT")??t?.capture_content??!0,p=(t?.tags||[]).filter(u=>typeof u=="string"&&u.trim().length>0);return{enabled:!0,source:l,config:{publicKey:o,secretKey:i,baseUrl:a,environment:Re("LANGFUSE_TRACING_ENVIRONMENT")||t?.environment,release:Re("LANGFUSE_RELEASE")||t?.release||e,captureContent:d,userId:Re("LANGFUSE_USER_ID")||t?.user_id,sessionId:Re("LANGFUSE_SESSION_ID")||t?.session_id,tags:p}}}var Jo=[[/\b(?:sk|pk|rk)-(?:lf|proj|ant|or|live|test)?-?[A-Za-z0-9_-]{12,}/g,"<redacted-key>"],[/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi,"Bearer <redacted>"],[/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,"<redacted-jwt>"],[/((?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|client[_-]?secret|private[_-]?key|authorization)["']?\s*[:=]\s*["']?)([^\s"',;}{)\]]{6,})/gi,"$1<redacted>"]];function st(s){let e=s;for(let[t,n]of Jo)e=e.replace(t,n);return e}function Fe(s,e=0){if(e>12)return s;if(typeof s=="string")return st(s);if(Array.isArray(s))return s.map(t=>Fe(t,e+1));if(s&&typeof s=="object"){let t={};for(let[n,r]of Object.entries(s))t[n]=Fe(r,e+1);return t}return s}function An(s,e){return s.length>e?`${s.slice(0,e)}
-... (${s.length} chars total, truncated)`:s}var Ue={update:()=>{}},Mn={ref:null,update:()=>{},end:()=>{}},Et=class{enabled=!1;reason;constructor(e){this.reason=e}async init(){return!1}async runTask(e,t){return t(Ue)}beginStep(e){return Mn}async runGeneration(e,t){return t(Ue)}async runTool(e,t){return t(Ue)}async runSubagent(e,t){return t(Ue)}async flush(){}async shutdown(){}},je=new Et;function Xo(s){return{traceId:s.traceId,spanId:s.spanId,traceFlags:1,isRemote:!1}}var Pn=class{constructor(e){this._config=e}enabled=!0;_sdk;_initPromise;describe(){let e=this._config.environment?` env=${this._config.environment}`:"";return`Langfuse ${this._config.baseUrl}${e} (content=${this._config.captureContent?"full":"metadata-only"})`}async init(){return this._initPromise||(this._initPromise=this._init().catch(e=>(console.warn(`[TRACING] Langfuse SDK unavailable, tracing disabled: ${e.message}`),!1))),this._initPromise}async _init(){let[e,t,n]=await Promise.all([import("@langfuse/otel"),import("@langfuse/tracing"),import("@opentelemetry/sdk-trace-node")]),r=new e.LangfuseSpanProcessor({publicKey:this._config.publicKey,secretKey:this._config.secretKey,baseUrl:this._config.baseUrl,environment:this._config.environment,release:this._config.release,exportMode:"batched",mask:i=>Fe(i.data)});return new n.NodeTracerProvider({spanProcessors:[r]}).register(),this._sdk={tracing:t,processor:r},!0}get _ready(){return!!this._sdk}async _run(e,t,n,r,o,i){if(!this._ready)return r(Ue);let a=!1,l=!1,d,p=async u=>{l=!0;try{return await this._invoke(u,n,r,e)}catch(m){throw a=!0,d=m,m}};try{let u={asType:e};return i&&(u.parentSpanContext=Xo(i)),await(this._sdk.tracing.getActiveTraceId()!==void 0||!o?this._sdk.tracing.startActiveObservation(t,p,u):this._sdk.tracing.propagateAttributes(o,()=>this._sdk.tracing.startActiveObservation(t,p,u)))}catch(u){if(a)throw d;if(console.warn(`[TRACING] ${t} instrumentation failed (non-fatal): ${u.message}`),l)throw u;return r(Ue)}}beginStep(e){if(!this._ready)return Mn;try{let t=this._sdk.tracing.startObservation(e.name||"agent-step",this._shape({metadata:e.metadata},"span"),{asType:"span"});return this._stepHandle(t,e)}catch(t){return console.warn(`[TRACING] step instrumentation failed (non-fatal): ${t.message}`),Mn}}_stepHandle(e,t){let n=!1;return{ref:e.traceId&&e.id?{traceId:e.traceId,spanId:e.id}:null,update:o=>{if(!n)try{e.update(this._shape(o,"span"))}catch{}},end:()=>{if(!n){n=!0;try{e.end()}catch{}}}}}async _invoke(e,t,n,r){let o={update:i=>{try{e.update(this._shape(i,r))}catch{}}};try{e.update(this._shape(t,r))}catch{}try{let i=await n(o);try{e.end()}catch{}return i}catch(i){try{e.update({level:"ERROR",statusMessage:i.message?.slice(0,Rt)})}catch{}try{e.end()}catch{}throw i}}_shape(e,t){let n={},r=this._config.captureContent;return r&&e.input!==void 0&&(n.input=this._input(e.input)),r&&e.output!==void 0&&(n.output=Fe(e.output)),e.metadata&&(n.metadata=Fe(e.metadata)),e.level&&(n.level=e.level),e.statusMessage&&(n.statusMessage=st(e.statusMessage).slice(0,Rt)),t==="generation"&&(e.model&&(n.model=e.model),e.modelParameters&&(n.modelParameters=e.modelParameters),e.usageDetails&&(n.usageDetails=e.usageDetails),e.completionStartTime&&(n.completionStartTime=e.completionStartTime)),n}_input(e){return Array.isArray(e)?e.map(t=>{if(!t||typeof t!="object")return Fe(t);let r={...t};return typeof r.content=="string"&&(r.content=An(st(r.content),Hs)),typeof r.reasoningContent=="string"&&(r.reasoningContent=An(st(r.reasoningContent),qo)),r}):typeof e=="string"?An(st(e),Hs):Fe(e)}async runTask(e,t){if(!this._ready)return t(Ue);let n={traceName:Rn(e.name||"agent-task"),tags:[...this._config.tags,...e.tags||[]],metadata:Qo({...e.metadata,app:"code-agent",...this._config.release?{release:this._config.release}:{}})},r=e.userId||this._config.userId,o=e.sessionId||this._config.sessionId;return r&&(n.userId=Rn(r)),o&&(n.sessionId=Rn(o)),this._run("span",e.name||"agent-task",{input:e.input,metadata:e.metadata},t,n)}async runGeneration(e,t,n){return this._run("generation",e.name||"llm-call",{model:e.model,modelParameters:e.modelParameters,completionStartTime:e.startTime,input:e.input,metadata:e.metadata},t,void 0,n)}async runTool(e,t,n){return this._run("tool",`tool:${e.name}`,{input:e.input,metadata:e.metadata},t,void 0,n)}async runSubagent(e,t){return this._run("agent",e.name||"subagent",{input:e.input,metadata:e.metadata},t)}async flush(){if(this._sdk)try{await this._sdk.processor.forceFlush()}catch{}}async shutdown(){if(this._sdk){try{await this._sdk.processor.forceFlush()}catch{}try{await this._sdk.processor.shutdown()}catch{}this._sdk=void 0}}};function Rn(s){return s.length>Ws?s.slice(0,Ws):s}function Vs(){let s=process.env.USER||process.env.LOGNAME||process.env.USERNAME;if(s)return s;try{return qs.userInfo().username||void 0}catch{return}}function Qo(s){let e={};for(let[t,n]of Object.entries(s||{})){if(n==null)continue;let r=typeof n=="string"?n:JSON.stringify(n);r!==void 0&&(e[t]=r.length>Rt?`${r.slice(0,Rt-1)}\u2026`:r)}return e}function Zo(s){return s.enabled&&s.config?new Pn(s.config):new Et(s.reason)}function Ys(s,e){return Zo(zo(s,e))}var ei=new Set(["cancel","abort","stop","halt","kill","\u53D6\u6D88","\u505C\u6B62","\u505C\u4E0B","\u4E2D\u65AD","\u7EC8\u6B62"]),ti=[/^注意/,/^记得/,/^记住/,/^提醒/,/^补充(一下)?(：|:)?/,/^另外/,/^顺便/,/^还有/,/^(note|remember|also|fyi|tip|additionally|btw)[\s,:]/i],ni=[/(改为|改成|换成|换个|换一个|改做)/,/(重来|重跑|重做|重试|重新(执行|跑|做|开始|生成|发布|安装|部署|升级|构建|编译|打包|提交|推送|测试|下载|上传|计算|实现|写|改))/,/(算了|放弃|撤回|作废|不要做了|不用做了|别做了)/,/(基于最新|最新版本|按照最新|以最新|用最新|根据最新)/,/(先(把|去|做|升级|安装|部署|发布|编译|构建|打包|改|重新))/,/\b(instead|start over|scrap (that|it)|discard (that|it)|forget (about )?(the |that |previous )|ignore (the )?(previous|above)|never ?mind|change of plans?|new plan|on second thought|redo|re-?run)\b/i];function zs(s){let e=(s||"").trim();return e?ei.has(e.toLowerCase())?"cancel":ni.some(t=>t.test(e))?"supersede":ti.some(t=>t.test(e))?"hint":"unknown":"unknown"}var si=`You supervise a coding agent. It is currently working on the task below.
+- The plan should be actionable by Agent mode`;
+function getSystemPrompt(mode, cwd) {
+  let prompt;
+  switch (mode) {
+    case "agent":
+      prompt = AGENT_MODE_PROMPT;
+      break;
+    case "ask":
+      prompt = ASK_MODE_PROMPT;
+      break;
+    case "plan":
+      prompt = PLAN_MODE_PROMPT;
+      break;
+  }
+  if (cwd) {
+    prompt = prompt.replace(/\{\{CWD\}\}/g, cwd);
+  }
+  return prompt;
+}
+
+// src/vs/workbench/contrib/agent/common/agentTracing.ts
+var fs3 = __toESM(require("node:fs"));
+var os3 = __toESM(require("node:os"));
+var path4 = __toESM(require("node:path"));
+
+// src/vs/workbench/contrib/agent/common/agentHome.ts
+var fs = __toESM(require("fs"));
+var os = __toESM(require("os"));
+var path2 = __toESM(require("path"));
+var AGENT_HOME_NAME = ".agents";
+var PROJECT_AGENT_HOME_NAME = AGENT_HOME_NAME;
+var PREVIOUS_AGENT_HOME_NAME = ".agent";
+var LEGACY_AGENT_HOME_NAME = ".codeagent";
+var COPIED_ENTRIES = ["config.yaml", "config.json", "models.json", "mcp.json", ".mcp.json", "agent.md"];
+var MOVED_ENTRIES = ["rules", "skills", "sessions", "tasks"];
+var COMPANION_LINK_ROOTS = [".cursor", ".codebuddy"];
+var COMPANION_LINK_ENTRIES = ["skills", "skills-cursor", "rules"];
+function agentHomeOverride() {
+  const dir = process.env.AGENT_HOME || process.env.CODE_AGENT_HOME;
+  return dir ? path2.resolve(dir) : void 0;
+}
+function newAgentHomeDir() {
+  return agentHomeOverride() || path2.join(os.homedir(), AGENT_HOME_NAME);
+}
+function legacyAgentHomeDirs() {
+  const dirs = [
+    path2.join(os.homedir(), PREVIOUS_AGENT_HOME_NAME),
+    path2.join(os.homedir(), LEGACY_AGENT_HOME_NAME)
+  ];
+  return dirs.filter((dir, i) => dirs.indexOf(dir) === i);
+}
+function agentHomeDirs() {
+  const override = agentHomeOverride();
+  if (override) return [override];
+  const dirs = [newAgentHomeDir(), ...legacyAgentHomeDirs()];
+  return dirs.filter((dir, i) => dirs.indexOf(dir) === i);
+}
+function agentHomeDir() {
+  const override = agentHomeOverride();
+  if (override) return override;
+  const fresh = newAgentHomeDir();
+  if (fs.existsSync(fresh)) return fresh;
+  const legacy = legacyAgentHomeDirs().find((dir) => fs.existsSync(dir));
+  return legacy ?? fresh;
+}
+function agentHomeFileCandidates(relative2) {
+  return agentHomeDirs().map((dir) => path2.join(dir, relative2));
+}
+function agentInstructionFiles(cwd = process.cwd()) {
+  const files = [
+    ...agentHomeDirs().map((dir) => path2.join(dir, "agent.md")),
+    path2.join(cwd, PROJECT_AGENT_HOME_NAME, "agent.md"),
+    path2.join(cwd, PREVIOUS_AGENT_HOME_NAME, "agent.md")
+  ];
+  return files.filter((file, i) => files.indexOf(file) === i);
+}
+function migrateLegacyAgentHome(log2) {
+  if (agentHomeOverride()) return;
+  const fresh = newAgentHomeDir();
+  const companionRoots = COMPANION_LINK_ROOTS.map((root) => path2.join(os.homedir(), root));
+  for (const legacy of legacyAgentHomeDirs()) {
+    migrateAgentHome(legacy, fresh, log2);
+  }
+  for (const legacy of legacyAgentHomeDirs()) {
+    repointCompanionLinks(legacy, fresh, companionRoots, log2);
+  }
+}
+function migrateAgentHome(legacy, fresh, log2) {
+  try {
+    if (!fs.existsSync(legacy)) return 0;
+    const freshExisted = fs.existsSync(fresh);
+    fs.mkdirSync(fresh, { recursive: true });
+    let copied = 0;
+    let moved = 0;
+    let flipped = 0;
+    let keptLegacy = 0;
+    if (!freshExisted) {
+      for (const entry of COPIED_ENTRIES) {
+        const from = path2.join(legacy, entry);
+        if (!fs.existsSync(from) || isSymlink(from)) continue;
+        const to = path2.join(fresh, entry);
+        if (fs.existsSync(to)) continue;
+        fs.cpSync(from, to, { recursive: true });
+        copied++;
+      }
+    }
+    for (const entry of MOVED_ENTRIES) {
+      const legacyPath = path2.join(legacy, entry);
+      const freshPath = path2.join(fresh, entry);
+      if (isSymlink(freshPath)) {
+        const target = fs.readlinkSync(freshPath);
+        const resolved = path2.resolve(path2.dirname(freshPath), target);
+        if (resolved.startsWith(legacy + path2.sep)) {
+          if (!fs.existsSync(legacyPath)) continue;
+          fs.unlinkSync(freshPath);
+          flipped++;
+        } else {
+          continue;
+        }
+      }
+      if (fs.existsSync(freshPath)) continue;
+      if (!fs.existsSync(legacyPath) || isSymlink(legacyPath)) continue;
+      try {
+        fs.renameSync(legacyPath, freshPath);
+        moved++;
+      } catch {
+        fs.cpSync(legacyPath, freshPath, { recursive: true });
+        copied++;
+        keptLegacy++;
+        continue;
+      }
+      try {
+        fs.symlinkSync(freshPath, legacyPath, "dir");
+      } catch {
+      }
+    }
+    const handled = copied + moved + flipped;
+    if (handled > 0 || freshExisted === false) {
+      log2(
+        `Config home: ${fresh} now owns the configuration (${moved} moved, ${copied} copied, ${flipped} links flipped${keptLegacy > 0 ? `, ${keptLegacy} kept in ${legacy}` : ""}) \u2014 ${legacy} is now a pointer and can be deleted`
+      );
+    }
+    return handled;
+  } catch (err) {
+    log2(`Config home: could not migrate ${legacy} \u2192 ${fresh}: ${err.message}`);
+    return 0;
+  }
+}
+function isSymlink(p) {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+function repointCompanionLinks(legacy, fresh, roots, log2) {
+  let repointed = 0;
+  for (const root of roots) {
+    for (const entry of COMPANION_LINK_ENTRIES) {
+      const linkPath = path2.join(root, entry);
+      if (!isSymlink(linkPath)) continue;
+      try {
+        const resolved = path2.resolve(path2.dirname(linkPath), fs.readlinkSync(linkPath));
+        if (!resolved.startsWith(legacy + path2.sep)) continue;
+        const target = path2.join(fresh, path2.relative(legacy, resolved));
+        if (!fs.existsSync(target)) continue;
+        fs.unlinkSync(linkPath);
+        fs.symlinkSync(target, linkPath, "dir");
+        repointed++;
+        log2(`Config home: re-pointed ${linkPath} \u2192 ${target}`);
+      } catch {
+      }
+    }
+  }
+  return repointed;
+}
+
+// src/vs/workbench/contrib/agent/common/agentConfig.ts
+var fs2 = __toESM(require("node:fs"));
+var path3 = __toESM(require("node:path"));
+var os2 = __toESM(require("node:os"));
+function stripYamlComment(value) {
+  let quote = "";
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "#" && (i === 0 || /\s/.test(value[i - 1]))) {
+      return value.slice(0, i);
+    }
+  }
+  return value;
+}
+function parseScalarValue(raw) {
+  return stripYamlComment(raw).trim().replace(/^["']|["']$/g, "");
+}
+function parseYaml(text) {
+  const result = {};
+  const lines = text.split("\n");
+  let currentSection = "";
+  let currentProfile = "";
+  let inList = false;
+  let listKey = "";
+  let inRoutingScenarios = false;
+  let inMcpTools = false;
+  for (const line of lines) {
+    const trimmed = line.trimEnd();
+    if (!trimmed || trimmed.trimStart().startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0 && trimmed.endsWith(":")) {
+      currentSection = trimmed.slice(0, -1);
+      currentProfile = "";
+      inList = false;
+      if (currentSection === "profiles") result.profiles = result.profiles || {};
+      if (currentSection === "agent") result.agent = result.agent || {};
+      if (currentSection === "model_routing") result.model_routing = result.model_routing || {};
+      continue;
+    }
+    if (indent === 0 && trimmed.includes(":")) {
+      const [key, ...rest] = trimmed.split(":");
+      const val = rest.join(":").trim();
+      if (key.trim() === "active_profile") result.active_profile = val;
+      continue;
+    }
+    if (currentSection === "profiles" && indent === 2 && trimmed.endsWith(":")) {
+      currentProfile = trimmed.slice(0, -1).trim();
+      result.profiles[currentProfile] = { provider: "", model: "", api_key: "" };
+      continue;
+    }
+    if (currentSection === "profiles" && indent === 4 && currentProfile) {
+      const [key, ...rest] = trimmed.split(":");
+      const val = rest.join(":").trim();
+      const k = key.trim();
+      const profile = result.profiles[currentProfile];
+      if (k === "provider") profile.provider = val;
+      else if (k === "model") profile.model = val;
+      else if (k === "api_key") profile.api_key = val.replace(/^["']|["']$/g, "");
+      else if (k === "api_base") profile.api_base = val;
+      else if (k === "temperature") profile.temperature = parseFloat(val);
+      else if (k === "top_k") profile.top_k = parseInt(val, 10);
+      else if (k === "max_input_tokens") profile.max_input_tokens = parseInt(val, 10);
+      else if (k === "max_output_tokens") profile.max_output_tokens = parseInt(val, 10);
+      continue;
+    }
+    if (currentSection === "agent" && indent === 2) {
+      const [key, ...rest] = trimmed.split(":");
+      const val = rest.join(":").trim();
+      const k = key.trim();
+      if (!result.agent) result.agent = {};
+      if (k === "max_steps") result.agent.max_steps = parseInt(val, 10);
+      else if (k === "max_context_tokens") result.agent.max_context_tokens = parseInt(val, 10);
+      else if (k === "temperature") result.agent.temperature = parseFloat(val);
+      else if (k === "top_k") result.agent.top_k = parseInt(val, 10);
+      else if (k === "step_timeout") result.agent.step_timeout = parseInt(val, 10);
+      else if (k === "task_timeout") result.agent.task_timeout = parseInt(val, 10);
+      continue;
+    }
+    if (currentSection === "model_routing") {
+      if (!result.model_routing) result.model_routing = {};
+      if (indent === 2 && trimmed.endsWith(":")) {
+        const subKey = trimmed.slice(0, -1).trim();
+        inRoutingScenarios = subKey === "scenarios";
+        if (inRoutingScenarios) result.model_routing.scenarios = result.model_routing.scenarios || {};
+        continue;
+      }
+      if (indent === 2) {
+        const [key, ...rest] = trimmed.split(":");
+        const val = rest.join(":").trim();
+        const k = key.trim();
+        if (k === "enabled") result.model_routing.enabled = val === "true" || val === "1" || val === "yes";
+        else if (k === "default") result.model_routing.default = val;
+        else if (k === "fallback") result.model_routing.fallback = val;
+        else if (k === "fallback_probe_interval_s") result.model_routing.fallback_probe_interval_s = parseFloat(val);
+        continue;
+      }
+      if (indent === 4 && inRoutingScenarios) {
+        const [key, ...rest] = trimmed.split(":");
+        const val = rest.join(":").trim();
+        if (result.model_routing.scenarios) {
+          result.model_routing.scenarios[key.trim()] = val;
+        }
+        continue;
+      }
+    }
+    if (currentSection === "mcp_servers" && indent === 2 && trimmed.endsWith(":")) {
+      currentProfile = trimmed.slice(0, -1).trim();
+      if (!result.mcp_servers) result.mcp_servers = {};
+      result.mcp_servers[currentProfile] = {};
+      continue;
+    }
+    if (currentSection === "mcp_servers" && indent === 4 && currentProfile) {
+      const [key, ...rest] = trimmed.split(":");
+      const val = rest.join(":").trim();
+      const k = key.trim();
+      const srv = result.mcp_servers[currentProfile];
+      inMcpTools = k === "tools";
+      if (k === "command") srv.command = val;
+      else if (k === "url") srv.url = val;
+      else if (k === "type") srv.type = val;
+      else if (k === "headers") {
+        if (!srv.headers) srv.headers = {};
+      } else if (k === "tools") {
+        if (!srv.tools) srv.tools = [];
+      } else if (k === "args") {
+        if (val) srv.args = val.split(/\s+/);
+      }
+      continue;
+    }
+    if (currentSection === "mcp_servers" && indent === 6 && currentProfile) {
+      const srv = result.mcp_servers?.[currentProfile];
+      if (srv && inMcpTools && trimmed.trimStart().startsWith("- ")) {
+        if (!srv.tools) srv.tools = [];
+        srv.tools.push(trimmed.trimStart().slice(2).trim());
+      } else if (srv && trimmed.trimStart().startsWith("- ")) {
+        const val = trimmed.trimStart().slice(2).trim();
+        if (!srv.args) srv.args = [];
+        srv.args.push(val);
+      } else if (srv && srv.headers !== void 0) {
+        const [key, ...rest] = trimmed.split(":");
+        const val = rest.join(":").trim();
+        srv.headers[key.trim()] = val;
+      }
+      continue;
+    }
+    if (currentSection === "mcp_servers" && indent === 6 && trimmed.trimStart().startsWith("- ")) {
+      const val = trimmed.trimStart().slice(2).trim();
+      const srv = result.mcp_servers?.[currentProfile];
+      if (srv) {
+        if (!srv.args) srv.args = [];
+        srv.args.push(val);
+      }
+      continue;
+    }
+    if ((currentSection === "skills" || currentSection === "rules") && trimmed.trimStart().startsWith("- ")) {
+      const val = trimmed.trimStart().slice(2).trim();
+      if (!result[currentSection]) {
+        result[currentSection] = [];
+      }
+      result[currentSection].push(val);
+      continue;
+    }
+  }
+  return result;
+}
+function findConfigFile() {
+  const candidates = [
+    path3.join(process.cwd(), "config.yaml"),
+    path3.join(process.cwd(), "config.json"),
+    ...agentHomeFileCandidates("config.yaml"),
+    ...agentHomeFileCandidates("config.json")
+  ];
+  return candidates.find((p) => fs2.existsSync(p));
+}
+function findModelsJson() {
+  const candidates = [
+    path3.join(process.cwd(), "models.json"),
+    ...agentHomeFileCandidates("models.json"),
+    path3.join(os2.homedir(), ".codebuddy", "models.json")
+    // shared compat
+  ];
+  return candidates.find((p) => fs2.existsSync(p));
+}
+function modelEntryToProfile(entry) {
+  const apiBase = entry.url.replace(/\/chat\/completions\/?$/, "");
+  return {
+    provider: "openai",
+    model: entry.id,
+    api_key: entry.apiKey,
+    api_base: apiBase,
+    max_input_tokens: entry.maxInputTokens,
+    max_output_tokens: entry.maxOutputTokens || entry.maxTokens,
+    supports_reasoning: entry.supportsReasoning,
+    thinking: entry.thinking
+  };
+}
+function loadModelsJson() {
+  const modelsPath = findModelsJson();
+  if (!modelsPath) return void 0;
+  try {
+    const raw = fs2.readFileSync(modelsPath, "utf-8");
+    const data = JSON.parse(raw);
+    const profiles = {};
+    for (const entry of data.models) {
+      profiles[entry.id] = modelEntryToProfile(entry);
+    }
+    return profiles;
+  } catch {
+    return void 0;
+  }
+}
+function resolveHomePath(p) {
+  if (p.startsWith("~/") || p.startsWith("~\\")) {
+    return path3.join(os2.homedir(), p.slice(2));
+  }
+  return path3.resolve(p);
+}
+function profileToAgentConfig(profile, agent) {
+  const budgets = normalizeTokenBudgets(
+    profile.max_input_tokens || agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
+    profile.max_output_tokens || DEFAULT_AGENT_CONFIG.maxOutputTokens
+  );
+  return {
+    ...DEFAULT_AGENT_CONFIG,
+    provider: profile.provider || DEFAULT_AGENT_CONFIG.provider,
+    model: profile.model || DEFAULT_AGENT_CONFIG.model,
+    apiKey: profile.api_key || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || "",
+    apiBase: profile.api_base || void 0,
+    supportsReasoning: profile.supports_reasoning,
+    thinking: profile.thinking,
+    maxSteps: agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
+    maxContextTokens: budgets.maxContextTokens,
+    maxOutputTokens: budgets.maxOutputTokens,
+    temperature: profile.temperature ?? agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
+    topK: profile.top_k ?? agent?.top_k ?? DEFAULT_AGENT_CONFIG.topK,
+    stepTimeout: agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
+    taskTimeout: agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout
+  };
+}
+var MIN_INPUT_BUDGET = 4096;
+function defaultDirs(kind) {
+  return [
+    ...agentHomeDirs().map((dir) => path3.join(dir, kind)),
+    path3.join(os2.homedir(), ".cursor", kind)
+  ];
+}
+function dedupeByRealPath(dirs) {
+  const seen = /* @__PURE__ */ new Set();
+  const unique = [];
+  for (const dir of dirs) {
+    let key = dir;
+    try {
+      key = fs2.realpathSync(dir);
+    } catch {
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(dir);
+  }
+  return unique;
+}
+function normalizeTokenBudgets(maxContextTokens, maxOutputTokens) {
+  const context = Math.max(1, maxContextTokens || 0);
+  const output = Math.max(1, maxOutputTokens || 0);
+  const maxAllowedOutput = Math.max(1, context - MIN_INPUT_BUDGET);
+  return {
+    maxContextTokens: context,
+    maxOutputTokens: Math.min(output, maxAllowedOutput)
+  };
+}
+function loadConfig(cliProfile) {
+  let fileConfig = {};
+  const configPath = findConfigFile();
+  if (configPath) {
+    try {
+      const raw = fs2.readFileSync(configPath, "utf-8");
+      fileConfig = configPath.endsWith(".json") ? JSON.parse(raw) : parseYaml(raw);
+    } catch {
+    }
+  }
+  const modelsProfiles = loadModelsJson();
+  if (modelsProfiles) {
+    fileConfig.profiles = { ...modelsProfiles, ...fileConfig.profiles };
+  }
+  let profileName = cliProfile || process.env.AGENT_PROFILE || fileConfig.active_profile || void 0;
+  const profileExplicit = !!cliProfile;
+  if (!profileName && fileConfig.profiles && Object.keys(fileConfig.profiles).length > 0) {
+    profileName = Object.keys(fileConfig.profiles)[0];
+  } else if (!profileName) {
+    profileName = "default";
+  }
+  let profile = fileConfig.profiles?.[profileName];
+  if (fileConfig.profiles && !profile && profileName !== "default") {
+    const available = Object.keys(fileConfig.profiles).join(", ");
+    console.warn(`Warning: profile "${profileName}" not found in config. Available: ${available}`);
+    profileName = Object.keys(fileConfig.profiles)[0];
+    profile = fileConfig.profiles?.[profileName];
+    console.warn(`         Falling back to: "${profileName}"`);
+  }
+  const budgets = normalizeTokenBudgets(
+    profile?.max_input_tokens || fileConfig.agent?.max_context_tokens || DEFAULT_AGENT_CONFIG.maxContextTokens,
+    profile?.max_output_tokens || DEFAULT_AGENT_CONFIG.maxOutputTokens
+  );
+  const agentConfig = {
+    ...DEFAULT_AGENT_CONFIG,
+    provider: process.env.LLM_PROVIDER || profile?.provider || DEFAULT_AGENT_CONFIG.provider,
+    model: process.env.LLM_MODEL || profile?.model || DEFAULT_AGENT_CONFIG.model,
+    apiKey: process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || profile?.api_key || "",
+    apiBase: process.env.LLM_API_BASE || profile?.api_base || void 0,
+    supportsReasoning: profile?.supports_reasoning,
+    thinking: profile?.thinking,
+    maxSteps: fileConfig.agent?.max_steps || DEFAULT_AGENT_CONFIG.maxSteps,
+    maxContextTokens: budgets.maxContextTokens,
+    maxOutputTokens: budgets.maxOutputTokens,
+    temperature: profile?.temperature ?? fileConfig.agent?.temperature ?? DEFAULT_AGENT_CONFIG.temperature,
+    topK: profile?.top_k ?? fileConfig.agent?.top_k ?? DEFAULT_AGENT_CONFIG.topK,
+    stepTimeout: fileConfig.agent?.step_timeout || DEFAULT_AGENT_CONFIG.stepTimeout,
+    taskTimeout: fileConfig.agent?.task_timeout || DEFAULT_AGENT_CONFIG.taskTimeout
+  };
+  const skillsDirs = dedupeByRealPath((fileConfig.skills || defaultDirs("skills")).map(resolveHomePath));
+  const rulesDirs = dedupeByRealPath((fileConfig.rules || defaultDirs("rules")).map(resolveHomePath));
+  const mcpServers = Object.entries(fileConfig.mcp_servers || {}).map(
+    ([name, srv]) => ({ name, ...srv })
+  );
+  const profiles = {};
+  for (const [name, p] of Object.entries(fileConfig.profiles || {})) {
+    profiles[name] = profileToAgentConfig(p, fileConfig.agent);
+  }
+  const hasRouting = fileConfig.model_routing !== void 0;
+  const probeSeconds = fileConfig.model_routing?.fallback_probe_interval_s;
+  const modelRouting = {
+    enabled: hasRouting && fileConfig.model_routing?.enabled !== false && !profileExplicit,
+    defaultModel: fileConfig.model_routing?.default,
+    fallbackModel: fileConfig.model_routing?.fallback,
+    probeIntervalMs: typeof probeSeconds === "number" && probeSeconds > 0 ? probeSeconds * 1e3 : void 0,
+    scenarios: fileConfig.model_routing?.scenarios || {}
+  };
+  return {
+    agentConfig,
+    skillsDirs,
+    rulesDirs,
+    profileName,
+    configFilePath: configPath,
+    mcpServers,
+    profiles,
+    modelRouting,
+    profileExplicit
+  };
+}
+function loadConfigForProfile(profileName) {
+  return loadConfig(profileName);
+}
+function listProfiles() {
+  const modelsProfiles = loadModelsJson();
+  if (modelsProfiles) {
+    return Object.entries(modelsProfiles).map(([name, p]) => ({
+      name,
+      provider: p.provider,
+      model: p.model
+    }));
+  }
+  const configPath = findConfigFile();
+  if (!configPath) return [];
+  try {
+    const raw = fs2.readFileSync(configPath, "utf-8");
+    const config = parseYaml(raw);
+    return Object.entries(config.profiles || {}).map(([name, p]) => ({
+      name,
+      provider: p.provider,
+      model: p.model
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// src/vs/workbench/contrib/agent/common/agentTracing.ts
+var MAX_ID_LEN = 200;
+var MAX_META_VALUE_LEN = 200;
+var MAX_MESSAGE_CHARS = 2e4;
+var MAX_REASONING_CHARS = 8e3;
+function envStr(...names) {
+  for (const name of names) {
+    const v = process.env[name];
+    if (v && v.trim()) return v.trim();
+  }
+  return void 0;
+}
+function envBool(...names) {
+  for (const name of names) {
+    const v = process.env[name];
+    if (v === void 0) continue;
+    const s = v.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(s)) return true;
+    if (["0", "false", "no", "off"].includes(s)) return false;
+  }
+  return void 0;
+}
+function toBool(v) {
+  if (typeof v === "boolean") return v;
+  if (typeof v !== "string") return void 0;
+  const s = v.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(s)) return true;
+  if (["0", "false", "no", "off"].includes(s)) return false;
+  return void 0;
+}
+function parseTracingYaml(text) {
+  let inTracing = false;
+  let inTags = false;
+  const section = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0 && trimmed.endsWith(":")) {
+      inTracing = trimmed === "tracing:";
+      inTags = false;
+      continue;
+    }
+    if (!inTracing) continue;
+    if (indent === 2 && trimmed.startsWith("- ")) {
+      if (inTags) {
+        section.tags = section.tags || [];
+        section.tags.push(parseScalarValue(trimmed.slice(2)));
+      }
+      continue;
+    }
+    if (indent > 2 && trimmed.startsWith("- ")) {
+      if (inTags) {
+        section.tags = section.tags || [];
+        section.tags.push(parseScalarValue(trimmed.slice(2)));
+      }
+      continue;
+    }
+    if (indent !== 2) continue;
+    const idx = trimmed.indexOf(":");
+    if (idx <= 0) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const rawVal = parseScalarValue(trimmed.slice(idx + 1));
+    inTags = key === "tags";
+    if (key === "enabled") section.enabled = toBool(rawVal);
+    else if (key === "public_key") section.public_key = rawVal;
+    else if (key === "secret_key") section.secret_key = rawVal;
+    else if (key === "base_url") section.base_url = rawVal;
+    else if (key === "host") section.host = rawVal;
+    else if (key === "environment") section.environment = rawVal;
+    else if (key === "release") section.release = rawVal;
+    else if (key === "capture_content") section.capture_content = toBool(rawVal);
+    else if (key === "user_id") section.user_id = rawVal;
+    else if (key === "session_id") section.session_id = rawVal;
+  }
+  return Object.keys(section).length > 0 ? section : void 0;
+}
+function loadTracingYamlSection() {
+  const candidates = [
+    path4.resolve("config.yaml"),
+    path4.resolve("config.json"),
+    ...agentHomeFileCandidates("config.yaml"),
+    ...agentHomeFileCandidates("config.json")
+  ];
+  for (const file of candidates) {
+    try {
+      if (!fs3.existsSync(file)) continue;
+      const text = fs3.readFileSync(file, "utf-8");
+      if (file.endsWith(".json")) {
+        const parsed = JSON.parse(text);
+        if (parsed?.tracing && typeof parsed.tracing === "object") return parsed.tracing;
+        continue;
+      }
+      const section = parseTracingYaml(text);
+      if (section) return section;
+    } catch {
+    }
+  }
+  return void 0;
+}
+function loadTracingConfig(cliOverride, release) {
+  if (cliOverride === "off") {
+    return { enabled: false, reason: "disabled by --tracing off" };
+  }
+  const yaml = loadTracingYamlSection();
+  const envDisabled = envBool("LANGFUSE_TRACING_ENABLED") === false;
+  if (envDisabled) {
+    return { enabled: false, reason: "disabled by LANGFUSE_TRACING_ENABLED=false" };
+  }
+  const yamlEnabled = yaml?.enabled;
+  if (yamlEnabled === false && cliOverride !== "on") {
+    return { enabled: false, reason: "disabled by config.yaml tracing.enabled=false" };
+  }
+  const publicKey = envStr("LANGFUSE_PUBLIC_KEY") || yaml?.public_key || "";
+  const secretKey = envStr("LANGFUSE_SECRET_KEY") || yaml?.secret_key || "";
+  const baseUrl = envStr("LANGFUSE_BASE_URL", "LANGFUSE_HOST") || yaml?.base_url || yaml?.host || "https://cloud.langfuse.com";
+  if (!publicKey || !secretKey) {
+    return {
+      enabled: false,
+      reason: "no Langfuse API keys (set LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY, or config.yaml tracing.public_key/secret_key)"
+    };
+  }
+  const source = envStr("LANGFUSE_PUBLIC_KEY") ? "environment (LANGFUSE_*)" : "config.yaml tracing section";
+  const captureContent = envBool("LANGFUSE_CAPTURE_CONTENT") ?? yaml?.capture_content ?? true;
+  const tags = (yaml?.tags || []).filter((t) => typeof t === "string" && t.trim().length > 0);
+  return {
+    enabled: true,
+    source,
+    config: {
+      publicKey,
+      secretKey,
+      baseUrl,
+      environment: envStr("LANGFUSE_TRACING_ENVIRONMENT") || yaml?.environment,
+      release: envStr("LANGFUSE_RELEASE") || yaml?.release || release,
+      captureContent,
+      userId: envStr("LANGFUSE_USER_ID") || yaml?.user_id,
+      sessionId: envStr("LANGFUSE_SESSION_ID") || yaml?.session_id,
+      tags
+    }
+  };
+}
+var SECRET_PATTERNS = [
+  // Langfuse / OpenAI-style keys: sk-lf-…, pk-lf-…, sk-proj-…, sk-ant-…
+  [/\b(?:sk|pk|rk)-(?:lf|proj|ant|or|live|test)?-?[A-Za-z0-9_-]{12,}/g, "<redacted-key>"],
+  // Authorization headers and bearer tokens
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, "Bearer <redacted>"],
+  // JWT (memory hub, Dolphin MCP)
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "<redacted-jwt>"],
+  // key = value / "key": "value" for anything that looks like a credential
+  [
+    /((?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|client[_-]?secret|private[_-]?key|authorization)["']?\s*[:=]\s*["']?)([^\s"',;}{)\]]{6,})/gi,
+    "$1<redacted>"
+  ]
+];
+function redactSecrets(text) {
+  let out = text;
+  for (const [pattern, replacement] of SECRET_PATTERNS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+function redactDeep(value, depth = 0) {
+  if (depth > 12) return value;
+  if (typeof value === "string") return redactSecrets(value);
+  if (Array.isArray(value)) return value.map((v) => redactDeep(v, depth + 1));
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = redactDeep(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+function truncate(text, max) {
+  return text.length > max ? `${text.slice(0, max)}
+... (${text.length} chars total, truncated)` : text;
+}
+var NOOP_HANDLE = { update: () => {
+} };
+var NOOP_STEP = { ref: null, update: () => {
+}, end: () => {
+} };
+var NoopTracing = class {
+  enabled = false;
+  reason;
+  constructor(reason) {
+    this.reason = reason;
+  }
+  async init() {
+    return false;
+  }
+  async runTask(_meta, fn) {
+    return fn(NOOP_HANDLE);
+  }
+  beginStep(_meta) {
+    return NOOP_STEP;
+  }
+  async runGeneration(_meta, fn) {
+    return fn(NOOP_HANDLE);
+  }
+  async runTool(_meta, fn) {
+    return fn(NOOP_HANDLE);
+  }
+  async runSubagent(_meta, fn) {
+    return fn(NOOP_HANDLE);
+  }
+  async flush() {
+  }
+  async shutdown() {
+  }
+};
+var NOOP_TRACING = new NoopTracing();
+function spanContextOf(ref) {
+  return { traceId: ref.traceId, spanId: ref.spanId, traceFlags: 1, isRemote: false };
+}
+var LangfuseTracing = class {
+  constructor(_config) {
+    this._config = _config;
+  }
+  enabled = true;
+  _sdk;
+  _initPromise;
+  /** Public key + base URL are enough for a safe status line (never the secret). */
+  describe() {
+    const env2 = this._config.environment ? ` env=${this._config.environment}` : "";
+    return `Langfuse ${this._config.baseUrl}${env2} (content=${this._config.captureContent ? "full" : "metadata-only"})`;
+  }
+  async init() {
+    if (!this._initPromise) {
+      this._initPromise = this._init().catch((err) => {
+        console.warn(`[TRACING] Langfuse SDK unavailable, tracing disabled: ${err.message}`);
+        return false;
+      });
+    }
+    return this._initPromise;
+  }
+  async _init() {
+    const [otel, tracing2, sdkTrace] = await Promise.all([
+      import("@langfuse/otel"),
+      import("@langfuse/tracing"),
+      import("@opentelemetry/sdk-trace-node")
+    ]);
+    const processor = new otel.LangfuseSpanProcessor({
+      publicKey: this._config.publicKey,
+      secretKey: this._config.secretKey,
+      baseUrl: this._config.baseUrl,
+      environment: this._config.environment,
+      release: this._config.release,
+      // Long-running CLI: batch (default) and flush explicitly on exit.
+      exportMode: "batched",
+      // Official masking hook — applied to every exported attribute value.
+      mask: (params) => redactDeep(params.data)
+    });
+    const provider = new sdkTrace.NodeTracerProvider({
+      spanProcessors: [processor]
+    });
+    provider.register();
+    this._sdk = {
+      tracing: tracing2,
+      processor
+    };
+    return true;
+  }
+  get _ready() {
+    return !!this._sdk;
+  }
+  /**
+   * Wrap a callback in an active observation.
+   *
+   * When no observation is active yet this becomes the trace root (and the
+   * trace-level attributes are propagated); inside an existing trace it is a
+   * plain child span — which is exactly what a subagent needs, since it must
+   * inherit the orchestrator's trace instead of renaming it.
+   *
+   * `parent`, when given, attaches the observation to a step that is not the
+   * active span (see `beginStep`).
+   */
+  async _run(type, name, attrs, fn, traceAttrs, parent) {
+    if (!this._ready) return fn(NOOP_HANDLE);
+    let workFailed = false;
+    let workStarted = false;
+    let workError;
+    const wrapped = async (obs) => {
+      workStarted = true;
+      try {
+        return await this._invoke(obs, attrs, fn, type);
+      } catch (err) {
+        workFailed = true;
+        workError = err;
+        throw err;
+      }
+    };
+    try {
+      const options = { asType: type };
+      if (parent) options.parentSpanContext = spanContextOf(parent);
+      const parentActive = this._sdk.tracing.getActiveTraceId() !== void 0;
+      return await (parentActive || !traceAttrs ? this._sdk.tracing.startActiveObservation(name, wrapped, options) : this._sdk.tracing.propagateAttributes(traceAttrs, () => this._sdk.tracing.startActiveObservation(name, wrapped, options)));
+    } catch (err) {
+      if (workFailed) throw workError;
+      console.warn(`[TRACING] ${name} instrumentation failed (non-fatal): ${err.message}`);
+      if (workStarted) throw err;
+      return fn(NOOP_HANDLE);
+    }
+  }
+  /**
+   * Start the step observation for one ReAct iteration.
+   *
+   * Created as a child of whatever is active (the task span, or a subagent's
+   * agent span) and ended by the caller in a `finally` — which keeps the loop's
+   * `continue`/`break` control flow untouched.
+   */
+  beginStep(meta) {
+    if (!this._ready) return NOOP_STEP;
+    try {
+      const obs = this._sdk.tracing.startObservation(
+        meta.name || "agent-step",
+        this._shape({ metadata: meta.metadata }, "span"),
+        { asType: "span" }
+      );
+      return this._stepHandle(obs, meta);
+    } catch (err) {
+      console.warn(`[TRACING] step instrumentation failed (non-fatal): ${err.message}`);
+      return NOOP_STEP;
+    }
+  }
+  _stepHandle(obs, meta) {
+    let ended = false;
+    const ref = obs.traceId && obs.id ? { traceId: obs.traceId, spanId: obs.id } : null;
+    return {
+      ref,
+      update: (attrs) => {
+        if (ended) return;
+        try {
+          obs.update(this._shape(attrs, "span"));
+        } catch {
+        }
+      },
+      end: () => {
+        if (ended) return;
+        ended = true;
+        try {
+          obs.end();
+        } catch {
+        }
+      }
+    };
+  }
+  async _invoke(obs, attrs, fn, type) {
+    const handle = {
+      update: (next) => {
+        try {
+          obs.update(this._shape(next, type));
+        } catch {
+        }
+      }
+    };
+    try {
+      obs.update(this._shape(attrs, type));
+    } catch {
+    }
+    try {
+      const result = await fn(handle);
+      try {
+        obs.end();
+      } catch {
+      }
+      return result;
+    } catch (err) {
+      try {
+        obs.update({
+          level: "ERROR",
+          statusMessage: err.message?.slice(0, MAX_META_VALUE_LEN)
+        });
+      } catch {
+      }
+      try {
+        obs.end();
+      } catch {
+      }
+      throw err;
+    }
+  }
+  /**
+   * Turn our attribute bag into SDK attributes, honouring `captureContent`.
+   *
+   * `captureContent: false` keeps the trace useful for latency/cost/error
+   * analysis while sending no prompt, output or tool payload at all.
+   */
+  _shape(attrs, type) {
+    const out = {};
+    const capture = this._config.captureContent;
+    if (capture && attrs.input !== void 0) out.input = this._input(attrs.input);
+    if (capture && attrs.output !== void 0) out.output = redactDeep(attrs.output);
+    if (attrs.metadata) out.metadata = redactDeep(attrs.metadata);
+    if (attrs.level) out.level = attrs.level;
+    if (attrs.statusMessage) out.statusMessage = redactSecrets(attrs.statusMessage).slice(0, MAX_META_VALUE_LEN);
+    if (type === "generation") {
+      if (attrs.model) out.model = attrs.model;
+      if (attrs.modelParameters) out.modelParameters = attrs.modelParameters;
+      if (attrs.usageDetails) out.usageDetails = attrs.usageDetails;
+      if (attrs.completionStartTime) out.completionStartTime = attrs.completionStartTime;
+    }
+    return out;
+  }
+  /** Redact + bound the input payload (message arrays are the common case). */
+  _input(input) {
+    if (Array.isArray(input)) {
+      return input.map((item) => {
+        if (!item || typeof item !== "object") return redactDeep(item);
+        const msg = item;
+        const copy = { ...msg };
+        if (typeof copy.content === "string") {
+          copy.content = truncate(redactSecrets(copy.content), MAX_MESSAGE_CHARS);
+        }
+        if (typeof copy.reasoningContent === "string") {
+          copy.reasoningContent = truncate(redactSecrets(copy.reasoningContent), MAX_REASONING_CHARS);
+        }
+        return copy;
+      });
+    }
+    if (typeof input === "string") return truncate(redactSecrets(input), MAX_MESSAGE_CHARS);
+    return redactDeep(input);
+  }
+  async runTask(meta, fn) {
+    if (!this._ready) return fn(NOOP_HANDLE);
+    const traceAttrs = {
+      traceName: clip(meta.name || "agent-task"),
+      tags: [...this._config.tags, ...meta.tags || []],
+      metadata: stringifyMeta({
+        ...meta.metadata,
+        app: "code-agent",
+        ...this._config.release ? { release: this._config.release } : {}
+      })
+    };
+    const userId = meta.userId || this._config.userId;
+    const sessionId = meta.sessionId || this._config.sessionId;
+    if (userId) traceAttrs.userId = clip(userId);
+    if (sessionId) traceAttrs.sessionId = clip(sessionId);
+    return this._run("span", meta.name || "agent-task", {
+      input: meta.input,
+      metadata: meta.metadata
+    }, fn, traceAttrs);
+  }
+  async runGeneration(meta, fn, parent) {
+    return this._run("generation", meta.name || "llm-call", {
+      model: meta.model,
+      modelParameters: meta.modelParameters,
+      completionStartTime: meta.startTime,
+      input: meta.input,
+      metadata: meta.metadata
+    }, fn, void 0, parent);
+  }
+  async runTool(meta, fn, parent) {
+    return this._run("tool", `tool:${meta.name}`, {
+      input: meta.input,
+      metadata: meta.metadata
+    }, fn, void 0, parent);
+  }
+  async runSubagent(meta, fn) {
+    return this._run("agent", meta.name || "subagent", {
+      input: meta.input,
+      metadata: meta.metadata
+    }, fn);
+  }
+  async flush() {
+    if (!this._sdk) return;
+    try {
+      await this._sdk.processor.forceFlush();
+    } catch {
+    }
+  }
+  async shutdown() {
+    if (!this._sdk) return;
+    try {
+      await this._sdk.processor.forceFlush();
+    } catch {
+    }
+    try {
+      await this._sdk.processor.shutdown();
+    } catch {
+    }
+    this._sdk = void 0;
+  }
+};
+function clip(v) {
+  return v.length > MAX_ID_LEN ? v.slice(0, MAX_ID_LEN) : v;
+}
+function currentUserName() {
+  const fromEnv = process.env.USER || process.env.LOGNAME || process.env.USERNAME;
+  if (fromEnv) return fromEnv;
+  try {
+    return os3.userInfo().username || void 0;
+  } catch {
+    return void 0;
+  }
+}
+function stringifyMeta(meta) {
+  const out = {};
+  for (const [k, v] of Object.entries(meta || {})) {
+    if (v === void 0 || v === null) continue;
+    const s = typeof v === "string" ? v : JSON.stringify(v);
+    if (s === void 0) continue;
+    out[k] = s.length > MAX_META_VALUE_LEN ? `${s.slice(0, MAX_META_VALUE_LEN - 1)}\u2026` : s;
+  }
+  return out;
+}
+function createTracing(settings) {
+  return settings.enabled && settings.config ? new LangfuseTracing(settings.config) : new NoopTracing(settings.reason);
+}
+function initTracingFromConfig(cliOverride, release) {
+  return createTracing(loadTracingConfig(cliOverride, release));
+}
+
+// src/vs/workbench/contrib/agent/common/agentBtw.ts
+var CANCEL_COMMANDS = /* @__PURE__ */ new Set([
+  "cancel",
+  "abort",
+  "stop",
+  "halt",
+  "kill",
+  "\u53D6\u6D88",
+  "\u505C\u6B62",
+  "\u505C\u4E0B",
+  "\u4E2D\u65AD",
+  "\u7EC8\u6B62"
+]);
+var ADDITIVE_PREFIXES = [
+  /^注意/,
+  /^记得/,
+  /^记住/,
+  /^提醒/,
+  /^补充(一下)?(：|:)?/,
+  /^另外/,
+  /^顺便/,
+  /^还有/,
+  /^(note|remember|also|fyi|tip|additionally|btw)[\s,:]/i
+];
+var BTW_SUPERSEDE_PATTERNS = [
+  // Replace the goal.
+  /(改为|改成|换成|换个|换一个|改做)/,
+  // Restart / redo work (specific verbs only — a bare "重新" is ambiguous and
+  // goes to the evaluator).
+  /(重来|重跑|重做|重试|重新(执行|跑|做|开始|生成|发布|安装|部署|升级|构建|编译|打包|提交|推送|测试|下载|上传|计算|实现|写|改))/,
+  // Discard what is already running.
+  /(算了|放弃|撤回|作废|不要做了|不用做了|别做了)/,
+  // Anchored to the newest state/version — a rerun is required.
+  /(基于最新|最新版本|按照最新|以最新|用最新|根据最新)/,
+  // Re-sequencing that invalidates the in-flight step.
+  /(先(把|去|做|升级|安装|部署|发布|编译|构建|打包|改|重新))/,
+  // English equivalents.
+  /\b(instead|start over|scrap (that|it)|discard (that|it)|forget (about )?(the |that |previous )|ignore (the )?(previous|above)|never ?mind|change of plans?|new plan|on second thought|redo|re-?run)\b/i
+];
+function classifyBtwIntent(hint) {
+  const trimmed = (hint || "").trim();
+  if (!trimmed) return "unknown";
+  if (CANCEL_COMMANDS.has(trimmed.toLowerCase())) return "cancel";
+  if (BTW_SUPERSEDE_PATTERNS.some((re) => re.test(trimmed))) return "supersede";
+  if (ADDITIVE_PREFIXES.some((re) => re.test(trimmed))) return "hint";
+  return "unknown";
+}
+var CONFLICT_PROMPT = `You supervise a coding agent. It is currently working on the task below.
 
 --- RUNNING TASK ---
 {{TASK}}
@@ -187,91 +3316,3370 @@ Choose CONTINUE when the instruction only adds detail, a constraint, a reminder,
 or a small additive tweak that does not invalidate work already in progress.
 
 Answer with strict JSON only, no markdown:
-{"supersede": true|false, "reason": "<short reason>"}`;function Js(s,e){return[D("user",si.replace("{{TASK}}",e||"(unknown task)").replace("{{HINT}}",s))]}function Xs(s){let e=(s||"").trim(),t=e.match(/\{[\s\S]*\}/);if(t)try{let n=JSON.parse(t[0]),r=typeof n.supersede=="boolean"?n.supersede:typeof n.verdict=="string"?/supersede/i.test(n.verdict):void 0;if(r!==void 0)return{supersede:r,reason:typeof n.reason=="string"?n.reason.slice(0,200):""}}catch{}return/\bsupersede\b/i.test(e)&&!/\bcontinue\b/i.test(e)?{supersede:!0,reason:"evaluator answered SUPERSEDE"}:{supersede:!1,reason:""}}function Qs(s){return s.supersede?`[User intervention via /btw \u2014 THIS INSTRUCTION SUPERSEDES THE CURRENT TASK]${s.reason?` (reason: ${s.reason})`:""}
-${s.text}
-The previous task and its plan are CANCELLED. Do NOT continue the old plan and do not finish work that this instruction makes irrelevant (abandon any long-running command or waiting step that belonged to it). Treat the instruction above as the new task and start from the latest state.`:`[User intervention via /btw]: ${s.text}
-(This is a hint from the user to adjust your reasoning. Follow it in subsequent steps.)`}var ri=100,Dn=2,Zs=3e4,oi=12e4,ii=1e4,Ln=2,er=`primary model answered ${Ln} consecutive health probes`,ai=4e3,tr=2e3,nr=2,sr=20,li=.2,ci=4e3;function On(s){let e=new Map;for(let n of s.split(`
-`)){let r=n.trim();r&&e.set(r,(e.get(r)??0)+1)}let t=0;for(let n of e.values())n>t&&(t=n);return t}function di(s){if(s.length<ci)return!1;let e=s.split(`
-`).map(n=>n.trim()).filter(n=>n.length>0);if(e.length<sr*2)return!1;let t=On(s);return t>=sr&&t/e.length>=li}var ui=["refactor","\u91CD\u6784","migrate","\u8FC1\u79FB","implement","\u5B9E\u73B0","redesign","\u91CD\u65B0\u8BBE\u8BA1","complex","\u590D\u6742","multiple files","architecture","\u67B6\u6784","performance","\u6027\u80FD","debugging","\u8C03\u8BD5","optimize","\u4F18\u5316","redesign","overhaul","rewrite","\u91CD\u5199"];function pi(s){if(!s)return!1;let e=s;if(e.name==="AbortError")return!0;let t=[];e.message&&t.push(e.message),e.code&&t.push(String(e.code));let n=e.cause;n&&(n.message&&t.push(n.message),n.code&&t.push(String(n.code)));let r=t.join(" ").toLowerCase();return/timed?\s*out|timeout|etimedout|esockettimedout|econnaborted|und_err_connect_timeout|und_err_headers_timeout|und_err_body_timeout/.test(r)}function mi(s){if(!s)return!1;let e=s,t=[];e.message&&t.push(e.message),e.code&&t.push(String(e.code)),e.cause&&(e.cause.message&&t.push(e.cause.message),e.cause.code&&t.push(String(e.cause.code)));let n=t.join(" ").toLowerCase();return/token usage exceeds|tokens per minute|requests per minute|\btpm\b|\brpm\b|rate[\s_-]?limit|too many requests/.test(n)||(e.status??e.statusCode??e.cause?.status??e.cause?.statusCode)===429?!0:/\b429\b/.test(n)}function fi(s){if(pi(s))return"timeout";if(mi(s))return"rate-limit"}function rt(s){let e=s.detail?` (${s.detail})`:"";switch(s.reason){case"fallback-timeout":return`[MODEL] \u26A0 ${s.from} unreachable \u2192 switched to \u4FDD\u5E95\u6A21\u578B ${s.to}, retrying the same request${e}`;case"fallback-rate-limit":return`[MODEL] \u26A0 ${s.from} rate-limited \u2192 switched to \u4FDD\u5E95\u6A21\u578B ${s.to}, retrying the same request${e}`;case"primary-recovered":return`[MODEL] \u2713 ${s.to} reachable again \u2192 switched back from \u4FDD\u5E95\u6A21\u578B ${s.from}${e}`;case"profile":return`[MODEL] \u21AA profile switch ${s.from} \u2192 ${s.to}${e}`;default:return`[MODEL] \u21AA routed ${s.from} \u2192 ${s.to}${e}`}}function rr(s){if(s.length<=ai)return s;let e=Math.floor(tr/2),t=s.slice(0,tr-e),n=s.slice(-e),r=s.length-t.length-n.length;return`${t}
-... [${r} chars of reasoning elided] ...
-${n}`}var Be=class s{constructor(e,t,n,r,o,i=process.cwd(),a,l){this._config=e;this._llmProvider=t;this._toolRegistry=n;this._modeManager=r;this._checkpointManager=o;this._workingDirectory=i;this._context=new wt(e.maxContextTokens,e.maxOutputTokens,t),this._planner=new bt(t),this._memory=a?.enabled?a:void 0,this._tracing=l??je}_isRunning=!1;_cancellation;_contextHistoryForContinue=[];_onDidReceiveMessage=new K;onDidReceiveMessage=this._onDidReceiveMessage.event;_onDidStreamToken=new K;onDidStreamToken=this._onDidStreamToken.event;_onDidComplete=new K;onDidComplete=this._onDidComplete.event;_onDidError=new K;onDidError=this._onDidError.event;_onDidReceiveToolDiff=new K;onDidReceiveToolDiff=this._onDidReceiveToolDiff.event;_onDidUpdateTodos=new K;onDidUpdateTodos=this._onDidUpdateTodos.event;_todoList=new St;registerTodoTool(e=this._toolRegistry){e.register(new vt(this._todoList))}_context;_planner;_useStreaming=!1;_extraSystemPrompt="";_memoryContext="";_memory;_tracing;_pendingBtwHints=[];_supersedeRequested=!1;_btwEvaluatorOverride=void 0;_btwEvaluationTimeoutMs=2e4;_currentToolController;_fallbackConfig;_fallbackProvider;_usingFallback=!1;_fallbackKind;_primaryConfig;_primaryProvider;_probeTimer;_probeDelayMs=Zs;_probeInitialDelayMs=Zs;_probeMaxDelayMs=oi;_llmRequestInFlight=!1;_primaryRecovered=!1;_primaryHealthyProbes=0;_pendingForceCompact=!1;_onDidSwitchModel=new K;onDidSwitchModel=this._onDidSwitchModel.event;_modelSwitchLogger=e=>console.log(rt(e));_stepRecords=[];_modelSwitches=[];_issueSignals=[];_noteSignal(e,t,n){let r=this._issueSignals[this._issueSignals.length-1];r&&r.kind===e&&r.stepIndex===n&&r.detail===t||this._issueSignals.push({kind:e,detail:t?t.slice(0,200):void 0,stepIndex:n})}_taskStartTime=0;_taskDescription="";_taskError;swapProvider(e,t,n="routing"){let r=this._config.model;this._applyModelSwitch(e,t),this._usingFallback=!1,this._primaryRecovered=!1,this._primaryHealthyProbes=0,this._fallbackKind=void 0,this._stopRecoveryProbe(),e.model!==r&&this._reportModelSwitch({from:r,to:e.model,reason:n,toFallback:!1})}setModelSwitchLogger(e){this._modelSwitchLogger=e}_applyModelSwitch(e,t){let n=e.model!==this._config.model;if(this._config=e,this._llmProvider=t,this._context.swapTokenCounter(t),n){this._context.setModelBudget(e.maxContextTokens,e.maxOutputTokens);let o=t.supportsReasoning?.()??!1?0:this._context.dropReasoningContent();this._context.isOverBudget&&(this._pendingForceCompact=!0,console.warn(`[MODEL] history (~${this._context.estimatedTokens} tokens) exceeds ${e.model}'s input budget (${this._context.inputBudget} tokens) \u2014 compacting conversation`)),o>0&&console.warn(`[MODEL] dropped reasoning_content from ${o} message(s) belonging to the previous model`)}this._planner.swapProvider(t)}_reportModelSwitch(e){this._modelSwitches.push({...e,at:Date.now()}),this._onDidSwitchModel.fire(e);try{this._modelSwitchLogger(e)}catch{}}setFallback(e,t){this._fallbackConfig=e,this._fallbackProvider=t}get hasFallback(){return!!this._fallbackConfig&&!!this._fallbackProvider}_enterFallback(e,t,n,r){let o=this._fallbackConfig;this._primaryConfig=t,this._primaryProvider=n,this._applyModelSwitch(o,this._fallbackProvider),this._usingFallback=!0,this._primaryHealthyProbes=0,this._primaryRecovered=!1,this._fallbackKind=r,this._noteSignal("model-fallback",`${t.model} \u2192 ${o.model} (${r}): ${e.message}`),this._reportModelSwitch({from:t.model,to:o.model,reason:r==="rate-limit"?"fallback-rate-limit":"fallback-timeout",toFallback:!0,detail:`${r==="rate-limit"?"rate limit":"timeout"}: ${e.message}`}),this._startRecoveryProbe()}_startRecoveryProbe(){this._probeTimer||!this._primaryProvider||!this._primaryProvider.healthCheck||(this._probeDelayMs=this._probeInitialDelayMs,this._scheduleProbe())}setProbeSchedule(e,t=e){this._probeInitialDelayMs=Math.max(50,e),this._probeMaxDelayMs=Math.max(this._probeInitialDelayMs,t)}_scheduleProbe(){!this._primaryProvider||!this._usingFallback||(this._probeTimer=setTimeout(()=>{this._probeTimer=void 0,this._runProbe()},this._probeDelayMs),this._probeTimer.unref?.())}async _runProbe(){let e=this._primaryProvider,t=this._primaryConfig;if(!this._usingFallback||!e||!t)return;let n=!1;try{n=await e.healthCheck(ii,{throttleSensitive:this._fallbackKind==="rate-limit"})===!0}catch{n=!1}if(!(!this._usingFallback||this._primaryProvider!==e)){if(n){if(this._primaryHealthyProbes++,this._primaryHealthyProbes>=Ln){this._clearProbeTimer(),this._llmRequestInFlight?(this._primaryRecovered=!0,console.warn("[MODEL] primary model reachable again \u2014 switching back at the next step")):this._switchBackToPrimary(er);return}console.log(`[MODEL] ${t.model} answered a probe (${this._primaryHealthyProbes}/${Ln}) \u2014 confirming recovery before switching back`),this._probeDelayMs=this._probeInitialDelayMs,this._scheduleProbe();return}this._primaryHealthyProbes=0,this._probeDelayMs=Math.min(this._probeDelayMs*2,this._probeMaxDelayMs),this._scheduleProbe()}}_switchBackToPrimary(e){let t=this._primaryConfig,n=this._primaryProvider;if(!t||!n)return;let r=this._config.model;this._applyModelSwitch(t,n),this._usingFallback=!1,this._fallbackKind=void 0,this._primaryHealthyProbes=0,this._primaryRecovered=!1,this._stopRecoveryProbe(),this._reportModelSwitch({from:r,to:t.model,reason:"primary-recovered",toFallback:!1,detail:e})}_stopRecoveryProbe(){this._clearProbeTimer(),this._primaryConfig=void 0,this._primaryProvider=void 0}_clearProbeTimer(){this._probeTimer&&(clearTimeout(this._probeTimer),this._probeTimer=void 0)}get activeModel(){return this._config.model}get usingFallback(){return this._usingFallback}setStreaming(e){this._useStreaming=e}setExtraSystemPrompt(e){this._extraSystemPrompt=e}appendExtraSystemPrompt(e){let t=`
+{"supersede": true|false, "reason": "<short reason>"}`;
+function buildBtwConflictPrompt(hint, runningTask) {
+  return [
+    createMessage("user" /* User */, CONFLICT_PROMPT.replace("{{TASK}}", runningTask || "(unknown task)").replace("{{HINT}}", hint))
+  ];
+}
+function parseBtwConflictVerdict(text) {
+  const raw = (text || "").trim();
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const value = typeof parsed.supersede === "boolean" ? parsed.supersede : typeof parsed.verdict === "string" ? /supersede/i.test(parsed.verdict) : void 0;
+      if (value !== void 0) {
+        return {
+          supersede: value,
+          reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 200) : ""
+        };
+      }
+    } catch {
+    }
+  }
+  if (/\bsupersede\b/i.test(raw) && !/\bcontinue\b/i.test(raw)) {
+    return { supersede: true, reason: "evaluator answered SUPERSEDE" };
+  }
+  return { supersede: false, reason: "" };
+}
+function renderBtwInjection(hint) {
+  if (!hint.supersede) {
+    return `[User intervention via /btw]: ${hint.text}
+(This is a hint from the user to adjust your reasoning. Follow it in subsequent steps.)`;
+  }
+  const why = hint.reason ? ` (reason: ${hint.reason})` : "";
+  return `[User intervention via /btw \u2014 THIS INSTRUCTION SUPERSEDES THE CURRENT TASK]${why}
+${hint.text}
+The previous task and its plan are CANCELLED. Do NOT continue the old plan and do not finish work that this instruction makes irrelevant (abandon any long-running command or waiting step that belonged to it). Treat the instruction above as the new task and start from the latest state.`;
+}
 
----
-## User Intervention (via /btw)
-`;this._extraSystemPrompt?this._extraSystemPrompt+=t+e.trim():this._extraSystemPrompt=`
-## User Intervention (via /btw)
-`+e.trim()}setBtwConflictEvaluator(e,t){this._btwEvaluatorOverride=e,t&&t>0&&(this._btwEvaluationTimeoutMs=t)}_resolveBtwEvaluator(){if(this._btwEvaluatorOverride!==null)return this._btwEvaluatorOverride?this._btwEvaluatorOverride:(e,t)=>this._llmBtwConflictEvaluator(e,t)}async _llmBtwConflictEvaluator(e,t){let n=await this._llmProvider.complete(Js(e,t),void 0,0);return Xs(n?.content||"")}async injectBtwHint(e){let t=(e||"").trim();if(!t)return{kind:"ignored"};let n=zs(t);if(n==="cancel")return this._currentToolController?(this._currentToolController.abort(),console.log("[BTW] Cancelling current tool execution..."),{kind:"cancelled",toolCancelled:!0}):this._supersede(t,"user requested cancellation (/btw cancel)");if(n==="supersede")return this._supersede(t,"instruction replaces the running task");if(n==="hint")return this._queueHint(t,!1);let r=this._resolveBtwEvaluator();if(r&&this._isRunning){let o;try{o=await this._withBtwTimeout(r(t,this._runningTaskContext()),this._btwEvaluationTimeoutMs)}catch(i){console.warn(`[BTW] conflict evaluation failed (non-fatal): ${i.message}`),o=void 0}if(o?.supersede)return this._supersede(t,o.reason||"evaluator: the running task is obsolete")}return this._queueHint(t,!1)}_queueHint(e,t){return this._pendingBtwHints.push({text:e,supersede:t}),this.appendExtraSystemPrompt(e),{kind:t?"superseded":"hint"}}_supersede(e,t){let n=this.cancelCurrentTool();return this._supersedeRequested=!0,this._pendingBtwHints.push({text:e,supersede:!0,reason:t}),this.appendExtraSystemPrompt(e),console.log(`[BTW] Task superseded (${t})${n?" \u2014 in-flight tool aborted":""}`),{kind:"superseded",toolCancelled:n,reason:t}}_runningTaskContext(){let e=[];e.push(`Task: ${this._taskDescription||"(unknown)"}`);let t=this._planner.currentPlan;if(t&&t.steps.length>0){let o=t.steps.slice(0,12).map((i,a)=>`${a+1}. ${i.description}`).join(`
-`);e.push(`Plan (step ${t.currentStep}/${t.steps.length}):
-${o}`)}let n=[...this._context.messages].reverse().find(o=>o.role==="assistant"&&o.content&&o.content.trim());n&&e.push(`Latest progress: ${n.content.slice(0,400)}`);let r=[...this._stepRecords].reverse().find(o=>o.toolExecutions.length>0);if(r){let o=r.toolExecutions.map(i=>i.toolName).join(", ");e.push(`Last tool calls: ${o}`)}return e.join(`
-
-`).slice(0,3e3)}async _withBtwTimeout(e,t){let n;try{return await Promise.race([e,new Promise((r,o)=>{n=setTimeout(()=>o(new Error(`btw conflict evaluation timed out after ${t}ms`)),t)})])}finally{n&&clearTimeout(n)}}_resetPendingBtwState(){this._pendingBtwHints=[],this._supersedeRequested=!1}cancelCurrentTool(){return this._currentToolController?(this._currentToolController.abort(),this._currentToolController=void 0,!0):!1}get isRunning(){return this._isRunning}get context(){return this._context}get planner(){return this._planner}get workingDirectory(){return this._workingDirectory}get systemPromptContent(){return this._context.systemPromptContent}get extraSystemPrompt(){return this._extraSystemPrompt}exportSessionState(){return this._context.repairToolCallPairs(),{messages:[...this._context.messages],systemPrompt:this._context.systemPromptContent,extraSystemPrompt:this._extraSystemPrompt}}_answerDanglingToolCalls(){let e=this._context.repairToolCallPairs();for(let t of e)this._onDidReceiveMessage.fire(t)}restoreFromSession(e,t,n){this._context.clear(),this._extraSystemPrompt=n||"";let r=t||tt(this._modeManager.currentMode,this._workingDirectory);this._context.setSystemPrompt(r+this._extraSystemPrompt);for(let i of e)this._context.addMessage(i);this._context.repairToolCallPairs();let o=e.find(i=>i.role==="user"&&i.content&&i.content.trim());o&&this._context.setTaskAnchor(o.content),this._contextHistoryForContinue=[...this._context.messages]}exportTaskLog(e,t){let n=Date.now(),r=this._stepRecords.reduce((a,l)=>a+l.toolExecutions.length,0),o=this._stepRecords.filter(a=>a.llmUsage),i=o.length>0?{promptTokens:o.reduce((a,l)=>a+(l.llmUsage.promptTokens||0),0),completionTokens:o.reduce((a,l)=>a+(l.llmUsage.completionTokens||0),0),totalTokens:o.reduce((a,l)=>a+(l.llmUsage.totalTokens||0),0),cachedTokens:o.reduce((a,l)=>a+(l.llmUsage.cachedTokens||0),0),cacheCreationTokens:o.reduce((a,l)=>a+(l.llmUsage.cacheCreationTokens||0),0)}:void 0;return{id:`task_${this._taskStartTime}_${Math.random().toString(36).substring(2,8)}`,task:this._taskDescription,mode:this._modeManager.currentMode,workingDirectory:this._workingDirectory,config:{provider:this._config.provider,model:this._config.model},systemPrompt:this._context.systemPromptContent,extraSystemPrompt:this._extraSystemPrompt||void 0,modelSwitches:this._modelSwitches.length>0?[...this._modelSwitches]:void 0,issueSignals:this._issueSignals.length>0?[...this._issueSignals]:void 0,steps:[...this._stepRecords],totalSteps:this._stepRecords.length,totalToolCalls:r,tokenUsage:i,status:e,error:t,startedAt:this._taskStartTime,finishedAt:n,durationMs:n-this._taskStartTime}}get lastTaskError(){return this._taskError}async run(e){if(this._isRunning)throw new Error("Agent is already running");this._isRunning=!0,this._cancellation=new Ve,this._stepRecords=[],this._modelSwitches=[],this._issueSignals=[],this._taskStartTime=Date.now(),this._taskDescription=e,this._taskError=void 0,this._llmRequestInFlight=!1,this._resetPendingBtwState(),this._todoList.isEmpty||(this._todoList.clear(),this._onDidUpdateTodos.fire(this._todoList.items));try{await this._tracing.runTask(this._taskTraceMeta(e),async t=>{await this._runTaskBody(e),t.update({output:this._finalAnswerForTrace(),level:this._taskError?"ERROR":"DEFAULT",statusMessage:this._taskError})})}finally{this._answerDanglingToolCalls(),this._isRunning=!1,this._cancellation?.dispose(),this._cancellation=void 0}}_taskTraceMeta(e){let t=this._modeManager.currentMode;return{name:"agent-task",input:e,tags:[t,this._config.provider,this._config.model],metadata:{mode:t,model:this._config.model,provider:this._config.provider,working_directory:this._workingDirectory,streaming:this._useStreaming,pid:process.pid},userId:Vs()}}_finalAnswerForTrace(){return[...this._context.messages].reverse().find(t=>t.role==="assistant"&&t.content&&t.content.trim())?.content}async _runTaskBody(e){try{if(this._memoryContext="",this._memory&&this._memory.recall)try{let o=await this._memory.recall(e);o&&(this._memoryContext=`
+// src/vs/workbench/contrib/agent/common/agent.ts
+var MAX_CONSECUTIVE_TOOL_ONLY_STEPS = 100;
+var MAX_VERIFICATION_ROUNDS = 2;
+var FALLBACK_PROBE_INITIAL_DELAY_MS = 3e4;
+var FALLBACK_PROBE_MAX_DELAY_MS = 12e4;
+var FALLBACK_PROBE_TIMEOUT_MS = 1e4;
+var FALLBACK_RECOVERY_SUCCESS_THRESHOLD = 2;
+var FALLBACK_RECOVERY_DETAIL = `primary model answered ${FALLBACK_RECOVERY_SUCCESS_THRESHOLD} consecutive health probes`;
+var MAX_REASONING_CHARS_LOGGED = 4e3;
+var REASONING_EXCERPT_CHARS = 2e3;
+var MAX_REASONING_CORRECTION_ROUNDS = 2;
+var REASONING_LOOP_MIN_REPEATS = 20;
+var REASONING_LOOP_MIN_SHARE = 0.2;
+var REASONING_LOOP_MIN_CHARS = 4e3;
+function countRepeatedReasoningLines(reasoning) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const line of reasoning.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1);
+  }
+  let max = 0;
+  for (const c of counts.values()) if (c > max) max = c;
+  return max;
+}
+function isDegenerateReasoning(reasoning) {
+  if (reasoning.length < REASONING_LOOP_MIN_CHARS) return false;
+  const lines = reasoning.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  if (lines.length < REASONING_LOOP_MIN_REPEATS * 2) return false;
+  const repeats = countRepeatedReasoningLines(reasoning);
+  return repeats >= REASONING_LOOP_MIN_REPEATS && repeats / lines.length >= REASONING_LOOP_MIN_SHARE;
+}
+var COMPLEX_TASK_KEYWORDS = [
+  "refactor",
+  "\u91CD\u6784",
+  "migrate",
+  "\u8FC1\u79FB",
+  "implement",
+  "\u5B9E\u73B0",
+  "redesign",
+  "\u91CD\u65B0\u8BBE\u8BA1",
+  "complex",
+  "\u590D\u6742",
+  "multiple files",
+  "architecture",
+  "\u67B6\u6784",
+  "performance",
+  "\u6027\u80FD",
+  "debugging",
+  "\u8C03\u8BD5",
+  "optimize",
+  "\u4F18\u5316",
+  "redesign",
+  "overhaul",
+  "rewrite",
+  "\u91CD\u5199"
+];
+function isApiTimeoutError(err) {
+  if (!err) return false;
+  const e = err;
+  if (e.name === "AbortError") return true;
+  const parts = [];
+  if (e.message) parts.push(e.message);
+  if (e.code) parts.push(String(e.code));
+  const cause = e.cause;
+  if (cause) {
+    if (cause.message) parts.push(cause.message);
+    if (cause.code) parts.push(String(cause.code));
+  }
+  const hay = parts.join(" ").toLowerCase();
+  return /timed?\s*out|timeout|etimedout|esockettimedout|econnaborted|und_err_connect_timeout|und_err_headers_timeout|und_err_body_timeout/.test(hay);
+}
+function isApiRateLimitError(err) {
+  if (!err) return false;
+  const e = err;
+  const parts = [];
+  if (e.message) parts.push(e.message);
+  if (e.code) parts.push(String(e.code));
+  if (e.cause) {
+    if (e.cause.message) parts.push(e.cause.message);
+    if (e.cause.code) parts.push(String(e.cause.code));
+  }
+  const hay = parts.join(" ").toLowerCase();
+  if (/token usage exceeds|tokens per minute|requests per minute|\btpm\b|\brpm\b|rate[\s_-]?limit|too many requests/.test(hay)) {
+    return true;
+  }
+  const status = e.status ?? e.statusCode ?? e.cause?.status ?? e.cause?.statusCode;
+  if (status === 429) return true;
+  return /\b429\b/.test(hay);
+}
+function classifyApiFallback(err) {
+  if (isApiTimeoutError(err)) return "timeout";
+  if (isApiRateLimitError(err)) return "rate-limit";
+  return void 0;
+}
+function formatModelSwitch(e) {
+  const detail = e.detail ? ` (${e.detail})` : "";
+  switch (e.reason) {
+    case "fallback-timeout":
+      return `[MODEL] \u26A0 ${e.from} unreachable \u2192 switched to \u4FDD\u5E95\u6A21\u578B ${e.to}, retrying the same request${detail}`;
+    case "fallback-rate-limit":
+      return `[MODEL] \u26A0 ${e.from} rate-limited \u2192 switched to \u4FDD\u5E95\u6A21\u578B ${e.to}, retrying the same request${detail}`;
+    case "primary-recovered":
+      return `[MODEL] \u2713 ${e.to} reachable again \u2192 switched back from \u4FDD\u5E95\u6A21\u578B ${e.from}${detail}`;
+    case "profile":
+      return `[MODEL] \u21AA profile switch ${e.from} \u2192 ${e.to}${detail}`;
+    default:
+      return `[MODEL] \u21AA routed ${e.from} \u2192 ${e.to}${detail}`;
+  }
+}
+function formatReasoningForLog(reasoning) {
+  if (reasoning.length <= MAX_REASONING_CHARS_LOGGED) return reasoning;
+  const half = Math.floor(REASONING_EXCERPT_CHARS / 2);
+  const head = reasoning.slice(0, REASONING_EXCERPT_CHARS - half);
+  const tail2 = reasoning.slice(-half);
+  const elided = reasoning.length - head.length - tail2.length;
+  return `${head}
+... [${elided} chars of reasoning elided] ...
+${tail2}`;
+}
+var AgentLoop = class _AgentLoop {
+  constructor(_config, _llmProvider, _toolRegistry, _modeManager, _checkpointManager, _workingDirectory = process.cwd(), memory, tracing2) {
+    this._config = _config;
+    this._llmProvider = _llmProvider;
+    this._toolRegistry = _toolRegistry;
+    this._modeManager = _modeManager;
+    this._checkpointManager = _checkpointManager;
+    this._workingDirectory = _workingDirectory;
+    this._context = new AgentContext(_config.maxContextTokens, _config.maxOutputTokens, _llmProvider);
+    this._planner = new AgentPlanner(_llmProvider);
+    this._memory = memory?.enabled ? memory : void 0;
+    this._tracing = tracing2 ?? NOOP_TRACING;
+  }
+  _isRunning = false;
+  _cancellation;
+  _contextHistoryForContinue = [];
+  _onDidReceiveMessage = new Emitter();
+  onDidReceiveMessage = this._onDidReceiveMessage.event;
+  _onDidStreamToken = new Emitter();
+  onDidStreamToken = this._onDidStreamToken.event;
+  _onDidComplete = new Emitter();
+  onDidComplete = this._onDidComplete.event;
+  _onDidError = new Emitter();
+  onDidError = this._onDidError.event;
+  /**
+   * Fired after a file-mutating tool produced a displayable diff.
+   *
+   * Separate from `onDidReceiveMessage` on purpose: the message stream carries
+   * what the MODEL sees, and a colored diff must never enter the context. The
+   * CLI host subscribes here to print the diff card for the human.
+   */
+  _onDidReceiveToolDiff = new Emitter();
+  onDidReceiveToolDiff = this._onDidReceiveToolDiff.event;
+  /**
+   * Fired after `todo_write` replaced the checklist, so the host can render it.
+   *
+   * Separate from `onDidReceiveMessage` for the same reason as the diff event: the
+   * checklist is display/planning state, and putting it in the message history
+   * would make the model re-read its own plan as conversation on every request.
+   */
+  _onDidUpdateTodos = new Emitter();
+  onDidUpdateTodos = this._onDidUpdateTodos.event;
+  /**
+   * The model's task checklist, owned by the agent so a `todo_write` call from any
+   * step lands in the same list and clearing it on a new task is automatic.
+   */
+  _todoList = new TodoList();
+  /** Register `todo_write` and give the loop the list it should report. */
+  registerTodoTool(registry = this._toolRegistry) {
+    registry.register(new TodoWriteTool(this._todoList));
+  }
+  _context;
+  _planner;
+  _useStreaming = false;
+  _extraSystemPrompt = "";
+  /** Shared-memory (tdai_agent_mem) recall block, rebuilt on every run(). */
+  _memoryContext = "";
+  _memory;
+  /**
+   * Langfuse observability. Defaults to a shared no-op, so every existing
+   * construction site (and every test) keeps working without tracing.
+   */
+  _tracing;
+  /** Pending /btw hints injected during agent execution — consumed each loop iteration. */
+  _pendingBtwHints = [];
+  /**
+   * Set when an in-flight /btw instruction supersedes the running task. The
+   * loop reads it twice: to abandon the remaining tool calls of the step that
+   * was already planned, and — once the hint is drained — to reset itself.
+   */
+  _supersedeRequested = false;
+  /**
+   * Optional LLM-backed evaluator deciding whether an ambiguous /btw
+   * instruction supersedes the running task.
+   *
+   * `undefined` → use the built-in LLM evaluator; `null` → keyword-only.
+   */
+  _btwEvaluatorOverride = void 0;
+  /** Upper bound on one conflict-evaluation call, so `/btw` never hangs the REPL. */
+  _btwEvaluationTimeoutMs = 2e4;
+  /** AbortController for the currently executing tool, if any. Allows /btw cancel. */
+  _currentToolController;
+  // ---- Model fallback (保底模型) ----
+  // When the active scenario/default model times out, the agent swaps to this
+  // model and retries the same request. Configured via config.yaml
+  // `model_routing.fallback`.
+  _fallbackConfig;
+  _fallbackProvider;
+  _usingFallback = false;
+  /** Why the current fallback happened — decides what counts as "recovered". */
+  _fallbackKind;
+  // ---- Model switch reporting + fallback supervision ----
+  // The model that was active before the fallback swap; the probe returns to it.
+  _primaryConfig;
+  _primaryProvider;
+  _probeTimer;
+  _probeDelayMs = FALLBACK_PROBE_INITIAL_DELAY_MS;
+  _probeInitialDelayMs = FALLBACK_PROBE_INITIAL_DELAY_MS;
+  _probeMaxDelayMs = FALLBACK_PROBE_MAX_DELAY_MS;
+  /** Set true while an LLM request is in flight on the current provider. */
+  _llmRequestInFlight = false;
+  /** A background probe found the primary model healthy while a request was in flight. */
+  _primaryRecovered = false;
+  /**
+   * Consecutive healthy probes seen while on the 保底 model. A single success is
+   * not enough to switch back (the primary can flap: answer once, then fail
+   * again), so the agent waits for FALLBACK_RECOVERY_SUCCESS_THRESHOLD in a row.
+   */
+  _primaryHealthyProbes = 0;
+  /** Set by a model switch whose history no longer fits the new model's window. */
+  _pendingForceCompact = false;
+  _onDidSwitchModel = new Emitter();
+  /** Fired on every runtime model switch (routing / fallback / recovery). */
+  onDidSwitchModel = this._onDidSwitchModel.event;
+  /**
+   * Renders a model-switch message. Overridable so the CLI can colorize it;
+   * defaults to a plain single line so a switch is never invisible in any host.
+   */
+  _modelSwitchLogger = (e) => console.log(formatModelSwitch(e));
+  // ---- Per-task execution tracing ----
+  _stepRecords = [];
+  _modelSwitches = [];
+  /**
+   * Problems observed during this task, recorded so the self-evolution evidence
+   * scan can tie a defect to the runs that actually hit it. Kept separate from
+   * `modelSwitches` because these are failure modes, not routing decisions.
+   */
+  _issueSignals = [];
+  /** Record one issue signal, de-duplicated per (kind, step, detail). */
+  _noteSignal(kind, detail, stepIndex) {
+    const last = this._issueSignals[this._issueSignals.length - 1];
+    if (last && last.kind === kind && last.stepIndex === stepIndex && last.detail === detail) {
+      return;
+    }
+    this._issueSignals.push({ kind, detail: detail ? detail.slice(0, 200) : void 0, stepIndex });
+  }
+  _taskStartTime = 0;
+  _taskDescription = "";
+  _taskError;
+  /**
+   * Switch the agent onto another model (scenario routing, /profile, or an
+   * explicit host action) and report it as a user-visible model switch.
+   */
+  swapProvider(config, provider, reason = "routing") {
+    const fromModel = this._config.model;
+    this._applyModelSwitch(config, provider);
+    this._usingFallback = false;
+    this._primaryRecovered = false;
+    this._primaryHealthyProbes = 0;
+    this._fallbackKind = void 0;
+    this._stopRecoveryProbe();
+    if (config.model !== fromModel) {
+      this._reportModelSwitch({
+        from: fromModel,
+        to: config.model,
+        reason,
+        toFallback: false
+      });
+    }
+  }
+  /**
+   * Install the switch renderer used by hosts that want a colorized line.
+   * The agent always fires `onDidSwitchModel`; this only controls the direct
+   * console output, which keeps a switch visible even without a listener.
+   */
+  setModelSwitchLogger(logger) {
+    this._modelSwitchLogger = logger;
+  }
+  /**
+   * Move the agent onto another model, keeping the conversation usable.
+   *
+   * Everything the agent needs to answer correctly lives in the context, so a
+   * switch must carry the model's budgets over AND drop chain-of-thought that
+   * belongs to the previous model — otherwise the sliding window keeps more
+   * history than the new model accepts (silent force-compaction) and the new
+   * model is fed another model's thinking (incoherent continuation, repetition
+   * loops). This is the fix for "模型一切换，上下文就不对了".
+   */
+  _applyModelSwitch(config, provider) {
+    const modelChanged = config.model !== this._config.model;
+    this._config = config;
+    this._llmProvider = provider;
+    this._context.swapTokenCounter(provider);
+    if (modelChanged) {
+      this._context.setModelBudget(config.maxContextTokens, config.maxOutputTokens);
+      const newModelThinks = provider.supportsReasoning?.() ?? false;
+      const dropped = newModelThinks ? 0 : this._context.dropReasoningContent();
+      if (this._context.isOverBudget) {
+        this._pendingForceCompact = true;
+        console.warn(
+          `[MODEL] history (~${this._context.estimatedTokens} tokens) exceeds ${config.model}'s input budget (${this._context.inputBudget} tokens) \u2014 compacting conversation`
+        );
+      }
+      if (dropped > 0) {
+        console.warn(`[MODEL] dropped reasoning_content from ${dropped} message(s) belonging to the previous model`);
+      }
+    }
+    this._planner.swapProvider(provider);
+  }
+  /** Fire the switch event and render it (host logger or plain console). */
+  _reportModelSwitch(event) {
+    this._modelSwitches.push({ ...event, at: Date.now() });
+    this._onDidSwitchModel.fire(event);
+    try {
+      this._modelSwitchLogger(event);
+    } catch {
+    }
+  }
+  /**
+   * Register the 保底 (guaranteed fallback) model. When the active model's API
+   * call times out, the agent automatically switches to this model and retries
+   * the same request instead of failing the task.
+   */
+  setFallback(config, provider) {
+    this._fallbackConfig = config;
+    this._fallbackProvider = provider;
+  }
+  /** Whether a 保底 (fallback) model is registered. */
+  get hasFallback() {
+    return !!this._fallbackConfig && !!this._fallbackProvider;
+  }
+  /**
+   * Switch to the 保底 model after the primary/scenario model became
+   * unreachable, retry the same request, and start supervising the primary
+   * model so the agent returns to it as soon as it answers again.
+   */
+  _enterFallback(err, fromConfig, fromProvider, kind) {
+    const to = this._fallbackConfig;
+    this._primaryConfig = fromConfig;
+    this._primaryProvider = fromProvider;
+    this._applyModelSwitch(to, this._fallbackProvider);
+    this._usingFallback = true;
+    this._primaryHealthyProbes = 0;
+    this._primaryRecovered = false;
+    this._fallbackKind = kind;
+    this._noteSignal("model-fallback", `${fromConfig.model} \u2192 ${to.model} (${kind}): ${err.message}`);
+    this._reportModelSwitch({
+      from: fromConfig.model,
+      to: to.model,
+      reason: kind === "rate-limit" ? "fallback-rate-limit" : "fallback-timeout",
+      toFallback: true,
+      detail: `${kind === "rate-limit" ? "rate limit" : "timeout"}: ${err.message}`
+    });
+    this._startRecoveryProbe();
+  }
+  /**
+   * Background supervision of the primary model while running on the 保底
+   * model: probe it with a cheap health check (backing off 30s → 120s) and
+   * switch back the moment it responds. The timer is unref'd so a pending probe
+   * never keeps the CLI process alive.
+   */
+  _startRecoveryProbe() {
+    if (this._probeTimer) return;
+    if (!this._primaryProvider || !this._primaryProvider.healthCheck) return;
+    this._probeDelayMs = this._probeInitialDelayMs;
+    this._scheduleProbe();
+  }
+  /**
+   * Override the recovery-probe schedule (default 30s, backing off to 120s).
+   * Exposed so a host can probe more or less aggressively, and so the
+   * switch-back path is testable without waiting a minute.
+   */
+  setProbeSchedule(initialDelayMs, maxDelayMs = initialDelayMs) {
+    this._probeInitialDelayMs = Math.max(50, initialDelayMs);
+    this._probeMaxDelayMs = Math.max(this._probeInitialDelayMs, maxDelayMs);
+  }
+  _scheduleProbe() {
+    if (!this._primaryProvider || !this._usingFallback) return;
+    this._probeTimer = setTimeout(() => {
+      this._probeTimer = void 0;
+      void this._runProbe();
+    }, this._probeDelayMs);
+    this._probeTimer.unref?.();
+  }
+  async _runProbe() {
+    const provider = this._primaryProvider;
+    const config = this._primaryConfig;
+    if (!this._usingFallback || !provider || !config) return;
+    let reachable = false;
+    try {
+      reachable = await provider.healthCheck(FALLBACK_PROBE_TIMEOUT_MS, {
+        throttleSensitive: this._fallbackKind === "rate-limit"
+      }) === true;
+    } catch {
+      reachable = false;
+    }
+    if (!this._usingFallback || this._primaryProvider !== provider) return;
+    if (reachable) {
+      this._primaryHealthyProbes++;
+      if (this._primaryHealthyProbes >= FALLBACK_RECOVERY_SUCCESS_THRESHOLD) {
+        this._clearProbeTimer();
+        if (this._llmRequestInFlight) {
+          this._primaryRecovered = true;
+          console.warn("[MODEL] primary model reachable again \u2014 switching back at the next step");
+        } else {
+          this._switchBackToPrimary(FALLBACK_RECOVERY_DETAIL);
+        }
+        return;
+      }
+      console.log(
+        `[MODEL] ${config.model} answered a probe (${this._primaryHealthyProbes}/${FALLBACK_RECOVERY_SUCCESS_THRESHOLD}) \u2014 confirming recovery before switching back`
+      );
+      this._probeDelayMs = this._probeInitialDelayMs;
+      this._scheduleProbe();
+      return;
+    }
+    this._primaryHealthyProbes = 0;
+    this._probeDelayMs = Math.min(this._probeDelayMs * 2, this._probeMaxDelayMs);
+    this._scheduleProbe();
+  }
+  /** Return to the primary/scenario model after it recovered. */
+  _switchBackToPrimary(detail) {
+    const config = this._primaryConfig;
+    const provider = this._primaryProvider;
+    if (!config || !provider) return;
+    const fromModel = this._config.model;
+    this._applyModelSwitch(config, provider);
+    this._usingFallback = false;
+    this._fallbackKind = void 0;
+    this._primaryHealthyProbes = 0;
+    this._primaryRecovered = false;
+    this._stopRecoveryProbe();
+    this._reportModelSwitch({
+      from: fromModel,
+      to: config.model,
+      reason: "primary-recovered",
+      toFallback: false,
+      detail
+    });
+  }
+  _stopRecoveryProbe() {
+    this._clearProbeTimer();
+    this._primaryConfig = void 0;
+    this._primaryProvider = void 0;
+  }
+  _clearProbeTimer() {
+    if (this._probeTimer) {
+      clearTimeout(this._probeTimer);
+      this._probeTimer = void 0;
+    }
+  }
+  /** The model id currently used by the agent (changes after a fallback swap). */
+  get activeModel() {
+    return this._config.model;
+  }
+  /** Whether the agent is currently running on the fallback (保底) model. */
+  get usingFallback() {
+    return this._usingFallback;
+  }
+  setStreaming(enabled) {
+    this._useStreaming = enabled;
+  }
+  setExtraSystemPrompt(prompt) {
+    this._extraSystemPrompt = prompt;
+  }
+  /**
+   * Append an additional instruction/hint to the extra system prompt.
+   * Used by in-flight /btw hints so they persist into subsequent run() calls.
+   * Multiple hints accumulate; each hint is separated clearly.
+   */
+  appendExtraSystemPrompt(hint) {
+    const separator = "\n\n---\n## User Intervention (via /btw)\n";
+    if (this._extraSystemPrompt) {
+      this._extraSystemPrompt += separator + hint.trim();
+    } else {
+      this._extraSystemPrompt = "\n## User Intervention (via /btw)\n" + hint.trim();
+    }
+  }
+  /**
+   * Override the evaluator used to decide whether an ambiguous in-flight /btw
+   * instruction supersedes the running task.
+   *
+   * Pass a function to replace the built-in LLM evaluator (used by tests for
+   * determinism), or `null` to disable evaluation entirely (keyword-only).
+   */
+  setBtwConflictEvaluator(evaluator, timeoutMs) {
+    this._btwEvaluatorOverride = evaluator;
+    if (timeoutMs && timeoutMs > 0) {
+      this._btwEvaluationTimeoutMs = timeoutMs;
+    }
+  }
+  /** The evaluator to use for ambiguous instructions, if any. */
+  _resolveBtwEvaluator() {
+    if (this._btwEvaluatorOverride === null) return void 0;
+    if (this._btwEvaluatorOverride) return this._btwEvaluatorOverride;
+    return (hint, runningTask) => this._llmBtwConflictEvaluator(hint, runningTask);
+  }
+  /**
+   * Built-in evaluator: one short LLM call that judges whether the instruction
+   * replaces the running task. Uses the agent's *active* provider (so a
+   * /profile switch or 保底 fallback is respected) and never passes tools.
+   */
+  async _llmBtwConflictEvaluator(hint, runningTask) {
+    const reply = await this._llmProvider.complete(buildBtwConflictPrompt(hint, runningTask), void 0, 0);
+    return parseBtwConflictVerdict(reply?.content || "");
+  }
+  /**
+   * Inject a /btw instruction while the agent is actively running.
+   *
+   * The instruction is first classified:
+   *   - additive hint   → queued and delivered as a User message at the start of
+   *                       the next ReAct loop iteration (the plan keeps running).
+   *   - supersede       → the in-flight tool call is aborted immediately, the
+   *                       remaining tool calls of the current step are skipped,
+   *                       the plan is dropped, and the instruction becomes the
+   *                       new task.
+   *
+   * Ambiguous instructions are handed to the configured evaluator (an LLM call
+   * by default in the CLI host); if it cannot answer in time, the instruction
+   * is treated as an additive hint — never as a destructive supersede.
+   *
+   * Special commands:
+   *   "/btw cancel" or "/btw abort" — cancels the currently running tool immediately.
+   */
+  async injectBtwHint(hint) {
+    const trimmed = (hint || "").trim();
+    if (!trimmed) return { kind: "ignored" };
+    const intent = classifyBtwIntent(trimmed);
+    if (intent === "cancel") {
+      if (this._currentToolController) {
+        this._currentToolController.abort();
+        console.log("[BTW] Cancelling current tool execution...");
+        return { kind: "cancelled", toolCancelled: true };
+      }
+      return this._supersede(trimmed, "user requested cancellation (/btw cancel)");
+    }
+    if (intent === "supersede") {
+      return this._supersede(trimmed, "instruction replaces the running task");
+    }
+    if (intent === "hint") {
+      return this._queueHint(trimmed, false);
+    }
+    const evaluator = this._resolveBtwEvaluator();
+    if (evaluator && this._isRunning) {
+      let verdict;
+      try {
+        verdict = await this._withBtwTimeout(
+          evaluator(trimmed, this._runningTaskContext()),
+          this._btwEvaluationTimeoutMs
+        );
+      } catch (err) {
+        console.warn(`[BTW] conflict evaluation failed (non-fatal): ${err.message}`);
+        verdict = void 0;
+      }
+      if (verdict?.supersede) {
+        return this._supersede(trimmed, verdict.reason || "evaluator: the running task is obsolete");
+      }
+    }
+    return this._queueHint(trimmed, false);
+  }
+  /** Queue an additive hint (persisted into extraSystemPrompt, as before). */
+  _queueHint(text, supersede) {
+    this._pendingBtwHints.push({ text, supersede });
+    this.appendExtraSystemPrompt(text);
+    return { kind: supersede ? "superseded" : "hint" };
+  }
+  /**
+   * Abort whatever is in flight and mark the running task as superseded.
+   *
+   * The abort usually arrives while a long tool call (build, poll, CI wait) is
+   * running: without it the user's redirect would only be read after that call
+   * finally returns — which is exactly the wasted work this exists to prevent.
+   */
+  _supersede(text, reason) {
+    const toolCancelled = this.cancelCurrentTool();
+    this._supersedeRequested = true;
+    this._pendingBtwHints.push({ text, supersede: true, reason });
+    this.appendExtraSystemPrompt(text);
+    console.log(`[BTW] Task superseded (${reason})${toolCancelled ? " \u2014 in-flight tool aborted" : ""}`);
+    return { kind: "superseded", toolCancelled, reason };
+  }
+  /**
+   * A compact description of what the agent is doing right now, used as input
+   * to the conflict evaluator. Deliberately short: it only needs enough context
+   * to tell "same goal, extra detail" from "different goal, abort".
+   */
+  _runningTaskContext() {
+    const parts = [];
+    parts.push(`Task: ${this._taskDescription || "(unknown)"}`);
+    const plan = this._planner.currentPlan;
+    if (plan && plan.steps.length > 0) {
+      const shown = plan.steps.slice(0, 12).map((s, i) => `${i + 1}. ${s.description}`).join("\n");
+      parts.push(`Plan (step ${plan.currentStep}/${plan.steps.length}):
+${shown}`);
+    }
+    const lastAssistant = [...this._context.messages].reverse().find((m) => m.role === "assistant" /* Assistant */ && m.content && m.content.trim());
+    if (lastAssistant) {
+      parts.push(`Latest progress: ${lastAssistant.content.slice(0, 400)}`);
+    }
+    const lastTool = [...this._stepRecords].reverse().find((s) => s.toolExecutions.length > 0);
+    if (lastTool) {
+      const names = lastTool.toolExecutions.map((t) => t.toolName).join(", ");
+      parts.push(`Last tool calls: ${names}`);
+    }
+    return parts.join("\n\n").slice(0, 3e3);
+  }
+  /** Race a promise against a timeout (used to bound the evaluator call). */
+  async _withBtwTimeout(promise, ms) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`btw conflict evaluation timed out after ${ms}ms`)), ms);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  /**
+   * Drop any /btw state left over from a previous run.
+   *
+   * Called when a new task starts: a hint queued while the agent was idle (or a
+   * `/btw cancel` with nothing to cancel) must never be replayed against the
+   * next task and silently supersede it.
+   */
+  _resetPendingBtwState() {
+    this._pendingBtwHints = [];
+    this._supersedeRequested = false;
+  }
+  /**
+   * Cancel the currently executing tool (if any).
+   * Returns true if a tool was cancelled, false if no tool was running.
+   */
+  cancelCurrentTool() {
+    if (this._currentToolController) {
+      this._currentToolController.abort();
+      this._currentToolController = void 0;
+      return true;
+    }
+    return false;
+  }
+  get isRunning() {
+    return this._isRunning;
+  }
+  get context() {
+    return this._context;
+  }
+  get planner() {
+    return this._planner;
+  }
+  get workingDirectory() {
+    return this._workingDirectory;
+  }
+  get systemPromptContent() {
+    return this._context.systemPromptContent;
+  }
+  get extraSystemPrompt() {
+    return this._extraSystemPrompt;
+  }
+  /**
+   * Export the current agent state for session persistence.
+   */
+  exportSessionState() {
+    this._context.repairToolCallPairs();
+    return {
+      messages: [...this._context.messages],
+      systemPrompt: this._context.systemPromptContent,
+      extraSystemPrompt: this._extraSystemPrompt
+    };
+  }
+  /**
+   * Close the tool-call pairing invariant after a run ends.
+   *
+   * A run can stop anywhere: cancelled at an iteration boundary, aborted
+   * inside a tool, or thrown out of the loop — in every case the assistant's
+   * `tool_calls` are already in the context while their results are not. The
+   * synthesized "[not executed] …" answers keep both the next request and the
+   * next resume valid.
+   */
+  _answerDanglingToolCalls() {
+    const inserted = this._context.repairToolCallPairs();
+    for (const msg of inserted) {
+      this._onDidReceiveMessage.fire(msg);
+    }
+  }
+  /**
+   * Restore agent state from a previously saved session.
+   * This fully resets the current context and replays the saved messages.
+   */
+  restoreFromSession(messages, systemPrompt, extraSystemPrompt) {
+    this._context.clear();
+    this._extraSystemPrompt = extraSystemPrompt || "";
+    const fullSystemPrompt = systemPrompt || getSystemPrompt(this._modeManager.currentMode, this._workingDirectory);
+    this._context.setSystemPrompt(fullSystemPrompt + this._extraSystemPrompt);
+    for (const msg of messages) {
+      this._context.addMessage(msg);
+    }
+    this._context.repairToolCallPairs();
+    const firstUser = messages.find((m) => m.role === "user" /* User */ && m.content && m.content.trim());
+    if (firstUser) {
+      this._context.setTaskAnchor(firstUser.content);
+    }
+    this._contextHistoryForContinue = [...this._context.messages];
+  }
+  /**
+   * Export a complete task execution log for troubleshooting.
+   * Includes per-step LLM interactions, tool calls, timing, and errors.
+   */
+  exportTaskLog(status, error) {
+    const finishedAt = Date.now();
+    const totalToolCalls = this._stepRecords.reduce(
+      (sum, step) => sum + step.toolExecutions.length,
+      0
+    );
+    const usedSteps = this._stepRecords.filter((s) => s.llmUsage);
+    const tokenUsage = usedSteps.length > 0 ? {
+      promptTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage.promptTokens || 0), 0),
+      completionTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage.completionTokens || 0), 0),
+      totalTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage.totalTokens || 0), 0),
+      cachedTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage.cachedTokens || 0), 0),
+      cacheCreationTokens: usedSteps.reduce((sum, s) => sum + (s.llmUsage.cacheCreationTokens || 0), 0)
+    } : void 0;
+    return {
+      id: `task_${this._taskStartTime}_${Math.random().toString(36).substring(2, 8)}`,
+      task: this._taskDescription,
+      mode: this._modeManager.currentMode,
+      workingDirectory: this._workingDirectory,
+      config: {
+        provider: this._config.provider,
+        model: this._config.model
+      },
+      systemPrompt: this._context.systemPromptContent,
+      extraSystemPrompt: this._extraSystemPrompt || void 0,
+      modelSwitches: this._modelSwitches.length > 0 ? [...this._modelSwitches] : void 0,
+      issueSignals: this._issueSignals.length > 0 ? [...this._issueSignals] : void 0,
+      steps: [...this._stepRecords],
+      totalSteps: this._stepRecords.length,
+      totalToolCalls,
+      tokenUsage,
+      status,
+      error,
+      startedAt: this._taskStartTime,
+      finishedAt,
+      durationMs: finishedAt - this._taskStartTime
+    };
+  }
+  /** The error from the last task execution, if any. */
+  get lastTaskError() {
+    return this._taskError;
+  }
+  async run(userMessage) {
+    if (this._isRunning) {
+      throw new Error("Agent is already running");
+    }
+    this._isRunning = true;
+    this._cancellation = new CancellationTokenSource();
+    this._stepRecords = [];
+    this._modelSwitches = [];
+    this._issueSignals = [];
+    this._taskStartTime = Date.now();
+    this._taskDescription = userMessage;
+    this._taskError = void 0;
+    this._llmRequestInFlight = false;
+    this._resetPendingBtwState();
+    if (!this._todoList.isEmpty) {
+      this._todoList.clear();
+      this._onDidUpdateTodos.fire(this._todoList.items);
+    }
+    try {
+      await this._tracing.runTask(this._taskTraceMeta(userMessage), async (taskObs) => {
+        await this._runTaskBody(userMessage);
+        taskObs.update({
+          output: this._finalAnswerForTrace(),
+          level: this._taskError ? "ERROR" : "DEFAULT",
+          statusMessage: this._taskError
+        });
+      });
+    } finally {
+      this._answerDanglingToolCalls();
+      this._isRunning = false;
+      this._cancellation?.dispose();
+      this._cancellation = void 0;
+    }
+  }
+  /** Trace-level metadata for a task: cheap dimensions, no payloads. */
+  _taskTraceMeta(userMessage) {
+    const mode = this._modeManager.currentMode;
+    return {
+      name: "agent-task",
+      input: userMessage,
+      tags: [mode, this._config.provider, this._config.model],
+      metadata: {
+        mode,
+        model: this._config.model,
+        provider: this._config.provider,
+        working_directory: this._workingDirectory,
+        streaming: this._useStreaming,
+        pid: process.pid
+      },
+      userId: currentUserName()
+    };
+  }
+  /** The final assistant reply, used as the trace output. */
+  _finalAnswerForTrace() {
+    const last = [...this._context.messages].reverse().find((m) => m.role === "assistant" /* Assistant */ && m.content && m.content.trim());
+    return last?.content;
+  }
+  /**
+   * Per-task work, wrapped by the trace root in `run()`.
+   *
+   * Keeps the original contract: errors are recorded in `_taskError` and fired
+   * on `onDidError` instead of propagating to the caller.
+   */
+  async _runTaskBody(userMessage) {
+    try {
+      this._memoryContext = "";
+      if (this._memory && this._memory.recall) {
+        try {
+          const recalled = await this._memory.recall(userMessage);
+          if (recalled) {
+            this._memoryContext = `
 
 <shared-memory>
-${o}
-</shared-memory>`)}catch(o){console.warn(`[memory] recall failed (non-fatal): ${o.message}`)}let t=this._modeManager.currentMode;this._context.setSystemPrompt(tt(t,this._workingDirectory)+this._extraSystemPrompt+this._memoryContext);let n=D("user",e);this._context.addMessage(n),this._onDidReceiveMessage.fire(n),this._context.setTaskAnchor(e);let r=t==="agent"&&this._isComplexTask(e);if(r){let o=D("user",`[System note: Complex task detected \u2014 Deep Thinking Mode activated]
+${recalled}
+</shared-memory>`;
+          }
+        } catch (err) {
+          console.warn(`[memory] recall failed (non-fatal): ${err.message}`);
+        }
+      }
+      const mode = this._modeManager.currentMode;
+      this._context.setSystemPrompt(
+        getSystemPrompt(mode, this._workingDirectory) + this._extraSystemPrompt + this._memoryContext
+      );
+      const userMsg = createMessage("user" /* User */, userMessage);
+      this._context.addMessage(userMsg);
+      this._onDidReceiveMessage.fire(userMsg);
+      this._context.setTaskAnchor(userMessage);
+      const isComplex = mode === "agent" && this._isComplexTask(userMessage);
+      if (isComplex) {
+        const deepThinkMsg = createMessage(
+          "user" /* User */,
+          `[System note: Complex task detected \u2014 Deep Thinking Mode activated]
 This appears to be a non-trivial task. Before making any changes:
 1. Explore the relevant code thoroughly (3+ read_file/search_text calls)
 2. Build a detailed mental model of the affected components
 3. Consider edge cases, side effects, and interactions between files
 4. Plan your changes step-by-step, verifying each independently
-5. Do NOT conclude until you have run all relevant tests successfully`);this._context.addMessage(o)}if(this._modeManager.shouldPlanFirst?(await this._runPlanMode(e),await this._executePlanCore(this._cancellation.token)):await this._runAgentLoop(this._cancellation.token,!r),this._memory&&this._memory.capture&&!this._taskError){let o=[...this._context.messages].reverse().find(i=>i.role==="assistant"&&i.content&&i.content.trim());await this._memory.capture(e,o?.content||"")}this._onDidComplete.fire()}catch(t){t instanceof Error&&t.message==="Cancelled"?this._taskError="Cancelled":(this._taskError=t.message,this._onDidError.fire(t instanceof Error?t:new Error(String(t))))}}cancel(){this._cancellation?.cancel()}async continueSession(){if(this._isRunning)throw new Error("Agent is already running");if(this._contextHistoryForContinue.length===0)throw new Error("No previous session to continue");this._isRunning=!0,this._cancellation=new Ve,this._stepRecords=[],this._modelSwitches=[],this._issueSignals=[],this._taskStartTime=Date.now(),this._taskDescription="(continue previous session)",this._taskError=void 0,this._resetPendingBtwState();try{let e=this._context.taskAnchorContent;this._context.clear(),e&&this._context.setTaskAnchor(e),this._context.setSystemPrompt(tt(this._modeManager.currentMode,this._workingDirectory)+this._extraSystemPrompt);for(let n of this._contextHistoryForContinue)this._context.addMessage(n);let t=D("user","Please continue from where you left off. The previous response was cut off due to limits. Continue your work.");this._context.addMessage(t),this._onDidReceiveMessage.fire(t),await this._runAgentLoop(this._cancellation.token),this._onDidComplete.fire()}catch(e){e instanceof Error&&e.message==="Cancelled"||this._onDidError.fire(e instanceof Error?e:new Error(String(e)))}finally{this._answerDanglingToolCalls(),this._isRunning=!1,this._cancellation?.dispose(),this._cancellation=void 0}}async executePlan(e){if(this._isRunning)throw new Error("Agent is already running");this._isRunning=!0,this._cancellation=new Ve,this._stepRecords=[],this._modelSwitches=[],this._issueSignals=[],this._taskStartTime=Date.now(),this._taskDescription=e?.task||"(execute plan)",this._taskError=void 0,this._resetPendingBtwState();try{await this._executePlanCore(this._cancellation.token,e),this._onDidComplete.fire()}catch(t){t instanceof Error&&t.message==="Cancelled"||this._onDidError.fire(t instanceof Error?t:new Error(String(t)))}finally{this._answerDanglingToolCalls(),this._isRunning=!1,this._cancellation?.dispose(),this._cancellation=void 0}}async _executePlanCore(e,t){let n=t||this._planner.currentPlan;if(!n)throw new Error("No plan to execute. Run Plan mode first.");this._modeManager.switchMode("agent"),this._context.setSystemPrompt(tt("agent",this._workingDirectory)+this._extraSystemPrompt),this._context.taskAnchorContent===void 0&&n.task&&this._context.setTaskAnchor(n.task);let r=n.steps.map((i,a)=>`${a+1}. ${i.description}`).join(`
-`),o=D("user",`Execute this plan step by step:
-${r}`);this._context.addMessage(o),this._onDidReceiveMessage.fire(o),await this._runAgentLoop(e)}async _runPlanMode(e){let n=(await this._planner.createPlan(e)).steps.map((o,i)=>`${i+1}. ${o.description}`).join(`
-`),r=D("assistant",`## Implementation Plan
+5. Do NOT conclude until you have run all relevant tests successfully`
+        );
+        this._context.addMessage(deepThinkMsg);
+      }
+      if (this._modeManager.shouldPlanFirst) {
+        await this._runPlanMode(userMessage);
+        await this._executePlanCore(this._cancellation.token);
+      } else {
+        await this._runAgentLoop(this._cancellation.token, !isComplex);
+      }
+      if (this._memory && this._memory.capture && !this._taskError) {
+        const lastAssistant = [...this._context.messages].reverse().find((m) => m.role === "assistant" /* Assistant */ && m.content && m.content.trim());
+        await this._memory.capture(userMessage, lastAssistant?.content || "");
+      }
+      this._onDidComplete.fire();
+    } catch (err) {
+      if (!(err instanceof Error && err.message === "Cancelled")) {
+        this._taskError = err.message;
+        this._onDidError.fire(err instanceof Error ? err : new Error(String(err)));
+      } else {
+        this._taskError = "Cancelled";
+      }
+    }
+  }
+  cancel() {
+    this._cancellation?.cancel();
+  }
+  /**
+   * Continue a previously paused agent session (e.g., after hitting step limit).
+   * Restores the saved conversation context and resumes the agent loop.
+   */
+  async continueSession() {
+    if (this._isRunning) {
+      throw new Error("Agent is already running");
+    }
+    if (this._contextHistoryForContinue.length === 0) {
+      throw new Error("No previous session to continue");
+    }
+    this._isRunning = true;
+    this._cancellation = new CancellationTokenSource();
+    this._stepRecords = [];
+    this._modelSwitches = [];
+    this._issueSignals = [];
+    this._taskStartTime = Date.now();
+    this._taskDescription = "(continue previous session)";
+    this._taskError = void 0;
+    this._resetPendingBtwState();
+    try {
+      const pinnedTask = this._context.taskAnchorContent;
+      this._context.clear();
+      if (pinnedTask) {
+        this._context.setTaskAnchor(pinnedTask);
+      }
+      this._context.setSystemPrompt(
+        getSystemPrompt(this._modeManager.currentMode, this._workingDirectory) + this._extraSystemPrompt
+      );
+      for (const msg of this._contextHistoryForContinue) {
+        this._context.addMessage(msg);
+      }
+      const continueMsg = createMessage(
+        "user" /* User */,
+        "Please continue from where you left off. The previous response was cut off due to limits. Continue your work."
+      );
+      this._context.addMessage(continueMsg);
+      this._onDidReceiveMessage.fire(continueMsg);
+      await this._runAgentLoop(this._cancellation.token);
+      this._onDidComplete.fire();
+    } catch (err) {
+      if (!(err instanceof Error && err.message === "Cancelled")) {
+        this._onDidError.fire(err instanceof Error ? err : new Error(String(err)));
+      }
+    } finally {
+      this._answerDanglingToolCalls();
+      this._isRunning = false;
+      this._cancellation?.dispose();
+      this._cancellation = void 0;
+    }
+  }
+  async executePlan(plan) {
+    if (this._isRunning) {
+      throw new Error("Agent is already running");
+    }
+    this._isRunning = true;
+    this._cancellation = new CancellationTokenSource();
+    this._stepRecords = [];
+    this._modelSwitches = [];
+    this._issueSignals = [];
+    this._taskStartTime = Date.now();
+    this._taskDescription = plan?.task || "(execute plan)";
+    this._taskError = void 0;
+    this._resetPendingBtwState();
+    try {
+      await this._executePlanCore(this._cancellation.token, plan);
+      this._onDidComplete.fire();
+    } catch (err) {
+      if (!(err instanceof Error && err.message === "Cancelled")) {
+        this._onDidError.fire(err instanceof Error ? err : new Error(String(err)));
+      }
+    } finally {
+      this._answerDanglingToolCalls();
+      this._isRunning = false;
+      this._cancellation?.dispose();
+      this._cancellation = void 0;
+    }
+  }
+  /**
+   * Core plan execution logic. Assumes _isRunning and _cancellation are already set up.
+   * Used both by the public executePlan() method and by run() in Plan mode (auto-execution).
+   */
+  async _executePlanCore(token, plan) {
+    const existingPlan = plan || this._planner.currentPlan;
+    if (!existingPlan) {
+      throw new Error("No plan to execute. Run Plan mode first.");
+    }
+    this._modeManager.switchMode("agent" /* Agent */);
+    this._context.setSystemPrompt(getSystemPrompt("agent" /* Agent */, this._workingDirectory) + this._extraSystemPrompt);
+    if (this._context.taskAnchorContent === void 0 && existingPlan.task) {
+      this._context.setTaskAnchor(existingPlan.task);
+    }
+    const planSteps = existingPlan.steps.map((s, i) => `${i + 1}. ${s.description}`).join("\n");
+    const userMsg = createMessage(
+      "user" /* User */,
+      `Execute this plan step by step:
+${planSteps}`
+    );
+    this._context.addMessage(userMsg);
+    this._onDidReceiveMessage.fire(userMsg);
+    await this._runAgentLoop(token);
+  }
+  async _runPlanMode(task) {
+    const plan = await this._planner.createPlan(task);
+    const planSummary = plan.steps.map((s, i) => `${i + 1}. ${s.description}`).join("\n");
+    const planMsg = createMessage(
+      "assistant" /* Assistant */,
+      `## Implementation Plan
 
-${n}
+${planSummary}
 
-Executing plan automatically...`);this._context.addMessage(r),this._onDidReceiveMessage.fire(r)}async _runAgentLoop(e,t=!1){let n=0,r=0,o=0,i=0,a=!1;for(;n<this._config.maxSteps;){if(e.isCancellationRequested)throw new Error("Cancelled");let l=this._tracing.beginStep({name:`agent-step-${n}`,metadata:{step_index:n}});try{let d=!1;for(;this._pendingBtwHints.length>0;){let _=this._pendingBtwHints.shift();this._noteSignal(_.supersede?"task-superseded":"user-intervention",_.text,n);let k=D("user",Qs(_));_.supersede&&(d=!0,this._planner.reset(),this._taskDescription=_.text,this._context.setTaskAnchor(_.text),o=0,r=0),this._context.addMessage(k),this._onDidReceiveMessage.fire(k)}if(d&&(this._supersedeRequested=!1),this._usingFallback&&this._primaryRecovered&&(this._primaryRecovered=!1,this._switchBackToPrimary(er)),r>=ri){let _=D("assistant",`I've been calling tools without producing any analysis for ${r} consecutive steps. I may be stuck in a loop. Let me stop and summarize what I know so far. Please refine your request or check if I'm repeating myself.`);this._context.addMessage(_),this._onDidReceiveMessage.fire(_),this._noteSignal("step-limit",`${r} consecutive tool-only steps`,n);break}await this._context.compactIfNeeded(this._pendingForceCompact),this._pendingForceCompact=!1;let p=this._context.getContextWindow(),u,m=Date.now(),h={messageCount:0,estimatedTokens:0},f=0,w=3;for(this._llmRequestInFlight=!0;;){p=this._context.getContextWindow();let _=p.some(E=>E.role==="assistant"&&E.reasoningContent),k=this._llmProvider.supportsStreaming?.()??!0,v=this._llmProvider.supportsReasoning?.()??!1,C=this._modeManager.isReadOnly?this._toolRegistry.getReadOnlySchemas():this._toolRegistry.listSchemas();h={messageCount:p.length,estimatedTokens:p.reduce((E,R)=>E+this._llmProvider.countTokens(R.content)+(R.reasoningContent?this._llmProvider.countTokens(R.reasoningContent):0),0)};try{let E=this._useStreaming&&(!C||C.length===0)&&!_&&k&&!v;u=await this._tracing.runGeneration({name:E?"llm-call-stream":"llm-call",model:this._config.model,modelParameters:{temperature:this._config.temperature,...this._config.topK&&this._config.topK>0?{top_k:this._config.topK}:{},stream:E?1:0},input:p.map(R=>s._generationMessage(R)),startTime:new Date(m),metadata:{attempt:f+1,message_count:p.length,estimated_input_tokens:h.estimatedTokens,tool_count:C.length,using_fallback_model:this._usingFallback}},async R=>{let j;if(E){let F=[],P=this._llmProvider.stream(p,void 0,this._config.temperature,this._config.topK);for await(let le of P)F.push(le),this._onDidStreamToken.fire(le);j=D("assistant",F.join(""))}else j=await this._llmProvider.complete(p,C.length>0?C:void 0,this._config.temperature,this._config.topK);return R.update({output:s._generationResult(j),usageDetails:s._usageDetails(j.usage),metadata:{finish_reason:j.toolCalls?.length?"tool_calls":"stop"}}),j},l.ref);break}catch(E){let R=fi(E);if(R&&this._fallbackProvider&&this._fallbackConfig&&!this._usingFallback){this._enterFallback(E,this._config,this._llmProvider,R),this._pendingForceCompact&&(this._pendingForceCompact=!1,await this._context.compactIfNeeded(!0));continue}if(E instanceof Se&&f<w){f++,this._noteSignal("context-overflow",`retry ${f}/${w}: ${E.message}`,n),console.warn(`[Context Overflow] Conversation history too large \u2014 compacting and retrying (${f}/${w}): ${E.message}`),await this._context.compactIfNeeded(!0);continue}throw E}}this._llmRequestInFlight=!1,this._context.addMessage(u),this._onDidReceiveMessage.fire(u);let b={stepIndex:n,llmRequest:h,llmResponse:{content:u.content,toolCalls:u.toolCalls?u.toolCalls.map(_=>({..._})):void 0,reasoningContent:u.reasoningContent},llmUsage:u.usage,toolExecutions:[],durationMs:Date.now()-m,timestamp:m};if(l.update({output:u.toolCalls&&u.toolCalls.length>0?{tool_calls:u.toolCalls.map(_=>_.name)}:{final_answer:!0}}),!u.toolCalls||u.toolCalls.length===0){let _=u.reasoningContent||"";if(di(_)&&i<nr){i++,this._noteSignal("reasoning-loop",`${_.length} chars, ${On(_)} repeats`,n),console.warn(`[Reasoning Loop] ${this._config.model} repeated the same reasoning (${_.length} chars, ${On(_)} repeats) and produced no answer \u2014 discarding that thinking and asking it to act (${i}/${nr}).`),this._context.dropReasoningContent(E=>E.id===u.id);let C=D("user","[System note] Your previous turn produced NO answer and repeated the same reasoning over and over. Stop repeating yourself. Either take the next concrete action (call a tool) or, if the work is actually finished, reply with your final summary now.");this._context.addMessage(C),this._onDidReceiveMessage.fire(C),this._stepRecords.push(b),n++;continue}if((!!!u.content.trim()||!(t&&a))&&o<Dn){o++,this._noteSignal("verification-round",`round ${o}/${Dn}`,n);let C=D("user",`[System verification round ${o}/${Dn}]
-Before concluding, please verify: (1) Have you run tests or build to confirm correctness? (2) Are there any errors or warnings? (3) Is every subtask fully completed? (4) If you triggered any async task (CI, pipeline, deploy, container), have you used the poll tool to verify it completed? If anything is incomplete, still running, or unverified, continue working (use poll if waiting). Otherwise, provide your final summary.`);this._context.addMessage(C),this._onDidReceiveMessage.fire(C),this._stepRecords.push(b),n++;continue}this._contextHistoryForContinue=[...this._context.messages],r=0,o=0,this._stepRecords.push(b);break}o=0,u.content&&u.content.trim().length>0||u.reasoningContent&&u.reasoningContent.trim().length>0?r=0:r++;for(let _ of u.toolCalls){if(e.isCancellationRequested)throw new Error("Cancelled");if(this._supersedeRequested){let F=D("tool","[skipped] the user superseded this task via /btw before this tool call ran",{toolCallId:_.id});this._context.addMessage(F),this._onDidReceiveMessage.fire(F);continue}a=!0;let k=Date.now(),v=await this._tracing.runTool({name:_.name,input:_.arguments,metadata:{tool_call_id:_.id,step_index:n}},async F=>{let P=await this._executeTool(_.id,_.name,_.arguments);return F.update({output:P.success?P.output:P.error||P.output,level:P.success?"DEFAULT":"ERROR",statusMessage:P.success?void 0:P.error}),P},l.ref),C=Date.now()-k,E={toolCallId:_.id,toolName:_.name,arguments:{..._.arguments},result:v.output||v.error||"",success:v.success,error:v.error,durationMs:C,timestamp:k};b.toolExecutions.push(E),v.diff&&this._onDidReceiveToolDiff.fire(v.diff),_.name==="todo_write"&&!this._todoList.isEmpty&&this._onDidUpdateTodos.fire(this._todoList.items);let R=this._truncateToolResult(v),j=bs(R);this._context.addMessage(j),this._onDidReceiveMessage.fire(j)}this._stepRecords.push(b),n++}finally{l.end()}}if(n>=this._config.maxSteps){this._contextHistoryForContinue=[...this._context.messages];let l=D("assistant",`Reached the step limit (${this._config.maxSteps}). Type "continue" to proceed.`);this._onDidReceiveMessage.fire(l)}}_truncateToolResult(e){let t={toolCallId:e.toolCallId,success:e.success,output:e.output,error:e.error};if(!e.output)return t;let n=xs(e.output);return n.truncated?{...t,output:n.text}:t}static _generationMessage(e){let t={role:e.role,content:e.content};return e.toolCalls&&e.toolCalls.length>0&&(t.tool_calls=e.toolCalls.map(n=>({id:n.id,name:n.name,arguments:n.arguments}))),e.toolCallId&&(t.tool_call_id=e.toolCallId),e.reasoningContent&&(t.reasoning_content=e.reasoningContent),t}static _generationResult(e){let t={role:e.role,content:e.content};return e.toolCalls&&e.toolCalls.length>0&&(t.tool_calls=e.toolCalls.map(n=>({id:n.id,name:n.name,arguments:n.arguments}))),e.reasoningContent&&(t.reasoning_content=e.reasoningContent),t}static _usageDetails(e){if(!e)return;let t={input:e.promptTokens,output:e.completionTokens,total:e.totalTokens};return e.cachedTokens&&(t.cached=e.cachedTokens),e.cacheCreationTokens&&(t.cache_creation=e.cacheCreationTokens),t}async _executeTool(e,t,n){let r=this._toolRegistry.get(t);if(!r)return this._noteSignal("unknown-tool",t),{toolCallId:e,success:!1,output:"",error:`Unknown tool: ${t}`};if(["write_file","edit_file"].includes(t)&&n.path){let a=this._checkpointManager.createCheckpoint(`Before ${t} on ${n.path}`);await this._checkpointManager.snapshotFile(a,n.path)}let i=new AbortController;this._currentToolController=i;try{if(i.signal.aborted)return{toolCallId:e,success:!1,output:"",error:"Tool execution cancelled by user intervention (/btw)"};let a=n.timeout||r.timeoutFor(n,this._config)||this._config.stepTimeout;return await Promise.race([r.execute({...n,_toolCallId:e,_timeoutMs:a},i.signal),this._timeout(a,e)])}catch(a){return i.signal.aborted||a instanceof DOMException&&a.name==="AbortError"?{toolCallId:e,success:!1,output:"",error:"Tool execution cancelled by user intervention (/btw)"}:{toolCallId:e,success:!1,output:"",error:`Tool execution error: ${a.message}`}}finally{this._currentToolController===i&&(this._currentToolController=void 0)}}_timeout(e,t){return new Promise((n,r)=>{setTimeout(()=>r(new Error(`Tool execution timed out after ${e}ms`)),e)})}_isComplexTask(e){let t=e.toLowerCase();return ui.some(n=>t.includes(n.toLowerCase()))}dispose(){this.cancel(),this._stopRecoveryProbe(),this._onDidReceiveMessage.dispose(),this._onDidStreamToken.dispose(),this._onDidComplete.dispose(),this._onDidError.dispose(),this._onDidSwitchModel.dispose(),this._planner.dispose(),this._modeManager.dispose()}};var Pt=class extends Le{constructor(t,n,r,o,i,a=4,l,d,p=je){super();this._config=t;this._llmProvider=n;this._toolRegistry=r;this._workingDirectory=o;this._checkpointManager=i;this._modelRouter=l;this._memory=d;this._tracing=p;this._maxConcurrent=a}_tasks=new Map;_results=new Map;_maxConcurrent;_onDidTaskStart=this._register(new K);onDidTaskStart=this._onDidTaskStart.event;_onDidTaskComplete=this._register(new K);onDidTaskComplete=this._onDidTaskComplete.event;_onDidAllComplete=this._register(new K);onDidAllComplete=this._onDidAllComplete.event;async runParallel(t){return this._tracing.runTask({name:"agent-parallel",input:{tasks:t},tags:["parallel"],metadata:{task_count:t.length,max_concurrent:this._maxConcurrent}},async()=>this._runParallelTasks(t))}async _runParallelTasks(t){let n=t.map(i=>({id:yn(),description:i,status:"pending",startTime:Date.now()}));for(let i of n)this._tasks.set(i.id,i);let r=[],o=this._chunk(n,this._maxConcurrent);for(let i of o){let a=i.map(d=>this._runSingleAgent(d)),l=await Promise.allSettled(a);for(let d=0;d<l.length;d++){let p=l[d],u=i[d];if(p.status==="fulfilled")r.push(p.value);else{let m={taskId:u.id,success:!1,messages:[],error:p.reason?.message||"Unknown error",durationMs:Date.now()-u.startTime,taskLog:void 0};r.push(m),this._onDidTaskComplete.fire(m)}}}return this._onDidAllComplete.fire(r),r}async _runSingleAgent(t){t.status="running",this._onDidTaskStart.fire(t);let{config:n,llmProvider:r}=this._resolveModelForTask(t.description),o=new Oe,i=this._checkpointManager.clone(),a=new Be(n,r,this._toolRegistry,o,i,this._workingDirectory,this._memory,this._tracing),l=this._modelRouter?.fallbackConfig();if(l&&l.model!==n.model)try{a.setFallback(l,te.create(l))}catch{}let d=[];a.setModelSwitchLogger(u=>console.log(rt(u))),a.onDidReceiveMessage(u=>{d.push(u)});let p=Date.now();return this._tracing.runSubagent({name:`subagent: ${t.description.slice(0,60)}`,input:t.description,tags:["subagent"],metadata:{task_id:t.id,model:n.model,provider:n.provider,max_concurrent:this._maxConcurrent}},async u=>{try{await a.run(t.description),t.status="done",t.endTime=Date.now();let m=a.lastTaskError?"failed":"completed",h=a.exportTaskLog(m,a.lastTaskError),f={taskId:t.id,success:!0,messages:d,durationMs:Date.now()-p,taskLog:h};return u.update({output:d.filter(w=>w.role==="assistant"&&w.content).slice(-1)[0]?.content,level:a.lastTaskError?"ERROR":"DEFAULT",statusMessage:a.lastTaskError}),this._results.set(t.id,f),this._onDidTaskComplete.fire(f),f}catch(m){t.status="failed",t.endTime=Date.now(),t.error=m.message;let h=a.exportTaskLog("failed",m.message),f={taskId:t.id,success:!1,messages:d,error:m.message,durationMs:Date.now()-p,taskLog:h};return u.update({output:m.message,level:"ERROR",statusMessage:m.message}),this._results.set(t.id,f),this._onDidTaskComplete.fire(f),f}finally{a.dispose(),o.dispose()}})}_resolveModelForTask(t){if(!this._modelRouter?.enabled)return{config:this._config,llmProvider:this._llmProvider};let n=this._modelRouter.selectConfig(t);if(n.model===this._config.model)return{config:this._config,llmProvider:this._llmProvider};try{let r=te.create(n);return console.log(`[ROUTE] ${this._modelRouter.detectScenario(t)} \u2192 ${n.provider}/${n.model} (${t.substring(0,40)})`),{config:n,llmProvider:r}}catch{return{config:this._config,llmProvider:this._llmProvider}}}getTask(t){return this._tasks.get(t)}getResult(t){return this._results.get(t)}getAllResults(){return[...this._results.values()]}_chunk(t,n){let r=[];for(let o=0;o<t.length;o+=n)r.push(t.slice(o,o+n));return r}};var Dt=class extends O{constructor(t){super();this._fileService=t}name="read_file";description="Read the contents of a file. Returns numbered lines. Use offset and limit for large files.";parameters={type:"object",properties:{path:{type:"string",description:"Absolute path to the file to read"},offset:{type:"number",description:"Line number to start reading from (1-based). Omit to read from the beginning."},limit:{type:"number",description:"Maximum number of lines to read. Omit to read the entire file."}},required:["path"]};async execute(t,n){let r=t._toolCallId||"",o=t.path,i=t.offset||1,a=t.limit;if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");try{let l=H.file(o),u=(await this._fileService.readFile(l)).value.toString().split(`
-`),m=Math.max(0,i-1),h=a?Math.min(u.length,m+a):u.length,w=u.slice(m,h).map((S,_)=>`${String(m+_+1).padStart(6)}|${S}`).join(`
-`),b=`File: ${o} (${u.length} lines total, showing ${m+1}-${h})`;return this.success(r,`${b}
-${w}`)}catch(l){return this.failure(r,`Failed to read file ${o}: ${l.message}`)}}};var gi=3,hi=4e6;function or(s){if(s==="")return[];let e=s.split(`
-`);return e.length>0&&e[e.length-1]===""&&e.pop(),e}function yi(s,e){let t=s.length,n=e.length;if(t===0)return e.map(d=>({kind:"+",text:d}));if(n===0)return s.map(d=>({kind:"-",text:d}));if((t+1)*(n+1)>hi)return[...s.map(d=>({kind:"-",text:d})),...e.map(d=>({kind:"+",text:d}))];let r=n+1,o=new Int32Array((t+1)*r);for(let d=t-1;d>=0;d--)for(let p=n-1;p>=0;p--)o[d*r+p]=s[d]===e[p]?o[(d+1)*r+(p+1)]+1:Math.max(o[(d+1)*r+p],o[d*r+(p+1)]);let i=[],a=0,l=0;for(;a<t&&l<n;)s[a]===e[l]?(i.push({kind:" ",text:s[a]}),a++,l++):o[(a+1)*r+l]>=o[a*r+(l+1)]?(i.push({kind:"-",text:s[a]}),a++):(i.push({kind:"+",text:e[l]}),l++);for(;a<t;)i.push({kind:"-",text:s[a]}),a++;for(;l<n;)i.push({kind:"+",text:e[l]}),l++;return i}function _i(s,e){let t=0,n=Math.min(s.length,e.length);for(;t<n&&s[t]===e[t];)t++;let r=0,o=Math.min(s.length,e.length)-t;for(;r<o&&s[s.length-1-r]===e[e.length-1-r];)r++;let i=[];for(let a=0;a<t;a++)i.push({kind:" ",text:s[a]});i.push(...yi(s.slice(t,s.length-r),e.slice(t,e.length-r)));for(let a=s.length-r;a<s.length;a++)i.push({kind:" ",text:s[a]});return i}function ki(s,e){let t=[],n=[],r=0,o=0;for(let l=0;l<s.length;l++){let d=s[l];d.kind==="-"?(r++,t.push({oldLine:r}),n.push(l)):d.kind==="+"?(o++,t.push({newLine:o}),n.push(l)):(r++,o++,t.push({oldLine:r,newLine:o}))}if(n.length===0)return[];let i=[];for(let l of n){let d=Math.max(0,l-e),p=Math.min(s.length-1,l+e),u=i[i.length-1];u&&d<=u.end+1?u.end=Math.max(u.end,p):i.push({start:d,end:p})}let a=[];for(let l of i){let d=[],p=0,u=0,m=0,h=0;for(let f=l.start;f<=l.end;f++){let w=s[f],b=t[f];d.push({kind:w.kind,text:w.text,oldLine:b.oldLine,newLine:b.newLine}),w.kind!=="+"&&(p===0&&(p=b.oldLine??0),m++),w.kind!=="-"&&(u===0&&(u=b.newLine??0),h++)}if(p===0){let f=a[a.length-1];p=f?f.oldStart+f.oldCount:0}if(u===0){let f=a[a.length-1];u=f?f.newStart+f.newCount:0}a.push({oldStart:p,oldCount:m,newStart:u,newCount:h,lines:d})}return a}function wi(s,e,t,n=gi){let r=_i(or(e),or(t)),o=0,i=0;for(let a of r)a.kind==="+"?o++:a.kind==="-"&&i++;return{path:s,hunks:ki(r,n),added:o,removed:i,created:e===""}}function Lt(s,e,t){let n=wi(s,e,t);return n.hunks.length===0?void 0:n}var me={reset:"\x1B[0m",bold:"\x1B[1m",dim:"\x1B[2m",red:"\x1B[31m",green:"\x1B[32m",cyan:"\x1B[36m",magenta:"\x1B[35m"};function Nn(s=process.env,e){return s.FORCE_COLOR!==void 0&&s.FORCE_COLOR!==""&&s.FORCE_COLOR!=="0"?!0:s.NO_COLOR!==void 0&&s.NO_COLOR!==""||s.TERM==="dumb"?!1:(e?.isTTY??process.stdout.isTTY)===!0}function Ee(s,e,t){return t?`${e}${s}${me.reset}`:s}function ir(s){let e=s.oldCount===1?`${s.oldStart}`:`${s.oldStart},${s.oldCount}`,t=s.newCount===1?`${s.newStart}`:`${s.newStart},${s.newCount}`;return`@@ -${e} +${t} @@`}function ar(s,e,t="/"){if(!e)return s;let n=e.endsWith(t)?e:e+t;return s.startsWith(n)?s.slice(n.length):s}function lr(s,e={}){let t=e.color??Nn(),n=e.maxLines??400,r=e.displayPath??s.path,o=[];o.push(Ee(`\u250C\u2500 ${r} `,me.bold,t)+Ee(`(+${s.added} -${s.removed})`,me.magenta,t));let i=0,a=!1;for(let l of s.hunks){if(i>=n){a=!0;break}o.push(Ee("\u2502 ",me.dim,t)+Ee(ir(l),me.cyan,t)),i++;for(let d of l.lines){if(i>=n){a=!0;break}let p=d.kind==="+"?"+":d.kind==="-"?"-":" ",u=d.kind==="+"?me.green:d.kind==="-"?me.red:me.dim;o.push(Ee("\u2502 ",me.dim,t)+Ee(p+d.text,u,t)),i++}}return a&&o.push(Ee(`\u2502 ... (diff truncated at ${n} lines)`,me.dim,t)),o.push(Ee("\u2514\u2500",me.dim,t)),o.join(`
-`)}function cr(s,e=s.path,t=200){let n=[`--- ${e} (+${s.added} -${s.removed})`];for(let r of s.hunks){n.push(ir(r));for(let o of r.lines)n.push(o.kind+o.text);if(n.length>=t){n.push("... (diff truncated)");break}}return n.join(`
-`)}var Ot=class extends O{constructor(t){super();this._fileService=t}name="write_file";description="Create a new file or overwrite an existing file with the provided content.";parameters={type:"object",properties:{path:{type:"string",description:"Absolute path to the file to write"},content:{type:"string",description:"The full content to write to the file"}},required:["path","content"]};async execute(t,n){let r=t._toolCallId||"",o=t.path,i=t.content;if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");try{let a=H.file(o),l="",d=!1;try{l=(await this._fileService.readFile(a)).value.toString(),d=!0}catch{}await this._fileService.writeFile(a,fe.fromString(i));let p=i.split(`
-`).length,u=d?`Successfully wrote ${p} lines to ${o}`:`Created ${o} with ${p} lines`,m=Lt(o,l,i);return{...this.success(r,u),diff:m}}catch(a){return this.failure(r,`Failed to write file ${o}: ${a.message}`)}}};var Nt=class extends O{constructor(t){super();this._fileService=t}name="edit_file";description="Replace an exact string occurrence in a file. The old_string must uniquely identify the target. Use replace_all to replace all occurrences.";parameters={type:"object",properties:{path:{type:"string",description:"Absolute path to the file to edit"},old_string:{type:"string",description:"The exact string to find and replace. Must be unique in the file unless replace_all is true."},new_string:{type:"string",description:"The replacement string"},replace_all:{type:"boolean",description:"If true, replace all occurrences. Default: false."}},required:["path","old_string","new_string"]};async execute(t,n){let r=t._toolCallId||"",o=t.path,i=t.old_string,a=t.new_string,l=t.replace_all||!1;if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");try{let d=H.file(o),u=(await this._fileService.readFile(d)).value.toString(),m=u.split(i).length-1;if(m===0)return this.failure(r,`old_string not found in ${o}. Make sure it matches exactly including whitespace.`);if(!l&&m>1)return this.failure(r,`old_string found ${m} times in ${o}. Provide more context to make it unique, or set replace_all=true.`);let h;if(l)h=u.split(i).join(a);else{let b=u.indexOf(i);h=u.substring(0,b)+a+u.substring(b+i.length)}await this._fileService.writeFile(d,fe.fromString(h));let f=l?m:1,w=Lt(o,u,h);return{...this.success(r,`Replaced ${f} occurrence(s) in ${o}`),diff:w}}catch(d){return this.failure(r,`Failed to edit file ${o}: ${d.message}`)}}};var Ft=class extends O{constructor(t){super();this._fileService=t}name="list_directory";description="List the contents of a directory. Shows files and subdirectories with type indicators.";parameters={type:"object",properties:{path:{type:"string",description:"Absolute path to the directory to list"},recursive:{type:"boolean",description:"If true, list recursively up to max_depth. Default: false."},max_depth:{type:"number",description:"Maximum recursion depth. Default: 3."}},required:["path"]};async execute(t,n){let r=t._toolCallId||"",o=t.path,i=t.recursive||!1,a=t.max_depth||3;if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");try{let l=H.file(o),d=[];return await this._listRecursive(l,"",d,i?a:1,0),d.length===0?this.success(r,`Directory ${o} is empty`):this.success(r,`Directory: ${o}
-${d.join(`
-`)}`)}catch(l){return this.failure(r,`Failed to list directory ${o}: ${l.message}`)}}async _listRecursive(t,n,r,o,i){if(i>=o)return;let a=await this._fileService.resolve(t,{resolveMetadata:!1});if(!a.children)return;let l=[...a.children].sort((d,p)=>d.isDirectory&&!p.isDirectory?-1:!d.isDirectory&&p.isDirectory?1:d.name.localeCompare(p.name));for(let d of l){let p=d.isDirectory?"[dir]":"[file]";r.push(`${n}${p} ${d.name}`),d.isDirectory&&await this._listRecursive(d.resource,n+"  ",r,o,i+1)}}};function Fn(s){let e=function(t,n,r){};return e.toString=()=>s,e}var fd=Fn("instantiationService");var yd=Fn("searchService");var Ut=class extends O{constructor(t,n){super();this._searchService=t;this._workspaceRoot=n}name="search_text";description="Search for a text pattern (regex supported) across files in a directory. Returns matching lines with file paths and line numbers.";parameters={type:"object",properties:{pattern:{type:"string",description:"The search pattern (regex supported)"},path:{type:"string",description:"Directory to search in. Defaults to workspace root."},glob:{type:"string",description:'Glob pattern to filter files (e.g. "*.ts", "**/*.py")'},max_results:{type:"number",description:"Maximum number of results to return. Default: 50."}},required:["pattern"]};async execute(t,n){let r=t._toolCallId||"",o=t.pattern,i=t.path,a=t.glob,l=t.max_results||50;if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");try{new RegExp(o)}catch(d){return this.failure(r,`Invalid regex pattern: "${o}". Error: ${d.message}. Tip: escape special chars like \\ . * + ? [ ] ( ) { } ^ $ | with backslash.`)}try{let d=i?H.file(i):this._workspaceRoot,p={type:2,contentPattern:{pattern:o,isRegExp:!0,isCaseSensitive:!1,isWordMatch:!1},folderQueries:[{folder:d}],maxResults:l};a&&(p.includePattern={[a]:!0});let u=await this._searchService.textSearch(p),m=[];for(let f of u.results){let w=f.resource.fsPath;for(let b of f.results||[]){let S=b.range?.startLineNumber||"?",_=b.preview?.text?.trim()||"";m.push(`${w}:${S}: ${_}`)}}if(m.length===0)return this.success(r,`No matches found for pattern: ${o}`);let h=`Found ${m.length} match(es) for "${o}"`;return this.success(r,`${h}
-${m.join(`
-`)}`)}catch(d){return this.failure(r,`Search failed: ${d.message}`)}}};var jt=class extends O{constructor(t,n){super();this._searchService=t;this._workspaceRoot=n}name="search_files";description="Find files matching a glob pattern. Returns a list of matching file paths.";parameters={type:"object",properties:{pattern:{type:"string",description:'Glob pattern to match files (e.g. "**/*.ts", "src/**/test_*.py")'},path:{type:"string",description:"Directory to search in. Defaults to workspace root."},max_results:{type:"number",description:"Maximum number of results. Default: 100."}},required:["pattern"]};async execute(t,n){let r=t._toolCallId||"",o=t.pattern,i=t.path,a=t.max_results||100;if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");try{let l=i?H.file(i):this._workspaceRoot,d={type:1,folderQueries:[{folder:l}],filePattern:o,maxResults:a},u=(await this._searchService.fileSearch(d)).results.map(h=>h.resource.fsPath);if(u.length===0)return this.success(r,`No files found matching pattern: ${o}`);let m=`Found ${u.length} file(s) matching "${o}"`;return this.success(r,`${m}
-${u.join(`
-`)}`)}catch(l){return this.failure(r,`File search failed: ${l.message}`)}}};var Bt=class extends O{constructor(t,n){super();this._terminalService=t;this._defaultCwd=n}name="run_terminal";description="Execute a shell command in the integrated terminal and return its output. Use for running builds, tests, git commands, etc.";parameters={type:"object",properties:{command:{type:"string",description:"The shell command to execute"},cwd:{type:"string",description:"Working directory for the command. Defaults to workspace root."},timeout:{type:"number",description:"Timeout in milliseconds. Default: 30000 (30s)."}},required:["command"]};async execute(t,n){let r=t._toolCallId||"",o=t.command,i=t.cwd||this._defaultCwd,a=t.timeout||3e4;if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");let l=[/\brm\s+-rf\s+\//,/\brm\s+-rf\s+\*\b/,/\brm\s+-rf\s+~/,/\bdd\s+if=/,/\bmkfs\./,/\b>\/dev\/sd[a-z]\b/,/\bchmod\s+(-R\s+)?777\s+\//,/\b:\(\)\s*\{/,/\bDROP\s+(TABLE|DATABASE)\b/i];for(let d of l)if(d.test(o))return this.failure(r,"Command blocked by safety filter: potentially destructive operation detected. If this is intentional, please run it manually in your terminal.");try{let d=await this._executeCommand(o,i,a,n);return this.success(r,d)}catch(d){return n?.aborted?this.failure(r,"Tool execution cancelled by user"):this.failure(r,`Command failed: ${d.message}`)}}async _executeCommand(t,n,r,o){return new Promise((i,a)=>{let l=[],d=!1,p=this._terminalService.createTerminal({config:{name:"Agent Command",cwd:n,isFeatureTerminal:!0}}),u=()=>{clearTimeout(m),h?.(),f.dispose(),w.dispose(),p.dispose()},m=setTimeout(()=>{if(!d){d=!0,u();let b=l.join("").trim();i(b+`
-[Command timed out after `+r+"ms]")}},r),h;if(o){let b=()=>{d||(d=!0,u(),a(new DOMException("Aborted","AbortError")))};if(o.aborted){b();return}o.addEventListener("abort",b,{once:!0}),h=()=>o.removeEventListener("abort",b)}let f=p.onData(b=>{l.push(b)}),w=p.onExit(b=>{if(!d){d=!0,u();let S=l.join("").trim(),_=`
-[Exit code: ${b?.code??"unknown"}]`;i(S+_)}});p.sendText(t,!0)})}};var Si=1e3,vi=250,Ti=.05,Ii=3e4;function xi(s){return Math.min(Math.max(vi,s*Ti),Ii,s/2)}function dr(s){let e=Math.max(1,s.max_attempts||30),t=s.initial_delay||2,n=s.max_delay||60,r=s.command_timeout||3e4,o=e*Si;for(let i=0;i<e;i++)o+=r,i<e-1&&(o+=Math.min(t*Math.pow(2,i),n)*1e3);return o}var Wt=class extends O{constructor(t,n){super();this._terminalService=t;this._defaultCwd=n}name="poll";description='Poll a shell command at intervals with exponential backoff until a success condition is met. Use for waiting on async external tasks: CI pipelines, containers, background jobs, file readiness. The check command should exit 0 for success, or match success_pattern for text-based success. Delay grows exponentially (initial_delay \u2192 max_delay), never exceeding max_delay. Example: poll(command="curl -s http://svc/status", success_pattern="READY", max_attempts=10)';parameters={type:"object",properties:{command:{type:"string",description:"Shell command to run for each poll attempt. Exit code 0 = success (unless success_pattern is set). Output is captured and checked against success_pattern if provided."},success_pattern:{type:"string",description:"Optional regex pattern. If set, the command is considered successful when its stdout matches this pattern (regardless of exit code). If not set, exit code 0 = success."},max_attempts:{type:"number",description:"Maximum number of poll attempts before giving up. Default: 30."},initial_delay:{type:"number",description:"Delay in seconds before the first retry. Default: 2."},max_delay:{type:"number",description:"Maximum delay in seconds between attempts. Default: 60."},cwd:{type:"string",description:"Working directory for the command. Defaults to workspace root."},command_timeout:{type:"number",description:"Per-attempt command timeout in milliseconds. Default: 30000 (30s)."}},required:["command"]};timeoutFor(t,n){let r=Math.max(n.stepTimeout,n.taskTimeout);return Math.min(Math.max(dr(t),n.stepTimeout),r)}async execute(t,n){let r=t._toolCallId||"",o=t.command,i=t.success_pattern,a=t.max_attempts||30,l=t.initial_delay||2,d=t.max_delay||60,p=t.cwd||this._defaultCwd,u=t.command_timeout||3e4,m=t._timeoutMs||0,h=m>0?Date.now()+Math.max(0,m-xi(m)):Number.POSITIVE_INFINITY;if(a<1)return this.failure(r,"max_attempts must be >= 1");if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");let f=[];for(let w=0;w<a;w++){if(n?.aborted)return f.push("\u23F9\uFE0F Poll cancelled by user"),this.failure(r,f.join(`
+Executing plan automatically...`
+    );
+    this._context.addMessage(planMsg);
+    this._onDidReceiveMessage.fire(planMsg);
+  }
+  async _runAgentLoop(token, skipSelfVerification = false) {
+    let stepCount = 0;
+    let consecutiveToolOnlySteps = 0;
+    let verificationRounds = 0;
+    let reasoningCorrectionRounds = 0;
+    let hasExecutedTool = false;
+    while (stepCount < this._config.maxSteps) {
+      if (token.isCancellationRequested) {
+        throw new Error("Cancelled");
+      }
+      const step = this._tracing.beginStep({
+        name: `agent-step-${stepCount}`,
+        metadata: { step_index: stepCount }
+      });
+      try {
+        let drainedSupersede = false;
+        while (this._pendingBtwHints.length > 0) {
+          const hint = this._pendingBtwHints.shift();
+          this._noteSignal(
+            hint.supersede ? "task-superseded" : "user-intervention",
+            hint.text,
+            stepCount
+          );
+          const btwMsg = createMessage("user" /* User */, renderBtwInjection(hint));
+          if (hint.supersede) {
+            drainedSupersede = true;
+            this._planner.reset();
+            this._taskDescription = hint.text;
+            this._context.setTaskAnchor(hint.text);
+            verificationRounds = 0;
+            consecutiveToolOnlySteps = 0;
+          }
+          this._context.addMessage(btwMsg);
+          this._onDidReceiveMessage.fire(btwMsg);
+        }
+        if (drainedSupersede) {
+          this._supersedeRequested = false;
+        }
+        if (this._usingFallback && this._primaryRecovered) {
+          this._primaryRecovered = false;
+          this._switchBackToPrimary(FALLBACK_RECOVERY_DETAIL);
+        }
+        if (consecutiveToolOnlySteps >= MAX_CONSECUTIVE_TOOL_ONLY_STEPS) {
+          const warnMsg = createMessage(
+            "assistant" /* Assistant */,
+            `I've been calling tools without producing any analysis for ${consecutiveToolOnlySteps} consecutive steps. I may be stuck in a loop. Let me stop and summarize what I know so far. Please refine your request or check if I'm repeating myself.`
+          );
+          this._context.addMessage(warnMsg);
+          this._onDidReceiveMessage.fire(warnMsg);
+          this._noteSignal("step-limit", `${consecutiveToolOnlySteps} consecutive tool-only steps`, stepCount);
+          break;
+        }
+        await this._context.compactIfNeeded(this._pendingForceCompact);
+        this._pendingForceCompact = false;
+        let messages = this._context.getContextWindow();
+        let response;
+        const stepStartTime = Date.now();
+        let llmRequestMeta = { messageCount: 0, estimatedTokens: 0 };
+        let overflowRetries = 0;
+        const MAX_OVERFLOW_RETRIES = 3;
+        this._llmRequestInFlight = true;
+        for (; ; ) {
+          messages = this._context.getContextWindow();
+          const hasThinking = messages.some((m) => m.role === "assistant" /* Assistant */ && m.reasoningContent);
+          const providerSupportsStreaming = this._llmProvider.supportsStreaming?.() ?? true;
+          const isReasoningModel = this._llmProvider.supportsReasoning?.() ?? false;
+          const tools = this._modeManager.isReadOnly ? this._toolRegistry.getReadOnlySchemas() : this._toolRegistry.listSchemas();
+          llmRequestMeta = {
+            messageCount: messages.length,
+            estimatedTokens: messages.reduce((sum, m) => sum + this._llmProvider.countTokens(m.content) + (m.reasoningContent ? this._llmProvider.countTokens(m.reasoningContent) : 0), 0)
+          };
+          try {
+            const canStream = this._useStreaming && (!tools || tools.length === 0) && !hasThinking && providerSupportsStreaming && !isReasoningModel;
+            response = await this._tracing.runGeneration({
+              name: canStream ? "llm-call-stream" : "llm-call",
+              model: this._config.model,
+              modelParameters: {
+                temperature: this._config.temperature,
+                ...this._config.topK && this._config.topK > 0 ? { top_k: this._config.topK } : {},
+                stream: canStream ? 1 : 0
+              },
+              input: messages.map((m) => _AgentLoop._generationMessage(m)),
+              startTime: new Date(stepStartTime),
+              metadata: {
+                attempt: overflowRetries + 1,
+                message_count: messages.length,
+                estimated_input_tokens: llmRequestMeta.estimatedTokens,
+                tool_count: tools.length,
+                using_fallback_model: this._usingFallback
+              }
+            }, async (gen) => {
+              let out;
+              if (canStream) {
+                const chunks = [];
+                const stream = this._llmProvider.stream(
+                  messages,
+                  void 0,
+                  this._config.temperature,
+                  this._config.topK
+                );
+                for await (const token2 of stream) {
+                  chunks.push(token2);
+                  this._onDidStreamToken.fire(token2);
+                }
+                out = createMessage("assistant" /* Assistant */, chunks.join(""));
+              } else {
+                out = await this._llmProvider.complete(
+                  messages,
+                  tools.length > 0 ? tools : void 0,
+                  this._config.temperature,
+                  this._config.topK
+                );
+              }
+              gen.update({
+                output: _AgentLoop._generationResult(out),
+                usageDetails: _AgentLoop._usageDetails(out.usage),
+                metadata: { finish_reason: out.toolCalls?.length ? "tool_calls" : "stop" }
+              });
+              return out;
+            }, step.ref);
+            break;
+          } catch (err) {
+            const fallbackKind = classifyApiFallback(err);
+            if (fallbackKind && this._fallbackProvider && this._fallbackConfig && !this._usingFallback) {
+              this._enterFallback(err, this._config, this._llmProvider, fallbackKind);
+              if (this._pendingForceCompact) {
+                this._pendingForceCompact = false;
+                await this._context.compactIfNeeded(true);
+              }
+              continue;
+            }
+            if (err instanceof ContextOverflowError && overflowRetries < MAX_OVERFLOW_RETRIES) {
+              overflowRetries++;
+              this._noteSignal("context-overflow", `retry ${overflowRetries}/${MAX_OVERFLOW_RETRIES}: ${err.message}`, stepCount);
+              console.warn(`[Context Overflow] Conversation history too large \u2014 compacting and retrying (${overflowRetries}/${MAX_OVERFLOW_RETRIES}): ${err.message}`);
+              await this._context.compactIfNeeded(true);
+              continue;
+            }
+            throw err;
+          }
+        }
+        this._llmRequestInFlight = false;
+        this._context.addMessage(response);
+        this._onDidReceiveMessage.fire(response);
+        const stepRecord = {
+          stepIndex: stepCount,
+          llmRequest: llmRequestMeta,
+          llmResponse: {
+            content: response.content,
+            toolCalls: response.toolCalls ? response.toolCalls.map((tc) => ({ ...tc })) : void 0,
+            reasoningContent: response.reasoningContent
+          },
+          llmUsage: response.usage,
+          toolExecutions: [],
+          durationMs: Date.now() - stepStartTime,
+          timestamp: stepStartTime
+        };
+        step.update({
+          output: response.toolCalls && response.toolCalls.length > 0 ? { tool_calls: response.toolCalls.map((tc) => tc.name) } : { final_answer: true }
+        });
+        if (!response.toolCalls || response.toolCalls.length === 0) {
+          const reasoning = response.reasoningContent || "";
+          if (isDegenerateReasoning(reasoning) && reasoningCorrectionRounds < MAX_REASONING_CORRECTION_ROUNDS) {
+            reasoningCorrectionRounds++;
+            this._noteSignal("reasoning-loop", `${reasoning.length} chars, ${countRepeatedReasoningLines(reasoning)} repeats`, stepCount);
+            console.warn(
+              `[Reasoning Loop] ${this._config.model} repeated the same reasoning (${reasoning.length} chars, ${countRepeatedReasoningLines(reasoning)} repeats) and produced no answer \u2014 discarding that thinking and asking it to act (${reasoningCorrectionRounds}/${MAX_REASONING_CORRECTION_ROUNDS}).`
+            );
+            this._context.dropReasoningContent((m) => m.id === response.id);
+            const loopMsg = createMessage(
+              "user" /* User */,
+              `[System note] Your previous turn produced NO answer and repeated the same reasoning over and over. Stop repeating yourself. Either take the next concrete action (call a tool) or, if the work is actually finished, reply with your final summary now.`
+            );
+            this._context.addMessage(loopMsg);
+            this._onDidReceiveMessage.fire(loopMsg);
+            this._stepRecords.push(stepRecord);
+            stepCount++;
+            continue;
+          }
+          const hasAnswer = !!response.content.trim();
+          const shouldVerify = !hasAnswer || !(skipSelfVerification && hasExecutedTool);
+          if (shouldVerify && verificationRounds < MAX_VERIFICATION_ROUNDS) {
+            verificationRounds++;
+            this._noteSignal("verification-round", `round ${verificationRounds}/${MAX_VERIFICATION_ROUNDS}`, stepCount);
+            const verifyMsg = createMessage(
+              "user" /* User */,
+              `[System verification round ${verificationRounds}/${MAX_VERIFICATION_ROUNDS}]
+Before concluding, please verify: (1) Have you run tests or build to confirm correctness? (2) Are there any errors or warnings? (3) Is every subtask fully completed? (4) If you triggered any async task (CI, pipeline, deploy, container), have you used the poll tool to verify it completed? If anything is incomplete, still running, or unverified, continue working (use poll if waiting). Otherwise, provide your final summary.`
+            );
+            this._context.addMessage(verifyMsg);
+            this._onDidReceiveMessage.fire(verifyMsg);
+            this._stepRecords.push(stepRecord);
+            stepCount++;
+            continue;
+          }
+          this._contextHistoryForContinue = [...this._context.messages];
+          consecutiveToolOnlySteps = 0;
+          verificationRounds = 0;
+          this._stepRecords.push(stepRecord);
+          break;
+        }
+        verificationRounds = 0;
+        const hasAnalysis = response.content && response.content.trim().length > 0 || response.reasoningContent && response.reasoningContent.trim().length > 0;
+        if (!hasAnalysis) {
+          consecutiveToolOnlySteps++;
+        } else {
+          consecutiveToolOnlySteps = 0;
+        }
+        for (const toolCall of response.toolCalls) {
+          if (token.isCancellationRequested) {
+            throw new Error("Cancelled");
+          }
+          if (this._supersedeRequested) {
+            const skippedMsg = createMessage(
+              "tool" /* Tool */,
+              "[skipped] the user superseded this task via /btw before this tool call ran",
+              { toolCallId: toolCall.id }
+            );
+            this._context.addMessage(skippedMsg);
+            this._onDidReceiveMessage.fire(skippedMsg);
+            continue;
+          }
+          hasExecutedTool = true;
+          const toolExecStart = Date.now();
+          const result = await this._tracing.runTool({
+            name: toolCall.name,
+            input: toolCall.arguments,
+            metadata: { tool_call_id: toolCall.id, step_index: stepCount }
+          }, async (toolObs) => {
+            const toolResult = await this._executeTool(toolCall.id, toolCall.name, toolCall.arguments);
+            toolObs.update({
+              output: toolResult.success ? toolResult.output : toolResult.error || toolResult.output,
+              level: toolResult.success ? "DEFAULT" : "ERROR",
+              statusMessage: toolResult.success ? void 0 : toolResult.error
+            });
+            return toolResult;
+          }, step.ref);
+          const toolExecDuration = Date.now() - toolExecStart;
+          const execRecord = {
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            arguments: { ...toolCall.arguments },
+            result: result.output || result.error || "",
+            success: result.success,
+            error: result.error,
+            durationMs: toolExecDuration,
+            timestamp: toolExecStart
+          };
+          stepRecord.toolExecutions.push(execRecord);
+          if (result.diff) {
+            this._onDidReceiveToolDiff.fire(result.diff);
+          }
+          if (toolCall.name === "todo_write" && !this._todoList.isEmpty) {
+            this._onDidUpdateTodos.fire(this._todoList.items);
+          }
+          const truncatedResult = this._truncateToolResult(result);
+          const resultMsg = createToolResultMessage(truncatedResult);
+          this._context.addMessage(resultMsg);
+          this._onDidReceiveMessage.fire(resultMsg);
+        }
+        this._stepRecords.push(stepRecord);
+        stepCount++;
+      } finally {
+        step.end();
+      }
+    }
+    if (stepCount >= this._config.maxSteps) {
+      this._contextHistoryForContinue = [...this._context.messages];
+      const limitMsg = createMessage(
+        "assistant" /* Assistant */,
+        `Reached the step limit (${this._config.maxSteps}). Type "continue" to proceed.`
+      );
+      this._onDidReceiveMessage.fire(limitMsg);
+    }
+  }
+  /**
+   * Retain oversized tool results (head + tail) so they cannot overflow the
+   * context window.
+   *
+   * Large outputs (build logs, file reads, search results) can overflow the LLM
+   * context window, especially for reasoning models. A head-only cut — what this
+   * used to do — keeps the LEAST useful part of the outputs that matter most: a
+   * pytest assertion and its summary, a compiler diagnostic, and `npm test`'s
+   * pass/fail line all live in the last lines. `retainResult` keeps the ordered
+   * head AND tail with an exact omission notice in between.
+   *
+   * `diff` is dropped here on purpose: it is a display payload, and rendering it
+   * is the host's decision (already taken before this point). Keeping it would
+   * carry a pre-rendered card through the context-window path for no benefit.
+   */
+  _truncateToolResult(result) {
+    const plain = {
+      toolCallId: result.toolCallId,
+      success: result.success,
+      output: result.output,
+      error: result.error
+    };
+    if (!result.output) return plain;
+    const retained = retainResult(result.output);
+    if (!retained.truncated) return plain;
+    return { ...plain, output: retained.text };
+  }
+  /**
+   * Shape one conversation message for a generation's `input`.
+   *
+   * Only the fields that make the trace readable are kept, and reasoning is
+   * included (a thinking model's decisions are unexplainable without it) while
+   * the tracing module bounds/redacts every string.
+   */
+  static _generationMessage(m) {
+    const out = { role: m.role, content: m.content };
+    if (m.toolCalls && m.toolCalls.length > 0) {
+      out.tool_calls = m.toolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }));
+    }
+    if (m.toolCallId) out.tool_call_id = m.toolCallId;
+    if (m.reasoningContent) out.reasoning_content = m.reasoningContent;
+    return out;
+  }
+  /** Shape the assistant reply for a generation's `output`. */
+  static _generationResult(m) {
+    const out = { role: m.role, content: m.content };
+    if (m.toolCalls && m.toolCalls.length > 0) {
+      out.tool_calls = m.toolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: tc.arguments }));
+    }
+    if (m.reasoningContent) out.reasoning_content = m.reasoningContent;
+    return out;
+  }
+  /**
+   * Provider-normalized token usage → Langfuse `usageDetails`.
+   *
+   * Setting input/output (not just total) is what lets Langfuse compute cost
+   * per model and expose cache hit rates; omitted when the provider reported
+   * no usage at all, so a trace never shows a fake `0` token count.
+   */
+  static _usageDetails(usage) {
+    if (!usage) return void 0;
+    const details = {
+      input: usage.promptTokens,
+      output: usage.completionTokens,
+      total: usage.totalTokens
+    };
+    if (usage.cachedTokens) details.cached = usage.cachedTokens;
+    if (usage.cacheCreationTokens) details.cache_creation = usage.cacheCreationTokens;
+    return details;
+  }
+  async _executeTool(toolCallId, toolName, args) {
+    const tool = this._toolRegistry.get(toolName);
+    if (!tool) {
+      this._noteSignal("unknown-tool", toolName);
+      return {
+        toolCallId,
+        success: false,
+        output: "",
+        error: `Unknown tool: ${toolName}`
+      };
+    }
+    const writingTools = ["write_file", "edit_file"];
+    if (writingTools.includes(toolName) && args.path) {
+      const checkpointId = this._checkpointManager.createCheckpoint(
+        `Before ${toolName} on ${args.path}`
+      );
+      await this._checkpointManager.snapshotFile(checkpointId, args.path);
+    }
+    const controller = new AbortController();
+    this._currentToolController = controller;
+    try {
+      if (controller.signal.aborted) {
+        return {
+          toolCallId,
+          success: false,
+          output: "",
+          error: "Tool execution cancelled by user intervention (/btw)"
+        };
+      }
+      const effectiveTimeout = args.timeout || tool.timeoutFor(args, this._config) || this._config.stepTimeout;
+      const result = await Promise.race([
+        tool.execute({ ...args, _toolCallId: toolCallId, _timeoutMs: effectiveTimeout }, controller.signal),
+        this._timeout(effectiveTimeout, toolCallId)
+      ]);
+      return result;
+    } catch (err) {
+      if (controller.signal.aborted || err instanceof DOMException && err.name === "AbortError") {
+        return {
+          toolCallId,
+          success: false,
+          output: "",
+          error: "Tool execution cancelled by user intervention (/btw)"
+        };
+      }
+      return {
+        toolCallId,
+        success: false,
+        output: "",
+        error: `Tool execution error: ${err.message}`
+      };
+    } finally {
+      if (this._currentToolController === controller) {
+        this._currentToolController = void 0;
+      }
+    }
+  }
+  _timeout(ms, toolCallId) {
+    return new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`Tool execution timed out after ${ms}ms`)), ms);
+    });
+  }
+  /**
+   * Detect complex tasks by keyword matching. When a complex task is detected,
+   * the agent injects extra deep thinking instructions before starting the loop.
+   */
+  _isComplexTask(message) {
+    const lower = message.toLowerCase();
+    return COMPLEX_TASK_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
+  }
+  dispose() {
+    this.cancel();
+    this._stopRecoveryProbe();
+    this._onDidReceiveMessage.dispose();
+    this._onDidStreamToken.dispose();
+    this._onDidComplete.dispose();
+    this._onDidError.dispose();
+    this._onDidSwitchModel.dispose();
+    this._planner.dispose();
+    this._modeManager.dispose();
+  }
+};
 
-`));let b=h-Date.now();if(b<=0)return f.push(`\u274C Stopped: poll budget exhausted after ${w} attempt(s) \u2014 the agent's task budget (${m}ms) is smaller than the requested poll budget (${dr(t)}ms). Re-run poll to keep waiting.`),this.failure(r,f.join(`
+// src/vs/workbench/contrib/agent/common/agentParallel.ts
+var ParallelAgentManager = class extends Disposable {
+  constructor(_config, _llmProvider, _toolRegistry, _workingDirectory, _checkpointManager, maxConcurrent = 4, _modelRouter, _memory, _tracing = NOOP_TRACING) {
+    super();
+    this._config = _config;
+    this._llmProvider = _llmProvider;
+    this._toolRegistry = _toolRegistry;
+    this._workingDirectory = _workingDirectory;
+    this._checkpointManager = _checkpointManager;
+    this._modelRouter = _modelRouter;
+    this._memory = _memory;
+    this._tracing = _tracing;
+    this._maxConcurrent = maxConcurrent;
+  }
+  _tasks = /* @__PURE__ */ new Map();
+  _results = /* @__PURE__ */ new Map();
+  _maxConcurrent;
+  _onDidTaskStart = this._register(new Emitter());
+  onDidTaskStart = this._onDidTaskStart.event;
+  _onDidTaskComplete = this._register(new Emitter());
+  onDidTaskComplete = this._onDidTaskComplete.event;
+  _onDidAllComplete = this._register(new Emitter());
+  onDidAllComplete = this._onDidAllComplete.event;
+  async runParallel(tasks) {
+    return this._tracing.runTask({
+      name: "agent-parallel",
+      input: { tasks },
+      tags: ["parallel"],
+      metadata: { task_count: tasks.length, max_concurrent: this._maxConcurrent }
+    }, async () => this._runParallelTasks(tasks));
+  }
+  async _runParallelTasks(tasks) {
+    const taskEntries = tasks.map((desc) => ({
+      id: generateId(),
+      description: desc,
+      status: "pending",
+      startTime: Date.now()
+    }));
+    for (const task of taskEntries) {
+      this._tasks.set(task.id, task);
+    }
+    const results = [];
+    const batches = this._chunk(taskEntries, this._maxConcurrent);
+    for (const batch of batches) {
+      const batchPromises = batch.map((task) => this._runSingleAgent(task));
+      const batchResults = await Promise.allSettled(batchPromises);
+      for (let i = 0; i < batchResults.length; i++) {
+        const settled = batchResults[i];
+        const task = batch[i];
+        if (settled.status === "fulfilled") {
+          results.push(settled.value);
+        } else {
+          const failResult = {
+            taskId: task.id,
+            success: false,
+            messages: [],
+            error: settled.reason?.message || "Unknown error",
+            durationMs: Date.now() - task.startTime,
+            taskLog: void 0
+          };
+          results.push(failResult);
+          this._onDidTaskComplete.fire(failResult);
+        }
+      }
+    }
+    this._onDidAllComplete.fire(results);
+    return results;
+  }
+  async _runSingleAgent(task) {
+    task.status = "running";
+    this._onDidTaskStart.fire(task);
+    const { config, llmProvider } = this._resolveModelForTask(task.description);
+    const modeManager = new AgentModeManager();
+    const checkpointManager = this._checkpointManager.clone();
+    const agentLoop = new AgentLoop(
+      config,
+      llmProvider,
+      this._toolRegistry,
+      modeManager,
+      checkpointManager,
+      this._workingDirectory,
+      this._memory,
+      this._tracing
+    );
+    const fallback = this._modelRouter?.fallbackConfig();
+    if (fallback && fallback.model !== config.model) {
+      try {
+        agentLoop.setFallback(fallback, LLMProviderFactory.create(fallback));
+      } catch {
+      }
+    }
+    const messages = [];
+    agentLoop.setModelSwitchLogger((e) => console.log(formatModelSwitch(e)));
+    agentLoop.onDidReceiveMessage((msg) => {
+      messages.push(msg);
+    });
+    const startTime = Date.now();
+    return this._tracing.runSubagent({
+      name: `subagent: ${task.description.slice(0, 60)}`,
+      input: task.description,
+      tags: ["subagent"],
+      metadata: {
+        task_id: task.id,
+        model: config.model,
+        provider: config.provider,
+        max_concurrent: this._maxConcurrent
+      }
+    }, async (agentObs) => {
+      try {
+        await agentLoop.run(task.description);
+        task.status = "done";
+        task.endTime = Date.now();
+        const status = agentLoop.lastTaskError ? "failed" : "completed";
+        const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
+        const result = {
+          taskId: task.id,
+          success: true,
+          messages,
+          durationMs: Date.now() - startTime,
+          taskLog
+        };
+        agentObs.update({
+          output: messages.filter((m) => m.role === "assistant" && m.content).slice(-1)[0]?.content,
+          level: agentLoop.lastTaskError ? "ERROR" : "DEFAULT",
+          statusMessage: agentLoop.lastTaskError
+        });
+        this._results.set(task.id, result);
+        this._onDidTaskComplete.fire(result);
+        return result;
+      } catch (err) {
+        task.status = "failed";
+        task.endTime = Date.now();
+        task.error = err.message;
+        const taskLog = agentLoop.exportTaskLog("failed", err.message);
+        const result = {
+          taskId: task.id,
+          success: false,
+          messages,
+          error: err.message,
+          durationMs: Date.now() - startTime,
+          taskLog
+        };
+        agentObs.update({
+          output: err.message,
+          level: "ERROR",
+          statusMessage: err.message
+        });
+        this._results.set(task.id, result);
+        this._onDidTaskComplete.fire(result);
+        return result;
+      } finally {
+        agentLoop.dispose();
+        modeManager.dispose();
+      }
+    });
+  }
+  /**
+   * Resolve the model config + provider for a single parallel task.
+   * When a model router is present and enabled, each task is routed to its
+   * scenario model (vision/reasoning/fast) and gets its own provider instance.
+   */
+  _resolveModelForTask(description) {
+    if (!this._modelRouter?.enabled) {
+      return { config: this._config, llmProvider: this._llmProvider };
+    }
+    const config = this._modelRouter.selectConfig(description);
+    if (config.model === this._config.model) {
+      return { config: this._config, llmProvider: this._llmProvider };
+    }
+    try {
+      const provider = LLMProviderFactory.create(config);
+      console.log(`[ROUTE] ${this._modelRouter.detectScenario(description)} \u2192 ${config.provider}/${config.model} (${description.substring(0, 40)})`);
+      return { config, llmProvider: provider };
+    } catch {
+      return { config: this._config, llmProvider: this._llmProvider };
+    }
+  }
+  getTask(taskId) {
+    return this._tasks.get(taskId);
+  }
+  getResult(taskId) {
+    return this._results.get(taskId);
+  }
+  getAllResults() {
+    return [...this._results.values()];
+  }
+  _chunk(arr, size) {
+    const chunks = [];
+    for (let i = 0; i < arr.length; i += size) {
+      chunks.push(arr.slice(i, i + size));
+    }
+    return chunks;
+  }
+};
 
-`));let S=await this._runCheck(o,p,Math.min(u,b)),_=S.exitCode;if(f.push(`[Attempt ${w+1}/${a}] (exit=${_})
-${S.stdout}`),i)try{if(new RegExp(i).test(S.stdout))return f.push(`\u2705 Success: output matched pattern "${i}"`),this.success(r,f.join(`
+// src/vs/workbench/contrib/agent/common/tools/readFile.ts
+var ReadFileTool = class extends AgentTool {
+  constructor(_fileService) {
+    super();
+    this._fileService = _fileService;
+  }
+  name = "read_file";
+  description = "Read the contents of a file. Returns numbered lines. Use offset and limit for large files.";
+  parameters = {
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Absolute path to the file to read"
+      },
+      offset: {
+        type: "number",
+        description: "Line number to start reading from (1-based). Omit to read from the beginning."
+      },
+      limit: {
+        type: "number",
+        description: "Maximum number of lines to read. Omit to read the entire file."
+      }
+    },
+    required: ["path"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    const path15 = args.path;
+    const offset = args.offset || 1;
+    const limit = args.limit;
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    try {
+      const uri = URI.file(path15);
+      const content = await this._fileService.readFile(uri);
+      const text = content.value.toString();
+      const allLines = text.split("\n");
+      const startIdx = Math.max(0, offset - 1);
+      const endIdx = limit ? Math.min(allLines.length, startIdx + limit) : allLines.length;
+      const selectedLines = allLines.slice(startIdx, endIdx);
+      const numbered = selectedLines.map((line, i) => `${String(startIdx + i + 1).padStart(6)}|${line}`).join("\n");
+      const header = `File: ${path15} (${allLines.length} lines total, showing ${startIdx + 1}-${endIdx})`;
+      return this.success(toolCallId, `${header}
+${numbered}`);
+    } catch (err) {
+      return this.failure(toolCallId, `Failed to read file ${path15}: ${err.message}`);
+    }
+  }
+};
 
-`))}catch(k){return this.failure(r,`Invalid regex pattern "${i}": ${k.message}`)}else if(_===0)return f.push("\u2705 Success: command exited with code 0"),this.success(r,f.join(`
+// src/vs/workbench/contrib/agent/common/agentDiff.ts
+var DIFF_CONTEXT = 3;
+var MAX_LCS_CELLS = 4e6;
+function splitLines(text) {
+  if (text === "") return [];
+  const lines = text.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+function lcsDiff(a, b) {
+  const n = a.length;
+  const m = b.length;
+  if (n === 0) return b.map((text) => ({ kind: "+", text }));
+  if (m === 0) return a.map((text) => ({ kind: "-", text }));
+  if ((n + 1) * (m + 1) > MAX_LCS_CELLS) {
+    return [
+      ...a.map((text) => ({ kind: "-", text })),
+      ...b.map((text) => ({ kind: "+", text }))
+    ];
+  }
+  const width = m + 1;
+  const table = new Int32Array((n + 1) * width);
+  for (let i2 = n - 1; i2 >= 0; i2--) {
+    for (let j2 = m - 1; j2 >= 0; j2--) {
+      table[i2 * width + j2] = a[i2] === b[j2] ? table[(i2 + 1) * width + (j2 + 1)] + 1 : Math.max(table[(i2 + 1) * width + j2], table[i2 * width + (j2 + 1)]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ kind: " ", text: a[i] });
+      i++;
+      j++;
+    } else if (table[(i + 1) * width + j] >= table[i * width + (j + 1)]) {
+      ops.push({ kind: "-", text: a[i] });
+      i++;
+    } else {
+      ops.push({ kind: "+", text: b[j] });
+      j++;
+    }
+  }
+  while (i < n) {
+    ops.push({ kind: "-", text: a[i] });
+    i++;
+  }
+  while (j < m) {
+    ops.push({ kind: "+", text: b[j] });
+    j++;
+  }
+  return ops;
+}
+function diffOps(before, after) {
+  let prefix = 0;
+  const maxPrefix = Math.min(before.length, after.length);
+  while (prefix < maxPrefix && before[prefix] === after[prefix]) prefix++;
+  let suffix = 0;
+  const maxSuffix = Math.min(before.length, after.length) - prefix;
+  while (suffix < maxSuffix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++;
+  const ops = [];
+  for (let i = 0; i < prefix; i++) ops.push({ kind: " ", text: before[i] });
+  ops.push(...lcsDiff(before.slice(prefix, before.length - suffix), after.slice(prefix, after.length - suffix)));
+  for (let i = before.length - suffix; i < before.length; i++) ops.push({ kind: " ", text: before[i] });
+  return ops;
+}
+function buildHunks(ops, context) {
+  const lineAt = [];
+  const changed = [];
+  let oldNo = 0;
+  let newNo = 0;
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    if (op.kind === "-") {
+      oldNo++;
+      lineAt.push({ oldLine: oldNo });
+      changed.push(i);
+    } else if (op.kind === "+") {
+      newNo++;
+      lineAt.push({ newLine: newNo });
+      changed.push(i);
+    } else {
+      oldNo++;
+      newNo++;
+      lineAt.push({ oldLine: oldNo, newLine: newNo });
+    }
+  }
+  if (changed.length === 0) return [];
+  const ranges = [];
+  for (const index of changed) {
+    const start = Math.max(0, index - context);
+    const end = Math.min(ops.length - 1, index + context);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last.end + 1) {
+      last.end = Math.max(last.end, end);
+    } else {
+      ranges.push({ start, end });
+    }
+  }
+  const hunks = [];
+  for (const range of ranges) {
+    const lines = [];
+    let oldStart = 0;
+    let newStart = 0;
+    let oldCount = 0;
+    let newCount = 0;
+    for (let i = range.start; i <= range.end; i++) {
+      const op = ops[i];
+      const numbering = lineAt[i];
+      lines.push({ kind: op.kind, text: op.text, oldLine: numbering.oldLine, newLine: numbering.newLine });
+      if (op.kind !== "+") {
+        if (oldStart === 0) oldStart = numbering.oldLine ?? 0;
+        oldCount++;
+      }
+      if (op.kind !== "-") {
+        if (newStart === 0) newStart = numbering.newLine ?? 0;
+        newCount++;
+      }
+    }
+    if (oldStart === 0) {
+      const previous = hunks[hunks.length - 1];
+      oldStart = previous ? previous.oldStart + previous.oldCount : 0;
+    }
+    if (newStart === 0) {
+      const previous = hunks[hunks.length - 1];
+      newStart = previous ? previous.newStart + previous.newCount : 0;
+    }
+    hunks.push({ oldStart, oldCount, newStart, newCount, lines });
+  }
+  return hunks;
+}
+function computeFileDiff(path15, before, after, context = DIFF_CONTEXT) {
+  const ops = diffOps(splitLines(before), splitLines(after));
+  let added = 0;
+  let removed = 0;
+  for (const op of ops) {
+    if (op.kind === "+") added++;
+    else if (op.kind === "-") removed++;
+  }
+  return {
+    path: path15,
+    hunks: buildHunks(ops, context),
+    added,
+    removed,
+    created: before === ""
+  };
+}
+function buildToolDiff(path15, before, after) {
+  const diff = computeFileDiff(path15, before, after);
+  return diff.hunks.length === 0 ? void 0 : diff;
+}
+var ANSI = {
+  reset: "\x1B[0m",
+  bold: "\x1B[1m",
+  dim: "\x1B[2m",
+  red: "\x1B[31m",
+  green: "\x1B[32m",
+  cyan: "\x1B[36m",
+  magenta: "\x1B[35m"
+};
+function ansiColorEnabled(env2 = process.env, stream) {
+  if (env2.FORCE_COLOR !== void 0 && env2.FORCE_COLOR !== "" && env2.FORCE_COLOR !== "0") return true;
+  if (env2.NO_COLOR !== void 0 && env2.NO_COLOR !== "") return false;
+  if (env2.TERM === "dumb") return false;
+  const tty = stream?.isTTY ?? process.stdout.isTTY;
+  return tty === true;
+}
+function paint(text, color, enabled) {
+  return enabled ? `${color}${text}${ANSI.reset}` : text;
+}
+function hunkHeader(hunk) {
+  const oldRange = hunk.oldCount === 1 ? `${hunk.oldStart}` : `${hunk.oldStart},${hunk.oldCount}`;
+  const newRange = hunk.newCount === 1 ? `${hunk.newStart}` : `${hunk.newStart},${hunk.newCount}`;
+  return `@@ -${oldRange} +${newRange} @@`;
+}
+function displayPathFor(path15, cwd, sep5 = "/") {
+  if (!cwd) return path15;
+  const root = cwd.endsWith(sep5) ? cwd : cwd + sep5;
+  return path15.startsWith(root) ? path15.slice(root.length) : path15;
+}
+function renderFileDiffAnsi(diff, options = {}) {
+  const color = options.color ?? ansiColorEnabled();
+  const maxLines = options.maxLines ?? 400;
+  const shownPath = options.displayPath ?? diff.path;
+  const out = [];
+  out.push(paint(`\u250C\u2500 ${shownPath} `, ANSI.bold, color) + paint(`(+${diff.added} -${diff.removed})`, ANSI.magenta, color));
+  let emitted = 0;
+  let truncated = false;
+  for (const hunk of diff.hunks) {
+    if (emitted >= maxLines) {
+      truncated = true;
+      break;
+    }
+    out.push(paint("\u2502 ", ANSI.dim, color) + paint(hunkHeader(hunk), ANSI.cyan, color));
+    emitted++;
+    for (const line of hunk.lines) {
+      if (emitted >= maxLines) {
+        truncated = true;
+        break;
+      }
+      const prefix = line.kind === "+" ? "+" : line.kind === "-" ? "-" : " ";
+      const color2 = line.kind === "+" ? ANSI.green : line.kind === "-" ? ANSI.red : ANSI.dim;
+      out.push(paint("\u2502 ", ANSI.dim, color) + paint(prefix + line.text, color2, color));
+      emitted++;
+    }
+  }
+  if (truncated) out.push(paint(`\u2502 ... (diff truncated at ${maxLines} lines)`, ANSI.dim, color));
+  out.push(paint("\u2514\u2500", ANSI.dim, color));
+  return out.join("\n");
+}
+function renderFileDiffPlain(diff, displayPath = diff.path, maxLines = 200) {
+  const out = [`--- ${displayPath} (+${diff.added} -${diff.removed})`];
+  for (const hunk of diff.hunks) {
+    out.push(hunkHeader(hunk));
+    for (const line of hunk.lines) out.push(line.kind + line.text);
+    if (out.length >= maxLines) {
+      out.push("... (diff truncated)");
+      break;
+    }
+  }
+  return out.join("\n");
+}
 
-`));if(w<a-1){if(n?.aborted)return f.push("\u23F9\uFE0F Poll cancelled by user"),this.failure(r,f.join(`
+// src/vs/workbench/contrib/agent/common/tools/writeFile.ts
+var WriteFileTool = class extends AgentTool {
+  constructor(_fileService) {
+    super();
+    this._fileService = _fileService;
+  }
+  name = "write_file";
+  description = "Create a new file or overwrite an existing file with the provided content.";
+  parameters = {
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Absolute path to the file to write"
+      },
+      content: {
+        type: "string",
+        description: "The full content to write to the file"
+      }
+    },
+    required: ["path", "content"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    const path15 = args.path;
+    const content = args.content;
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    try {
+      const uri = URI.file(path15);
+      let before = "";
+      let existed = false;
+      try {
+        const existing = await this._fileService.readFile(uri);
+        before = existing.value.toString();
+        existed = true;
+      } catch {
+      }
+      await this._fileService.writeFile(uri, VSBuffer.fromString(content));
+      const lineCount = content.split("\n").length;
+      const headline = existed ? `Successfully wrote ${lineCount} lines to ${path15}` : `Created ${path15} with ${lineCount} lines`;
+      const diff = buildToolDiff(path15, before, content);
+      return { ...this.success(toolCallId, headline), diff };
+    } catch (err) {
+      return this.failure(toolCallId, `Failed to write file ${path15}: ${err.message}`);
+    }
+  }
+};
 
-`));let k=Math.min(l*Math.pow(2,w),d),v=k*1e3;f.push(`\u23F3 Waiting ${k}s before next poll (attempt ${w+2}/${a})...`),await this._sleep(Math.min(v,Math.max(0,h-Date.now())),n)}}return f.push(`\u274C Failed: condition not met after ${a} attempts (total wait ~${this._totalWaitTime(l,d,a)}s)`),this.failure(r,f.join(`
+// src/vs/workbench/contrib/agent/common/tools/editFile.ts
+var EditFileTool = class extends AgentTool {
+  constructor(_fileService) {
+    super();
+    this._fileService = _fileService;
+  }
+  name = "edit_file";
+  description = "Replace an exact string occurrence in a file. The old_string must uniquely identify the target. Use replace_all to replace all occurrences.";
+  parameters = {
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Absolute path to the file to edit"
+      },
+      old_string: {
+        type: "string",
+        description: "The exact string to find and replace. Must be unique in the file unless replace_all is true."
+      },
+      new_string: {
+        type: "string",
+        description: "The replacement string"
+      },
+      replace_all: {
+        type: "boolean",
+        description: "If true, replace all occurrences. Default: false."
+      }
+    },
+    required: ["path", "old_string", "new_string"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    const path15 = args.path;
+    const oldString = args.old_string;
+    const newString = args.new_string;
+    const replaceAll = args.replace_all || false;
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    try {
+      const uri = URI.file(path15);
+      const content = await this._fileService.readFile(uri);
+      const text = content.value.toString();
+      const occurrences = text.split(oldString).length - 1;
+      if (occurrences === 0) {
+        return this.failure(toolCallId, `old_string not found in ${path15}. Make sure it matches exactly including whitespace.`);
+      }
+      if (!replaceAll && occurrences > 1) {
+        return this.failure(toolCallId, `old_string found ${occurrences} times in ${path15}. Provide more context to make it unique, or set replace_all=true.`);
+      }
+      let newText;
+      if (replaceAll) {
+        newText = text.split(oldString).join(newString);
+      } else {
+        const idx = text.indexOf(oldString);
+        newText = text.substring(0, idx) + newString + text.substring(idx + oldString.length);
+      }
+      await this._fileService.writeFile(uri, VSBuffer.fromString(newText));
+      const replacedCount = replaceAll ? occurrences : 1;
+      const diff = buildToolDiff(path15, text, newText);
+      return {
+        ...this.success(toolCallId, `Replaced ${replacedCount} occurrence(s) in ${path15}`),
+        diff
+      };
+    } catch (err) {
+      return this.failure(toolCallId, `Failed to edit file ${path15}: ${err.message}`);
+    }
+  }
+};
 
-`))}async _runCheck(t,n,r){return new Promise(o=>{let i=[],a=!1,l=null,d=this._terminalService.createTerminal({config:{name:"Agent Poll Check",cwd:n,isFeatureTerminal:!0}}),p=()=>{clearTimeout(u),m.dispose(),h.dispose(),d.dispose()},u=setTimeout(()=>{a||(a=!0,p(),o({stdout:i.join("").trim(),exitCode:l??-1}))},r),m=d.onData(f=>{i.push(f)}),h=d.onExit(f=>{a||(a=!0,l=f?.code??null,p(),clearTimeout(u),o({stdout:i.join("").trim(),exitCode:l??null}))});d.sendText(t,!0)})}_sleep(t,n){return new Promise((r,o)=>{let i=setTimeout(r,t);if(n){let a=()=>{clearTimeout(i),o(new DOMException("Aborted","AbortError"))};if(n.aborted){clearTimeout(i),o(new DOMException("Aborted","AbortError"));return}n.addEventListener("abort",a,{once:!0})}})}_totalWaitTime(t,n,r){let o=0;for(let i=0;i<r-1;i++)o+=Math.min(t*Math.pow(2,i),n);return o}};var ur=require("node:child_process"),Ht=A(require("node:fs")),pr=A(require("node:os")),mr=A(require("node:path"));var $i=3e5;function Ci(s){return s.startsWith("~/")?mr.join(pr.homedir(),s.slice(2)):s}function Ai(s,e){let t=(s||"").trim();if(!t)return;if(t.startsWith("{"))try{return JSON.parse(t)}catch{}let n=[];for(let r of t.split(`
-`)){let o=r.trim();if(!o.startsWith("data:"))continue;let i=o.slice(5).trim();if(!(!i||i==="[DONE]"))try{n.push(JSON.parse(i))}catch{}}if(n.length!==0){if(e!==void 0){let r=n.find(o=>o&&o.id===e);if(r)return r}return n.reverse().find(r=>r&&r.id!==void 0)||n[0]}}function Ri(s){return/session/i.test(s)&&/not found|expired|missing|invalid/i.test(s)}var Un=class{constructor(e,t,n){this._url=e;this._headers=t;this._timeoutMs=n}_sessionId;_rid=0;_initialized=!1;async _send(e,t){let n={"Content-Type":"application/json",Accept:"application/json, text/event-stream",...this._headers};this._sessionId&&(n["mcp-session-id"]=this._sessionId);let r=new AbortController,o=setTimeout(()=>r.abort(),this._timeoutMs);try{let i=await fetch(this._url,{method:"POST",headers:n,body:JSON.stringify(e),signal:r.signal}),a=i.headers.get("mcp-session-id");a&&(this._sessionId=a);let l=await i.text();if(!t)return;if(!i.ok)throw new Error(`HTTP ${i.status}: ${l.slice(0,400)}`);let d=Ai(l,e.id);if(!d)throw new Error(`empty/invalid MCP response: ${l.slice(0,400)}`);if(d.error)throw new Error(`MCP error ${d.error.code??""}: ${d.error.message}`);return d.result}finally{clearTimeout(o)}}async initialize(){this._sessionId=void 0,this._initialized=!1,await this._send({jsonrpc:"2.0",id:++this._rid,method:"initialize",params:{protocolVersion:"2024-11-05",capabilities:{},clientInfo:{name:"code-agent",version:"1.0"}}},!0);try{await this._send({jsonrpc:"2.0",method:"notifications/initialized",params:{}},!1)}catch{}this._initialized=!0}async _call(e,t){return this._initialized||await this.initialize(),this._send({jsonrpc:"2.0",id:++this._rid,method:e,params:t},!0)}async listTools(){let e=await this._call("tools/list",{});return e&&e.tools||[]}async callTool(e,t){try{return await this._callToolOnce(e,t)}catch(n){let r=n.message||String(n);if(Ri(r))return await this.initialize(),this._callToolOnce(e,t);throw n}}async _callToolOnce(e,t){let n=await this._call("tools/call",{name:e,arguments:t}),o=(n&&n.content||[]).map(i=>i&&i.type==="text"?i.text:JSON.stringify(i)).join(`
-`);if(n&&n.isError)throw new Error(o||`MCP tool ${e} reported an error`);return o||"(empty result)"}dispose(){}},jn=class{constructor(e,t,n){this._command=e;this._args=t;this._env=n}_proc;_rid=0;_buf="";_pending=new Map;_initialized=!1;async initialize(){this.dispose();let e=(0,ur.spawn)(this._command,this._args,{stdio:["pipe","pipe","pipe"],env:{...process.env,...this._env}});this._proc=e,e.stdout.setEncoding("utf8"),e.stdout.on("data",t=>this._onData(t)),e.stderr.on("data",()=>{}),e.on("exit",()=>{for(let[,t]of this._pending)t.reject(new Error("MCP stdio process exited"));this._pending.clear()}),await this._request("initialize",{protocolVersion:"2024-11-05",capabilities:{},clientInfo:{name:"code-agent",version:"1.0"}}),this._notify("notifications/initialized",{}),this._initialized=!0}_onData(e){this._buf+=e;let t;for(;(t=this._buf.indexOf(`
-`))>=0;){let n=this._buf.slice(0,t).trim();if(this._buf=this._buf.slice(t+1),!n)continue;let r;try{r=JSON.parse(n)}catch{continue}if(r&&r.id!==void 0&&this._pending.has(r.id)){let o=this._pending.get(r.id);this._pending.delete(r.id),r.error?o.reject(new Error(`MCP error ${r.error.code??""}: ${r.error.message}`)):o.resolve(r.result)}}}_notify(e,t){try{this._proc?.stdin.write(JSON.stringify({jsonrpc:"2.0",method:e,params:t})+`
-`)}catch{}}_request(e,t){return new Promise((n,r)=>{if(!this._proc)return r(new Error("MCP stdio process not started"));let o=++this._rid;this._pending.set(o,{resolve:n,reject:r});try{this._proc.stdin.write(JSON.stringify({jsonrpc:"2.0",id:o,method:e,params:t})+`
-`)}catch(i){this._pending.delete(o),r(i)}})}async listTools(){this._initialized||await this.initialize();let e=await this._request("tools/list",{});return e&&e.tools||[]}async callTool(e,t){this._initialized||await this.initialize();let n=await this._request("tools/call",{name:e,arguments:t}),o=(n&&n.content||[]).map(i=>i&&i.type==="text"?i.text:JSON.stringify(i)).join(`
-`);if(n&&n.isError)throw new Error(o||`MCP tool ${e} reported an error`);return o||"(empty result)"}dispose(){try{this._proc?.kill()}catch{}this._proc=void 0,this._pending.clear()}},Bn=class extends O{constructor(t,n,r){super();this._server=t;this._transport=n;this.name=r.name,this.description=`[MCP:${t}] ${r.description||r.name}`;let o=r.inputSchema;this.parameters=o&&typeof o=="object"&&o.type?o:{type:"object",properties:{}}}name;description;parameters;async execute(t){let n=t._toolCallId||"",r={};for(let[o,i]of Object.entries(t))o.startsWith("_")||(r[o]=i);try{let o=await this._transport.callTool(this.name,r);return this.success(n,o)}catch(o){return this.failure(n,`MCP ${this._server}/${this.name} failed: ${o.message||String(o)}`)}}};function fr(s){let e=s?[s]:[...z("mcp.json"),...z(".mcp.json")];for(let t of e){let n=Ci(t);try{if(!Ht.existsSync(n))continue;let o=JSON.parse(Ht.readFileSync(n,"utf-8")).mcpServers||{};return Object.entries(o).map(([i,a])=>({name:i,type:a.type,url:a.url,headers:a.headers,command:a.command,args:a.args,env:a.env,tools:Array.isArray(a.tools)?a.tools:void 0}))}catch{}}return[]}function Ei(s,e){let t=s&&s.length>0?new Set(s):void 0,n=e&&e.length>0?new Set(e):void 0;if(!(!t&&!n))return t&&n?new Set([...t].filter(r=>n.has(r))):t||n}async function Mi(s,e,t={}){let n=[],r=[],o=new Set,i=new Set(t.skipServers||[]),a=t.timeoutMs||$i;for(let l of s){if(i.has(l.name))continue;if(!l.url&&!l.command){e(`[MCP] skip "${l.name}": neither url nor command configured`);continue}let d;try{d=l.url?new Un(l.url,l.headers||{},a):new jn(l.command,l.args||[],l.env||{}),await d.initialize();let p=await d.listTools(),u=Ei(l.tools,t.allowTools),m=0;for(let f of p)if(!(!f||!f.name)&&!(u&&!u.has(f.name))){if(o.has(f.name)){e(`[MCP] duplicate tool "${f.name}" from "${l.name}" \u2014 keeping the first one`);continue}o.add(f.name),n.push(new Bn(l.name,d,f)),m++}r.push(d);let h=u?` (allowlist of ${u.size})`:"";e(`[MCP] ${l.name}: ${m}/${p.length} tools loaded${h}`)}catch(p){e(`[MCP] ${l.name} failed: ${p.message||String(p)}`);try{d?.dispose()}catch{}}}return{tools:n,transports:r}}async function gr(s,e,t,n={}){let{tools:r,transports:o}=await Mi(e,t,n),i=0;for(let a of r){if(s.has(a.name)){t(`[MCP] tool "${a.name}" already registered \u2014 skipped`);continue}s.register(a),i++}return{count:i,transports:o}}var Pi=["\u56FE\u7247","\u56FE\u50CF","\u622A\u56FE","\u770B\u56FE","\u8BC6\u56FE","\u7167\u7247","\u753B\u9762","\u89C6\u89C9","screenshot","image","picture","photo","vision","ocr","ui\u56FE","ui\u622A\u56FE"],Di=["refactor","\u91CD\u6784","migrate","\u8FC1\u79FB","implement","\u5B9E\u73B0","redesign","\u91CD\u65B0\u8BBE\u8BA1","complex","\u590D\u6742","multiple files","architecture","\u67B6\u6784","performance","\u6027\u80FD","debugging","\u8C03\u8BD5","optimize","\u4F18\u5316","overhaul","rewrite","\u91CD\u5199","refactoring"],We=class{constructor(e,t,n){this._routing=e;this._profiles=t;this._fallback=n}get enabled(){return this._routing.enabled}get scenarios(){return this._routing.scenarios||{}}get fallbackModelId(){return this._routing.fallbackModel}get probeIntervalMs(){return this._routing.probeIntervalMs}detectScenario(e){let t=e.toLowerCase();return Pi.some(n=>t.includes(n.toLowerCase()))?"vision":Di.some(n=>t.includes(n.toLowerCase()))?"reasoning":"fast"}resolveModel(e){if(e){if(this._profiles[e])return this._profiles[e];for(let t of Object.values(this._profiles))if(t.model===e)return t}}selectConfig(e){if(!this.enabled)return this._fallback;let t=this.detectScenario(e),n=this._routing.scenarios?.[t]??this._routing.defaultModel;return this.resolveModel(n)??this._fallback}fallbackConfig(){if(!this.enabled)return;let e=this._routing.fallbackModel;if(e)return this.resolveModel(e)}describe(e){let t=this.detectScenario(e),n=this.selectConfig(e);return{scenario:t,model:n.model}}};var oe=A(require("node:fs")),ye=A(require("node:path"));function Wn(s){let e={},t=s;if(s.startsWith("---")){let n=s.indexOf("---",3);if(n>0){let r=s.substring(3,n).trim();t=s.substring(n+3).trim();let o="",i="",a=0;for(let l of r.split(`
-`)){let d=l.trim(),p=l.length-l.trimStart().length;if(i){if(d===""||p>a){d&&(e[i]=((e[i]||"")+" "+d).trim());continue}i=""}if(d.startsWith("- ")&&o){let u=d.slice(2).trim();if(u){let m=e[o]||"";e[o]=m?m+`
-`+u:u}}else if(d.includes(":")&&!d.startsWith("-")){let u=d.indexOf(":");o=d.substring(0,u).trim();let m=d.substring(u+1).trim();/^[|>][+-]?\d*$/.test(m)?(e[o]="",i=o,a=p):e[o]=m}else o&&d&&!d.startsWith("-")&&(e[o]=((e[o]||"")+" "+d).trim())}}}return{meta:e,body:t}}var Kt=class{_skills=[];_rules=[];loadSkillsFromDirs(e){for(let t of e)oe.existsSync(t)&&this._scanForSkills(t)}loadRulesFromDirs(e){for(let t of e)oe.existsSync(t)&&this._scanForRules(t)}loadAgentMdFiles(e){for(let t of e)oe.existsSync(t)&&this._loadAgentMd(t)}get skills(){return this._skills}get rules(){return this._rules}getSkillByName(e){return this._skills.find(t=>t.name.toLowerCase()===e.toLowerCase()||t.filePath.toLowerCase().includes(e.toLowerCase()))}getAlwaysApplyRules(){return this._rules.filter(e=>e.alwaysApply)}buildSkillsPromptSection(e){if(this._skills.length===0)return"";let t=[`
-## Available Skills
-`];t.push(`You can leverage the following specialized skills when relevant:
-`);for(let n of this._skills){let r=e?.has(n.name);t.push(`### ${n.name}`),n.description&&t.push(n.description),t.push(`Path: ${n.filePath}`),n.triggers.length>0&&t.push(`Triggers: ${n.triggers.join(", ")}`),n.whenToUse&&t.push(`When to use: ${n.whenToUse}`),n.modelInvocable||t.push("Invocation: manual only (not auto-activated)"),r&&(t.push(""),t.push("> **This skill has been auto-activated based on your task.**"),t.push("> Follow the instructions below as mandatory guidance."),t.push(""),t.push(n.content)),t.push("")}return t.join(`
-`)}_filterRules(e,t){return!t||t.length===0?e:e.filter(n=>{let r=`${ye.basename(n.filePath)} ${n.description}`.toLowerCase();return!t.some(o=>r.includes(o.toLowerCase()))})}buildRulesPromptSection(e){let t=this.getAlwaysApplyRules();if(t=this._filterRules(t,e),t.length===0)return"";let n=[`
-## Active Rules
-`];for(let r of t)n.push(r.content),n.push("");return n.join(`
-`)}buildPreloadRulesPromptSection(e){let t=[...this._rules];if(t=this._filterRules(t,e),t.length===0)return"";let n=[`
-## Preloaded Rules
-`];n.push(`The following rules are preloaded for auto-matching. When the user's request matches a rule's description, automatically apply that rule's instructions:
-`);for(let r of t)n.push(`### Rule: ${r.description}`),r.alwaysApply&&n.push("(Always Active)"),n.push(r.content),n.push("");return n.join(`
-`)}getSkillContent(e){return this.getSkillByName(e)?.content}getAutoMatchedSkills(e,t=5){if(!e||this._skills.length===0)return new Set;let n=e.toLowerCase(),r=[];for(let i of this._skills){let a=0;for(let l of i.triggers){let d=l.toLowerCase();n.includes(d)&&(a+=10)}if(n.includes(i.name.toLowerCase())&&(a+=15),i.description){let l=new Set(i.description.toLowerCase().split(/[\s,，、;；:：\n\t]+/).filter(p=>p.length>=2)),d=new Set(n.split(/[\s,，、;；:：\n\t]+/).filter(p=>p.length>=2));for(let p of l)d.has(p)&&(a+=2);for(let p of l)if(p.length>=2){for(let u of d)if(u.length>=2&&(u.includes(p)||p.includes(u))){a+=1;break}}}a>0&&r.push({name:i.name,score:a})}r.sort((i,a)=>a.score-i.score);let o=new Set;for(let i of r.slice(0,t))o.add(i.name);return o}buildMetaSkillPromptSection(e){let t=e[0]||"~/.agents/skills";return`
+// src/vs/workbench/contrib/agent/common/tools/listDir.ts
+var ListDirectoryTool = class extends AgentTool {
+  constructor(_fileService) {
+    super();
+    this._fileService = _fileService;
+  }
+  name = "list_directory";
+  description = "List the contents of a directory. Shows files and subdirectories with type indicators.";
+  parameters = {
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "Absolute path to the directory to list"
+      },
+      recursive: {
+        type: "boolean",
+        description: "If true, list recursively up to max_depth. Default: false."
+      },
+      max_depth: {
+        type: "number",
+        description: "Maximum recursion depth. Default: 3."
+      }
+    },
+    required: ["path"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    const path15 = args.path;
+    const recursive = args.recursive || false;
+    const maxDepth = args.max_depth || 3;
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    try {
+      const uri = URI.file(path15);
+      const lines = [];
+      await this._listRecursive(uri, "", lines, recursive ? maxDepth : 1, 0);
+      if (lines.length === 0) {
+        return this.success(toolCallId, `Directory ${path15} is empty`);
+      }
+      return this.success(toolCallId, `Directory: ${path15}
+${lines.join("\n")}`);
+    } catch (err) {
+      return this.failure(toolCallId, `Failed to list directory ${path15}: ${err.message}`);
+    }
+  }
+  async _listRecursive(uri, prefix, lines, maxDepth, currentDepth) {
+    if (currentDepth >= maxDepth) {
+      return;
+    }
+    const entries = await this._fileService.resolve(uri, { resolveMetadata: false });
+    if (!entries.children) {
+      return;
+    }
+    const sorted = [...entries.children].sort((a, b) => {
+      if (a.isDirectory && !b.isDirectory) {
+        return -1;
+      }
+      if (!a.isDirectory && b.isDirectory) {
+        return 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    for (const entry of sorted) {
+      const icon = entry.isDirectory ? "[dir]" : "[file]";
+      lines.push(`${prefix}${icon} ${entry.name}`);
+      if (entry.isDirectory) {
+        await this._listRecursive(entry.resource, prefix + "  ", lines, maxDepth, currentDepth + 1);
+      }
+    }
+  }
+};
+
+// vs-core/platform/instantiation/common/instantiation.ts
+function createDecorator(serviceId) {
+  const id = function(target, key, index) {
+  };
+  id.toString = () => serviceId;
+  return id;
+}
+var IInstantiationService = createDecorator("instantiationService");
+
+// vs-core/workbench/services/search/common/search.ts
+var ISearchService = createDecorator("searchService");
+
+// src/vs/workbench/contrib/agent/common/tools/searchText.ts
+var SearchTextTool = class extends AgentTool {
+  constructor(_searchService, _workspaceRoot) {
+    super();
+    this._searchService = _searchService;
+    this._workspaceRoot = _workspaceRoot;
+  }
+  name = "search_text";
+  description = "Search for a text pattern (regex supported) across files in a directory. Returns matching lines with file paths and line numbers.";
+  parameters = {
+    type: "object",
+    properties: {
+      pattern: {
+        type: "string",
+        description: "The search pattern (regex supported)"
+      },
+      path: {
+        type: "string",
+        description: "Directory to search in. Defaults to workspace root."
+      },
+      glob: {
+        type: "string",
+        description: 'Glob pattern to filter files (e.g. "*.ts", "**/*.py")'
+      },
+      max_results: {
+        type: "number",
+        description: "Maximum number of results to return. Default: 50."
+      }
+    },
+    required: ["pattern"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    const pattern = args.pattern;
+    const searchPath = args.path;
+    const glob = args.glob;
+    const maxResults = args.max_results || 50;
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    try {
+      new RegExp(pattern);
+    } catch (regexErr) {
+      return this.failure(
+        toolCallId,
+        `Invalid regex pattern: "${pattern}". Error: ${regexErr.message}. Tip: escape special chars like \\ . * + ? [ ] ( ) { } ^ $ | with backslash.`
+      );
+    }
+    try {
+      const folderUri = searchPath ? URI.file(searchPath) : this._workspaceRoot;
+      const query = {
+        type: 2 /* Text */,
+        contentPattern: {
+          pattern,
+          isRegExp: true,
+          isCaseSensitive: false,
+          isWordMatch: false
+        },
+        folderQueries: [{ folder: folderUri }],
+        maxResults
+      };
+      if (glob) {
+        query.includePattern = { [glob]: true };
+      }
+      const results = await this._searchService.textSearch(query);
+      const lines = [];
+      for (const result of results.results) {
+        const filePath = result.resource.fsPath;
+        for (const match of result.results || []) {
+          const lineNum = match.range?.startLineNumber || "?";
+          const preview = match.preview?.text?.trim() || "";
+          lines.push(`${filePath}:${lineNum}: ${preview}`);
+        }
+      }
+      if (lines.length === 0) {
+        return this.success(toolCallId, `No matches found for pattern: ${pattern}`);
+      }
+      const header = `Found ${lines.length} match(es) for "${pattern}"`;
+      return this.success(toolCallId, `${header}
+${lines.join("\n")}`);
+    } catch (err) {
+      return this.failure(toolCallId, `Search failed: ${err.message}`);
+    }
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/tools/searchFiles.ts
+var SearchFilesTool = class extends AgentTool {
+  constructor(_searchService, _workspaceRoot) {
+    super();
+    this._searchService = _searchService;
+    this._workspaceRoot = _workspaceRoot;
+  }
+  name = "search_files";
+  description = "Find files matching a glob pattern. Returns a list of matching file paths.";
+  parameters = {
+    type: "object",
+    properties: {
+      pattern: {
+        type: "string",
+        description: 'Glob pattern to match files (e.g. "**/*.ts", "src/**/test_*.py")'
+      },
+      path: {
+        type: "string",
+        description: "Directory to search in. Defaults to workspace root."
+      },
+      max_results: {
+        type: "number",
+        description: "Maximum number of results. Default: 100."
+      }
+    },
+    required: ["pattern"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    const pattern = args.pattern;
+    const searchPath = args.path;
+    const maxResults = args.max_results || 100;
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    try {
+      const folderUri = searchPath ? URI.file(searchPath) : this._workspaceRoot;
+      const query = {
+        type: 1 /* File */,
+        folderQueries: [{ folder: folderUri }],
+        filePattern: pattern,
+        maxResults
+      };
+      const results = await this._searchService.fileSearch(query);
+      const paths = results.results.map((r) => r.resource.fsPath);
+      if (paths.length === 0) {
+        return this.success(toolCallId, `No files found matching pattern: ${pattern}`);
+      }
+      const header = `Found ${paths.length} file(s) matching "${pattern}"`;
+      return this.success(toolCallId, `${header}
+${paths.join("\n")}`);
+    } catch (err) {
+      return this.failure(toolCallId, `File search failed: ${err.message}`);
+    }
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/tools/runTerminal.ts
+var RunTerminalTool = class extends AgentTool {
+  constructor(_terminalService, _defaultCwd) {
+    super();
+    this._terminalService = _terminalService;
+    this._defaultCwd = _defaultCwd;
+  }
+  name = "run_terminal";
+  description = "Execute a shell command in the integrated terminal and return its output. Use for running builds, tests, git commands, etc.";
+  parameters = {
+    type: "object",
+    properties: {
+      command: {
+        type: "string",
+        description: "The shell command to execute"
+      },
+      cwd: {
+        type: "string",
+        description: "Working directory for the command. Defaults to workspace root."
+      },
+      timeout: {
+        type: "number",
+        description: "Timeout in milliseconds. Default: 30000 (30s)."
+      }
+    },
+    required: ["command"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    const command = args.command;
+    const cwd = args.cwd || this._defaultCwd;
+    const timeout = args.timeout || 3e4;
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    const PATH_END = String.raw`(?=$|[\s;&|)\x60'"])`;
+    const dangerousPatterns = [
+      new RegExp(`\\brm\\s+-rf\\s+\\/+\\*?${PATH_END}`),
+      // rm -rf / (root itself only)
+      /\brm\s+-rf\s+\*\b/,
+      // rm -rf *
+      new RegExp(`\\brm\\s+-rf\\s+~\\/?\\*?${PATH_END}`),
+      // rm -rf ~ (home itself only)
+      /\bdd\b[^\n]*\bof=(?!\/dev\/(?:null|zero|stdout|stderr)\b)/,
+      // dd writing to a real target
+      /\bmkfs\./,
+      // format filesystem
+      />\/dev\/sd[a-z]/,
+      // overwrite block device
+      new RegExp(`\\bchmod\\s+(-R\\s+)?777\\s+\\/+\\*?${PATH_END}`),
+      // chmod 777 /
+      /:\(\)\s*\{/,
+      // fork bomb
+      /\bDROP\s+(TABLE|DATABASE)\b/i
+      // SQL destructive
+    ];
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(command)) {
+        return this.failure(
+          toolCallId,
+          `Command blocked by safety filter: potentially destructive operation detected. If this is intentional, please run it manually in your terminal.`
+        );
+      }
+    }
+    try {
+      const output = await this._executeCommand(command, cwd, timeout, signal);
+      return this.success(toolCallId, output);
+    } catch (err) {
+      if (signal?.aborted) {
+        return this.failure(toolCallId, "Tool execution cancelled by user");
+      }
+      return this.failure(toolCallId, `Command failed: ${err.message}`);
+    }
+  }
+  async _executeCommand(command, cwd, timeout, signal) {
+    return new Promise((resolve12, reject) => {
+      const chunks = [];
+      let settled = false;
+      const instance = this._terminalService.createTerminal({
+        config: {
+          name: "Agent Command",
+          cwd,
+          isFeatureTerminal: true
+        }
+      });
+      const cleanup = () => {
+        clearTimeout(timer);
+        abortDisposable?.();
+        dataDisposable.dispose();
+        exitDisposable.dispose();
+        instance.dispose();
+      };
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          const output = chunks.join("").trim();
+          resolve12(output + "\n[Command timed out after " + timeout + "ms]");
+        }
+      }, timeout);
+      let abortDisposable;
+      if (signal) {
+        const onAbort = () => {
+          if (!settled) {
+            settled = true;
+            cleanup();
+            reject(new DOMException("Aborted", "AbortError"));
+          }
+        };
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+        abortDisposable = () => signal.removeEventListener("abort", onAbort);
+      }
+      const dataDisposable = instance.onData((data) => {
+        chunks.push(data);
+      });
+      const exitDisposable = instance.onExit((exitCode) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          const output = chunks.join("").trim();
+          const exitInfo = `
+[Exit code: ${exitCode?.code ?? "unknown"}]`;
+          resolve12(output + exitInfo);
+        }
+      });
+      instance.sendText(command, true);
+    });
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/tools/poll.ts
+var POLL_ATTEMPT_OVERHEAD_MS = 1e3;
+var POLL_DEADLINE_MARGIN_MIN_MS = 250;
+var POLL_DEADLINE_MARGIN_RATIO = 0.05;
+var POLL_DEADLINE_MARGIN_MAX_MS = 3e4;
+function pollDeadlineMarginMs(budgetMs) {
+  return Math.min(
+    Math.max(POLL_DEADLINE_MARGIN_MIN_MS, budgetMs * POLL_DEADLINE_MARGIN_RATIO),
+    POLL_DEADLINE_MARGIN_MAX_MS,
+    budgetMs / 2
+  );
+}
+function pollBudgetMs(args) {
+  const maxAttempts = Math.max(1, args.max_attempts || 30);
+  const initialDelay = args.initial_delay || 2;
+  const maxDelay = args.max_delay || 60;
+  const commandTimeout = args.command_timeout || 3e4;
+  let total = maxAttempts * POLL_ATTEMPT_OVERHEAD_MS;
+  for (let i = 0; i < maxAttempts; i++) {
+    total += commandTimeout;
+    if (i < maxAttempts - 1) {
+      total += Math.min(initialDelay * Math.pow(2, i), maxDelay) * 1e3;
+    }
+  }
+  return total;
+}
+var PollTool = class extends AgentTool {
+  constructor(_terminalService, _defaultCwd) {
+    super();
+    this._terminalService = _terminalService;
+    this._defaultCwd = _defaultCwd;
+  }
+  name = "poll";
+  description = `Poll a shell command at intervals with exponential backoff until a success condition is met. Use for waiting on async external tasks: CI pipelines, containers, background jobs, file readiness. The check command should exit 0 for success, or match success_pattern for text-based success. Delay grows exponentially (initial_delay \u2192 max_delay), never exceeding max_delay. Example: poll(command="curl -s http://svc/status", success_pattern="READY", max_attempts=10)`;
+  parameters = {
+    type: "object",
+    properties: {
+      command: {
+        type: "string",
+        description: "Shell command to run for each poll attempt. Exit code 0 = success (unless success_pattern is set). Output is captured and checked against success_pattern if provided."
+      },
+      success_pattern: {
+        type: "string",
+        description: "Optional regex pattern. If set, the command is considered successful when its stdout matches this pattern (regardless of exit code). If not set, exit code 0 = success."
+      },
+      max_attempts: {
+        type: "number",
+        description: "Maximum number of poll attempts before giving up. Default: 30."
+      },
+      initial_delay: {
+        type: "number",
+        description: "Delay in seconds before the first retry. Default: 2."
+      },
+      max_delay: {
+        type: "number",
+        description: "Maximum delay in seconds between attempts. Default: 60."
+      },
+      cwd: {
+        type: "string",
+        description: "Working directory for the command. Defaults to workspace root."
+      },
+      command_timeout: {
+        type: "number",
+        description: "Per-attempt command timeout in milliseconds. Default: 30000 (30s)."
+      }
+    },
+    required: ["command"]
+  };
+  /**
+   * A poll is a deliberate wait: the generic step timeout (60s in the shipped
+   * config) is shorter than any real CI wait, so being killed by it is a
+   * guaranteed failure rather than a safety net. Declare the loop's own
+   * worst case instead — never shorter than the step timeout, never longer than
+   * the agent's configured task budget.
+   */
+  timeoutFor(args, config) {
+    const outerBound = Math.max(config.stepTimeout, config.taskTimeout);
+    return Math.min(Math.max(pollBudgetMs(args), config.stepTimeout), outerBound);
+  }
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    const command = args.command;
+    const successPattern = args.success_pattern;
+    const maxAttempts = args.max_attempts || 30;
+    const initialDelay = args.initial_delay || 2;
+    const maxDelay = args.max_delay || 60;
+    const cwd = args.cwd || this._defaultCwd;
+    const commandTimeout = args.command_timeout || 3e4;
+    const budgetMs = args._timeoutMs || 0;
+    const deadline = budgetMs > 0 ? Date.now() + Math.max(0, budgetMs - pollDeadlineMarginMs(budgetMs)) : Number.POSITIVE_INFINITY;
+    if (maxAttempts < 1) {
+      return this.failure(toolCallId, "max_attempts must be >= 1");
+    }
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    const allOutputs = [];
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (signal?.aborted) {
+        allOutputs.push("\u23F9\uFE0F Poll cancelled by user");
+        return this.failure(toolCallId, allOutputs.join("\n\n"));
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        allOutputs.push(
+          `\u274C Stopped: poll budget exhausted after ${attempt} attempt(s) \u2014 the agent's task budget (${budgetMs}ms) is smaller than the requested poll budget (${pollBudgetMs(args)}ms). Re-run poll to keep waiting.`
+        );
+        return this.failure(toolCallId, allOutputs.join("\n\n"));
+      }
+      const output = await this._runCheck(command, cwd, Math.min(commandTimeout, remainingMs));
+      const exitCode = output.exitCode;
+      allOutputs.push(
+        `[Attempt ${attempt + 1}/${maxAttempts}] (exit=${exitCode})
+${output.stdout}`
+      );
+      if (successPattern) {
+        try {
+          const regex = new RegExp(successPattern);
+          if (regex.test(output.stdout)) {
+            allOutputs.push(`\u2705 Success: output matched pattern "${successPattern}"`);
+            return this.success(toolCallId, allOutputs.join("\n\n"));
+          }
+        } catch (err) {
+          return this.failure(
+            toolCallId,
+            `Invalid regex pattern "${successPattern}": ${err.message}`
+          );
+        }
+      } else if (exitCode === 0) {
+        allOutputs.push(`\u2705 Success: command exited with code 0`);
+        return this.success(toolCallId, allOutputs.join("\n\n"));
+      }
+      if (attempt < maxAttempts - 1) {
+        if (signal?.aborted) {
+          allOutputs.push("\u23F9\uFE0F Poll cancelled by user");
+          return this.failure(toolCallId, allOutputs.join("\n\n"));
+        }
+        const delay = Math.min(initialDelay * Math.pow(2, attempt), maxDelay);
+        const delayMs = delay * 1e3;
+        allOutputs.push(
+          `\u23F3 Waiting ${delay}s before next poll (attempt ${attempt + 2}/${maxAttempts})...`
+        );
+        await this._sleep(Math.min(delayMs, Math.max(0, deadline - Date.now())), signal);
+      }
+    }
+    allOutputs.push(
+      `\u274C Failed: condition not met after ${maxAttempts} attempts (total wait ~${this._totalWaitTime(initialDelay, maxDelay, maxAttempts)}s)`
+    );
+    return this.failure(toolCallId, allOutputs.join("\n\n"));
+  }
+  async _runCheck(command, cwd, timeout) {
+    return new Promise((resolve12) => {
+      const chunks = [];
+      let settled = false;
+      let exitCode = null;
+      const instance = this._terminalService.createTerminal({
+        config: {
+          name: "Agent Poll Check",
+          cwd,
+          isFeatureTerminal: true
+        }
+      });
+      const cleanup = () => {
+        clearTimeout(timer);
+        dataDisposable.dispose();
+        exitDisposable.dispose();
+        instance.dispose();
+      };
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          resolve12({
+            stdout: chunks.join("").trim(),
+            exitCode: exitCode ?? -1
+          });
+        }
+      }, timeout);
+      const dataDisposable = instance.onData((data) => {
+        chunks.push(data);
+      });
+      const exitDisposable = instance.onExit((code) => {
+        if (!settled) {
+          settled = true;
+          exitCode = code?.code ?? null;
+          cleanup();
+          clearTimeout(timer);
+          resolve12({
+            stdout: chunks.join("").trim(),
+            exitCode: exitCode ?? null
+          });
+        }
+      });
+      instance.sendText(command, true);
+    });
+  }
+  _sleep(ms, signal) {
+    return new Promise((resolve12, reject) => {
+      const timer = setTimeout(resolve12, ms);
+      if (signal) {
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        if (signal.aborted) {
+          clearTimeout(timer);
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+  }
+  /**
+   * Calculate approximate total wait time for the failure message.
+   */
+  _totalWaitTime(initial, max, attempts) {
+    let total = 0;
+    for (let i = 0; i < attempts - 1; i++) {
+      total += Math.min(initial * Math.pow(2, i), max);
+    }
+    return total;
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentMcp.ts
+var import_node_child_process = require("node:child_process");
+var fs4 = __toESM(require("node:fs"));
+var os4 = __toESM(require("node:os"));
+var path5 = __toESM(require("node:path"));
+var DEFAULT_MCP_TOOL_TIMEOUT_MS = 3e5;
+function expandHome(p) {
+  if (p.startsWith("~/")) return path5.join(os4.homedir(), p.slice(2));
+  return p;
+}
+function parseRpcBody(text, wantId) {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return void 0;
+  if (trimmed.startsWith("{")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+    }
+  }
+  const payloads = [];
+  for (const line of trimmed.split("\n")) {
+    const l = line.trim();
+    if (!l.startsWith("data:")) continue;
+    const payload = l.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      payloads.push(JSON.parse(payload));
+    } catch {
+    }
+  }
+  if (payloads.length === 0) return void 0;
+  if (wantId !== void 0) {
+    const match = payloads.find((p) => p && p.id === wantId);
+    if (match) return match;
+  }
+  return payloads.reverse().find((p) => p && p.id !== void 0) || payloads[0];
+}
+function isSessionError(msg) {
+  return /session/i.test(msg) && /not found|expired|missing|invalid/i.test(msg);
+}
+var HttpMcpTransport = class {
+  constructor(_url, _headers, _timeoutMs) {
+    this._url = _url;
+    this._headers = _headers;
+    this._timeoutMs = _timeoutMs;
+  }
+  _sessionId;
+  _rid = 0;
+  _initialized = false;
+  async _send(payload, expectResponse) {
+    const headers = {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+      ...this._headers
+    };
+    if (this._sessionId) headers["mcp-session-id"] = this._sessionId;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this._timeoutMs);
+    try {
+      const res = await fetch(this._url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      const sid = res.headers.get("mcp-session-id");
+      if (sid) this._sessionId = sid;
+      const text = await res.text();
+      if (!expectResponse) return void 0;
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 400)}`);
+      const json = parseRpcBody(text, payload.id);
+      if (!json) throw new Error(`empty/invalid MCP response: ${text.slice(0, 400)}`);
+      if (json.error) throw new Error(`MCP error ${json.error.code ?? ""}: ${json.error.message}`);
+      return json.result;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async initialize() {
+    this._sessionId = void 0;
+    this._initialized = false;
+    await this._send({
+      jsonrpc: "2.0",
+      id: ++this._rid,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "code-agent", version: "1.0" }
+      }
+    }, true);
+    try {
+      await this._send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, false);
+    } catch {
+    }
+    this._initialized = true;
+  }
+  async _call(method, params) {
+    if (!this._initialized) await this.initialize();
+    return this._send({ jsonrpc: "2.0", id: ++this._rid, method, params }, true);
+  }
+  async listTools() {
+    const r = await this._call("tools/list", {});
+    return r && r.tools || [];
+  }
+  async callTool(name, args) {
+    try {
+      return await this._callToolOnce(name, args);
+    } catch (e) {
+      const msg = e.message || String(e);
+      if (isSessionError(msg)) {
+        await this.initialize();
+        return this._callToolOnce(name, args);
+      }
+      throw e;
+    }
+  }
+  async _callToolOnce(name, args) {
+    const r = await this._call("tools/call", { name, arguments: args });
+    const content = r && r.content || [];
+    const text = content.map((c) => c && c.type === "text" ? c.text : JSON.stringify(c)).join("\n");
+    if (r && r.isError) throw new Error(text || `MCP tool ${name} reported an error`);
+    return text || "(empty result)";
+  }
+  dispose() {
+  }
+};
+var StdioMcpTransport = class {
+  constructor(_command, _args, _env) {
+    this._command = _command;
+    this._args = _args;
+    this._env = _env;
+  }
+  _proc;
+  _rid = 0;
+  _buf = "";
+  _pending = /* @__PURE__ */ new Map();
+  _initialized = false;
+  async initialize() {
+    this.dispose();
+    const proc = (0, import_node_child_process.spawn)(this._command, this._args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...this._env }
+    });
+    this._proc = proc;
+    proc.stdout.setEncoding("utf8");
+    proc.stdout.on("data", (d) => this._onData(d));
+    proc.stderr.on("data", () => {
+    });
+    proc.on("exit", () => {
+      for (const [, p] of this._pending) p.reject(new Error("MCP stdio process exited"));
+      this._pending.clear();
+    });
+    await this._request("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "code-agent", version: "1.0" }
+    });
+    this._notify("notifications/initialized", {});
+    this._initialized = true;
+  }
+  _onData(chunk) {
+    this._buf += chunk;
+    let nl;
+    while ((nl = this._buf.indexOf("\n")) >= 0) {
+      const line = this._buf.slice(0, nl).trim();
+      this._buf = this._buf.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg && msg.id !== void 0 && this._pending.has(msg.id)) {
+        const p = this._pending.get(msg.id);
+        this._pending.delete(msg.id);
+        if (msg.error) p.reject(new Error(`MCP error ${msg.error.code ?? ""}: ${msg.error.message}`));
+        else p.resolve(msg.result);
+      }
+    }
+  }
+  _notify(method, params) {
+    try {
+      this._proc?.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+    } catch {
+    }
+  }
+  _request(method, params) {
+    return new Promise((resolve12, reject) => {
+      if (!this._proc) return reject(new Error("MCP stdio process not started"));
+      const id = ++this._rid;
+      this._pending.set(id, { resolve: resolve12, reject });
+      try {
+        this._proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      } catch (e) {
+        this._pending.delete(id);
+        reject(e);
+      }
+    });
+  }
+  async listTools() {
+    if (!this._initialized) await this.initialize();
+    const r = await this._request("tools/list", {});
+    return r && r.tools || [];
+  }
+  async callTool(name, args) {
+    if (!this._initialized) await this.initialize();
+    const r = await this._request("tools/call", { name, arguments: args });
+    const content = r && r.content || [];
+    const text = content.map((c) => c && c.type === "text" ? c.text : JSON.stringify(c)).join("\n");
+    if (r && r.isError) throw new Error(text || `MCP tool ${name} reported an error`);
+    return text || "(empty result)";
+  }
+  dispose() {
+    try {
+      this._proc?.kill();
+    } catch {
+    }
+    this._proc = void 0;
+    this._pending.clear();
+  }
+};
+var McpTool = class extends AgentTool {
+  constructor(_server, _transport, def) {
+    super();
+    this._server = _server;
+    this._transport = _transport;
+    this.name = def.name;
+    this.description = `[MCP:${_server}] ${def.description || def.name}`;
+    const schema = def.inputSchema;
+    this.parameters = schema && typeof schema === "object" && schema.type ? schema : { type: "object", properties: {} };
+  }
+  name;
+  description;
+  parameters;
+  async execute(args) {
+    const toolCallId = args._toolCallId || "";
+    const clean = {};
+    for (const [k, v] of Object.entries(args)) {
+      if (k.startsWith("_")) continue;
+      clean[k] = v;
+    }
+    try {
+      const out = await this._transport.callTool(this.name, clean);
+      return this.success(toolCallId, out);
+    } catch (e) {
+      return this.failure(toolCallId, `MCP ${this._server}/${this.name} failed: ${e.message || String(e)}`);
+    }
+  }
+};
+function loadMcpServersFromJsonFile(file) {
+  const candidates = file ? [file] : [...agentHomeFileCandidates("mcp.json"), ...agentHomeFileCandidates(".mcp.json")];
+  for (const c of candidates) {
+    const p = expandHome(c);
+    try {
+      if (!fs4.existsSync(p)) continue;
+      const raw = JSON.parse(fs4.readFileSync(p, "utf-8"));
+      const servers = raw.mcpServers || {};
+      return Object.entries(servers).map(([name, s]) => ({
+        name,
+        type: s.type,
+        url: s.url,
+        headers: s.headers,
+        command: s.command,
+        args: s.args,
+        env: s.env,
+        tools: Array.isArray(s.tools) ? s.tools : void 0
+      }));
+    } catch (e) {
+    }
+  }
+  return [];
+}
+function intersectAllow(perServer, global) {
+  const a = perServer && perServer.length > 0 ? new Set(perServer) : void 0;
+  const b = global && global.length > 0 ? new Set(global) : void 0;
+  if (!a && !b) return void 0;
+  if (a && b) return new Set([...a].filter((x) => b.has(x)));
+  return a || b;
+}
+async function createMcpTools(specs, logger, opts = {}) {
+  const tools = [];
+  const transports = [];
+  const seen = /* @__PURE__ */ new Set();
+  const skip = new Set(opts.skipServers || []);
+  const timeoutMs = opts.timeoutMs || DEFAULT_MCP_TOOL_TIMEOUT_MS;
+  for (const spec of specs) {
+    if (skip.has(spec.name)) continue;
+    if (!spec.url && !spec.command) {
+      logger(`[MCP] skip "${spec.name}": neither url nor command configured`);
+      continue;
+    }
+    let transport;
+    try {
+      transport = spec.url ? new HttpMcpTransport(spec.url, spec.headers || {}, timeoutMs) : new StdioMcpTransport(spec.command, spec.args || [], spec.env || {});
+      await transport.initialize();
+      const defs = await transport.listTools();
+      const allow = intersectAllow(spec.tools, opts.allowTools);
+      let loaded = 0;
+      for (const def of defs) {
+        if (!def || !def.name) continue;
+        if (allow && !allow.has(def.name)) continue;
+        if (seen.has(def.name)) {
+          logger(`[MCP] duplicate tool "${def.name}" from "${spec.name}" \u2014 keeping the first one`);
+          continue;
+        }
+        seen.add(def.name);
+        tools.push(new McpTool(spec.name, transport, def));
+        loaded++;
+      }
+      transports.push(transport);
+      const suffix = allow ? ` (allowlist of ${allow.size})` : "";
+      logger(`[MCP] ${spec.name}: ${loaded}/${defs.length} tools loaded${suffix}`);
+    } catch (e) {
+      logger(`[MCP] ${spec.name} failed: ${e.message || String(e)}`);
+      try {
+        transport?.dispose();
+      } catch {
+      }
+    }
+  }
+  return { tools, transports };
+}
+async function registerMcpTools(registry, specs, logger, opts = {}) {
+  const { tools, transports } = await createMcpTools(specs, logger, opts);
+  let count = 0;
+  for (const tool of tools) {
+    if (registry.has(tool.name)) {
+      logger(`[MCP] tool "${tool.name}" already registered \u2014 skipped`);
+      continue;
+    }
+    registry.register(tool);
+    count++;
+  }
+  return { count, transports };
+}
+
+// src/vs/workbench/contrib/agent/common/agentModelRouter.ts
+var VISION_KEYWORDS = [
+  "\u56FE\u7247",
+  "\u56FE\u50CF",
+  "\u622A\u56FE",
+  "\u770B\u56FE",
+  "\u8BC6\u56FE",
+  "\u7167\u7247",
+  "\u753B\u9762",
+  "\u89C6\u89C9",
+  "screenshot",
+  "image",
+  "picture",
+  "photo",
+  "vision",
+  "ocr",
+  "ui\u56FE",
+  "ui\u622A\u56FE"
+];
+var REASONING_KEYWORDS = [
+  "refactor",
+  "\u91CD\u6784",
+  "migrate",
+  "\u8FC1\u79FB",
+  "implement",
+  "\u5B9E\u73B0",
+  "redesign",
+  "\u91CD\u65B0\u8BBE\u8BA1",
+  "complex",
+  "\u590D\u6742",
+  "multiple files",
+  "architecture",
+  "\u67B6\u6784",
+  "performance",
+  "\u6027\u80FD",
+  "debugging",
+  "\u8C03\u8BD5",
+  "optimize",
+  "\u4F18\u5316",
+  "overhaul",
+  "rewrite",
+  "\u91CD\u5199",
+  "refactoring"
+];
+var ModelRouter = class {
+  constructor(_routing, _profiles, _fallback) {
+    this._routing = _routing;
+    this._profiles = _profiles;
+    this._fallback = _fallback;
+  }
+  get enabled() {
+    return this._routing.enabled;
+  }
+  get scenarios() {
+    return this._routing.scenarios || {};
+  }
+  /**
+   * The 保底 (guaranteed fallback) model id, resolved from
+   * `model_routing.fallback` in config.yaml. Undefined when unset.
+   */
+  get fallbackModelId() {
+    return this._routing.fallbackModel;
+  }
+  /**
+   * Optional override for how often the background probe re-checks the primary
+   * model while the agent runs on the 保底 model (ms). From
+   * `model_routing.fallback_probe_interval_s`. Undefined = built-in schedule.
+   */
+  get probeIntervalMs() {
+    return this._routing.probeIntervalMs;
+  }
+  /**
+   * Detect the scenario of a prompt. Returns one of the built-in scenario keys:
+   * 'vision' | 'reasoning' | 'fast'.
+   */
+  detectScenario(prompt) {
+    const lower = prompt.toLowerCase();
+    if (VISION_KEYWORDS.some((k) => lower.includes(k.toLowerCase()))) {
+      return "vision";
+    }
+    if (REASONING_KEYWORDS.some((k) => lower.includes(k.toLowerCase()))) {
+      return "reasoning";
+    }
+    return "fast";
+  }
+  /**
+   * Resolve a model id / profile name to a full config. Matches by profile key
+   * first, then by the profile's `model` value as a convenience.
+   */
+  resolveModel(modelId) {
+    if (!modelId) return void 0;
+    if (this._profiles[modelId]) return this._profiles[modelId];
+    for (const p of Object.values(this._profiles)) {
+      if (p.model === modelId) return p;
+    }
+    return void 0;
+  }
+  /**
+   * Select the model config for a prompt. Falls back through:
+   * scenario model → default model → active profile config.
+   */
+  selectConfig(prompt) {
+    if (!this.enabled) return this._fallback;
+    const scenario = this.detectScenario(prompt);
+    const modelId = this._routing.scenarios?.[scenario] ?? this._routing.defaultModel;
+    return this.resolveModel(modelId) ?? this._fallback;
+  }
+  /**
+   * Resolve the 保底 (guaranteed fallback) model config used when the
+   * scenario/default model times out. Returns undefined when no fallback is
+   * configured, when routing is disabled, or when the fallback id cannot be
+   * resolved to a known model.
+   */
+  fallbackConfig() {
+    if (!this.enabled) return void 0;
+    const id = this._routing.fallbackModel;
+    if (!id) return void 0;
+    return this.resolveModel(id);
+  }
+  /** Returns the scenario and selected model name for a prompt (used for logging). */
+  describe(prompt) {
+    const scenario = this.detectScenario(prompt);
+    const config = this.selectConfig(prompt);
+    return { scenario, model: config.model };
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentSkills.ts
+var fs5 = __toESM(require("node:fs"));
+var path6 = __toESM(require("node:path"));
+function parseFrontmatter(text) {
+  const meta = {};
+  let body = text;
+  if (text.startsWith("---")) {
+    const endIdx = text.indexOf("---", 3);
+    if (endIdx > 0) {
+      const frontmatter = text.substring(3, endIdx).trim();
+      body = text.substring(endIdx + 3).trim();
+      let currentKey = "";
+      let blockKey = "";
+      let blockIndent = 0;
+      for (const line of frontmatter.split("\n")) {
+        const trimmed = line.trim();
+        const indent = line.length - line.trimStart().length;
+        if (blockKey) {
+          if (trimmed === "" || indent > blockIndent) {
+            if (trimmed) meta[blockKey] = ((meta[blockKey] || "") + " " + trimmed).trim();
+            continue;
+          }
+          blockKey = "";
+        }
+        if (trimmed.startsWith("- ") && currentKey) {
+          const itemVal = trimmed.slice(2).trim();
+          if (itemVal) {
+            const existing = meta[currentKey] || "";
+            meta[currentKey] = existing ? existing + "\n" + itemVal : itemVal;
+          }
+        } else if (trimmed.includes(":") && !trimmed.startsWith("-")) {
+          const colonIdx = trimmed.indexOf(":");
+          currentKey = trimmed.substring(0, colonIdx).trim();
+          const val = trimmed.substring(colonIdx + 1).trim();
+          if (/^[|>][+-]?\d*$/.test(val)) {
+            meta[currentKey] = "";
+            blockKey = currentKey;
+            blockIndent = indent;
+          } else {
+            meta[currentKey] = val;
+          }
+        } else if (currentKey && trimmed && !trimmed.startsWith("-")) {
+          meta[currentKey] = ((meta[currentKey] || "") + " " + trimmed).trim();
+        }
+      }
+    }
+  }
+  return { meta, body };
+}
+var SkillsLoader = class {
+  _skills = [];
+  _rules = [];
+  loadSkillsFromDirs(dirs) {
+    for (const dir of dirs) {
+      if (!fs5.existsSync(dir)) continue;
+      this._scanForSkills(dir);
+    }
+  }
+  loadRulesFromDirs(dirs) {
+    for (const dir of dirs) {
+      if (!fs5.existsSync(dir)) continue;
+      this._scanForRules(dir);
+    }
+  }
+  /**
+   * Load Claude-style instruction files (`agent.md`).
+   *
+   * A single Markdown file replaces a directory of `.mdc` rules for the
+   * common case, and it is meant to be ALWAYS active: global instructions live
+   * in `~/.agents/agent.md`, project instructions in `<project>/.agents/agent.md`
+   * (see agentInstructionFiles()). Frontmatter is optional; `description`, when
+   * absent, comes from the first non-empty line so the file renders like a rule.
+   */
+  loadAgentMdFiles(paths) {
+    for (const filePath of paths) {
+      if (!fs5.existsSync(filePath)) continue;
+      this._loadAgentMd(filePath);
+    }
+  }
+  get skills() {
+    return this._skills;
+  }
+  get rules() {
+    return this._rules;
+  }
+  getSkillByName(name) {
+    return this._skills.find(
+      (s) => s.name.toLowerCase() === name.toLowerCase() || s.filePath.toLowerCase().includes(name.toLowerCase())
+    );
+  }
+  getAlwaysApplyRules() {
+    return this._rules.filter((r) => r.alwaysApply);
+  }
+  buildSkillsPromptSection(preActivatedSkillNames) {
+    if (this._skills.length === 0) return "";
+    const lines = ["\n## Available Skills\n"];
+    lines.push("You can leverage the following specialized skills when relevant:\n");
+    for (const skill of this._skills) {
+      const isPreActivated = preActivatedSkillNames?.has(skill.name);
+      lines.push(`### ${skill.name}`);
+      if (skill.description) {
+        lines.push(skill.description);
+      }
+      lines.push(`Path: ${skill.filePath}`);
+      if (skill.triggers.length > 0) {
+        lines.push(`Triggers: ${skill.triggers.join(", ")}`);
+      }
+      if (skill.whenToUse) {
+        lines.push(`When to use: ${skill.whenToUse}`);
+      }
+      if (!skill.modelInvocable) {
+        lines.push("Invocation: manual only (not auto-activated)");
+      }
+      if (isPreActivated) {
+        lines.push("");
+        lines.push("> **This skill has been auto-activated based on your task.**");
+        lines.push("> Follow the instructions below as mandatory guidance.");
+        lines.push("");
+        lines.push(skill.content);
+      }
+      lines.push("");
+    }
+    return lines.join("\n");
+  }
+  /**
+   * Rules excluded from a host's prompt (e.g. the IDE-only AskQuestion rule in
+   * the CLI). Matching is by rule IDENTITY — file name and description — never
+   * by the rule body: a rule like `agent.md` may legitimately MENTION another
+   * rule's topic, and a content match would then silently drop the whole file.
+   */
+  _filterRules(rules, excludePatterns) {
+    if (!excludePatterns || excludePatterns.length === 0) return rules;
+    return rules.filter((rule) => {
+      const identity = `${path6.basename(rule.filePath)} ${rule.description}`.toLowerCase();
+      return !excludePatterns.some((p) => identity.includes(p.toLowerCase()));
+    });
+  }
+  buildRulesPromptSection(excludePatterns) {
+    let alwaysRules = this.getAlwaysApplyRules();
+    alwaysRules = this._filterRules(alwaysRules, excludePatterns);
+    if (alwaysRules.length === 0) return "";
+    const lines = ["\n## Active Rules\n"];
+    for (const rule of alwaysRules) {
+      lines.push(rule.content);
+      lines.push("");
+    }
+    return lines.join("\n");
+  }
+  /**
+   * Preload ALL global rules content into the system prompt at task startup.
+   * Each rule includes its description so the agent can auto-match when a
+   * user's prompt aligns with a rule's purpose. Unlike buildRulesPromptSection()
+   * which only includes alwaysApply rules, this method loads EVERY rule so
+   * the agent can dynamically activate the right one.
+   */
+  buildPreloadRulesPromptSection(excludePatterns) {
+    let rules = [...this._rules];
+    rules = this._filterRules(rules, excludePatterns);
+    if (rules.length === 0) return "";
+    const lines = ["\n## Preloaded Rules\n"];
+    lines.push("The following rules are preloaded for auto-matching. When the user's request matches a rule's description, automatically apply that rule's instructions:\n");
+    for (const rule of rules) {
+      lines.push(`### Rule: ${rule.description}`);
+      if (rule.alwaysApply) {
+        lines.push("(Always Active)");
+      }
+      lines.push(rule.content);
+      lines.push("");
+    }
+    return lines.join("\n");
+  }
+  getSkillContent(skillName) {
+    const skill = this.getSkillByName(skillName);
+    return skill?.content;
+  }
+  /**
+   * Auto-match skills against the user's task description using keyword matching.
+   *
+   * Matching strategy (in priority order):
+   * 1. Exact trigger keyword match in the task (strongest signal)
+   * 2. Description keyword overlap with the task
+   * 3. Skill name mentioned in the task
+   *
+   * Returns a Set of skill names that should be pre-activated.
+   *
+   * @param taskDescription - The user's task/query to match against
+   * @param maxSkills - Maximum number of skills to auto-activate (default: 5, to avoid context bloat)
+   */
+  getAutoMatchedSkills(taskDescription, maxSkills = 5) {
+    if (!taskDescription || this._skills.length === 0) return /* @__PURE__ */ new Set();
+    const lowerTask = taskDescription.toLowerCase();
+    const scored = [];
+    for (const skill of this._skills) {
+      let score = 0;
+      for (const trigger of skill.triggers) {
+        const lowerTrigger = trigger.toLowerCase();
+        if (lowerTask.includes(lowerTrigger)) {
+          score += 10;
+        }
+      }
+      if (lowerTask.includes(skill.name.toLowerCase())) {
+        score += 15;
+      }
+      if (skill.description) {
+        const descWords = new Set(
+          skill.description.toLowerCase().split(/[\s,，、;；:：\n\t]+/).filter((w) => w.length >= 2)
+        );
+        const taskWords = new Set(
+          lowerTask.split(/[\s,，、;；:：\n\t]+/).filter((w) => w.length >= 2)
+        );
+        for (const w of descWords) {
+          if (taskWords.has(w)) score += 2;
+        }
+        for (const dw of descWords) {
+          if (dw.length >= 2) {
+            for (const tw of taskWords) {
+              if (tw.length >= 2 && (tw.includes(dw) || dw.includes(tw))) {
+                score += 1;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (score > 0) {
+        scored.push({ name: skill.name, score });
+      }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const result = /* @__PURE__ */ new Set();
+    for (const s of scored.slice(0, maxSkills)) {
+      result.add(s.name);
+    }
+    return result;
+  }
+  /**
+   * Build the "Skills of Skills" (meta-skill) prompt section.
+   *
+   * This ports dsh-run2skill's skill packaging logic into a prompt contract so
+   * the agent itself can create, catalog, recall and publish well-formed skills:
+   *
+   *   - Canonical SKILL.md contract (renderCanonicalSkill / validateSkillProposal)
+   *   - Dedup/recall before CREATE (recallExistingSkills → COVERED/PARTIAL/UNRELATED)
+   *   - Publication location (first configured skills dir)
+   *
+   * The matching tool implementations live in agentSkillFactory.ts and
+   * tools/skillTools.ts (skill_catalog / create_skill / update_skill).
+   */
+  buildMetaSkillPromptSection(skillsDirs) {
+    const primaryDir = skillsDirs[0] || "~/.agents/skills";
+    return `
 ## Skill Crafting (Meta-Skill: skills of skills)
-You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL.md\` files loaded from: ${e.join(", ")||"~/.agents/skills"} (primary: ${t}).
+You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL.md\` files loaded from: ${skillsDirs.join(", ") || "~/.agents/skills"} (primary: ${primaryDir}).
 
 ### When to create or update a skill
 - The user explicitly asks to save a workflow/constraint as a reusable skill ("\u4FDD\u5B58\u4E3Askill", "save this as a skill").
@@ -290,70 +6698,3850 @@ You manage your own reusable skill library. Skills are Cursor-compatible \`SKILL
 
 ### Publication
 - New skills are published to \`{primaryDir}/{name}/SKILL.md\`. Never overwrite an existing skill unless the user approves (or pass \`force: true\` after confirmation).
-- After creating/updating a skill, tell the user the file path and that a new session (or \`/skills\`) will pick it up.`}buildFullContextPrompt(e,t,n){let r="",o=this.buildPreloadRulesPromptSection(t);o&&(r+=o);let i;e&&(i=this.getAutoMatchedSkills(e));let a=this.buildSkillsPromptSection(i);return a&&(r+=a),n&&n.length>0&&(r+=this.buildMetaSkillPromptSection(n)),r}_entryKind(e,t){if(t.isDirectory())return"dir";if(t.isFile())return"file";if(!t.isSymbolicLink())return"other";try{let n=oe.statSync(ye.join(e,t.name));if(n.isDirectory())return"dir";if(n.isFile())return"file"}catch{}return"other"}_scanForSkills(e){try{let t=oe.readdirSync(e,{withFileTypes:!0});for(let n of t){let r=ye.join(e,n.name),o=this._entryKind(e,n);if(o==="dir"){let i=ye.join(r,"SKILL.md");oe.existsSync(i)&&this._loadSkill(i,n.name)}else o==="file"&&n.name==="SKILL.md"&&this._loadSkill(r,ye.basename(e))}}catch{}}_loadSkill(e,t){try{let n=oe.readFileSync(e,"utf-8"),{meta:r,body:o}=Wn(n),i=r.trigger?r.trigger.split(`
-`).map(p=>p.trim()).filter(p=>p.length>0):[],a=r.whenToUse?.trim()||void 0,l=r["disable-model-invocation"]!=="true",d=r["user-invocable"]==="true";this._skills.push({name:r.name||t,description:r.description||"",filePath:e,content:o,triggers:i,...a?{whenToUse:a}:{},modelInvocable:l,userInvocable:d})}catch{}}_scanForRules(e){try{let t=oe.readdirSync(e,{withFileTypes:!0});for(let n of t)this._entryKind(e,n)==="file"&&n.name.endsWith(".mdc")&&this._loadRule(ye.join(e,n.name))}catch{}}_loadRule(e){try{let t=oe.readFileSync(e,"utf-8"),{meta:n,body:r}=Wn(t);this._rules.push({description:n.description||ye.basename(e,".mdc"),filePath:e,content:r,alwaysApply:n.alwaysApply==="true"})}catch{}}_loadAgentMd(e){try{let t=oe.readFileSync(e,"utf-8"),{meta:n,body:r}=Wn(t),i=(r.split(`
-`).map(a=>a.trim()).find(a=>a.length>0)||"").replace(/^#+\s*/,"").slice(0,120)||ye.basename(e);this._rules.push({description:n.description||`agent.md instructions (${i})`,filePath:e,content:r,alwaysApply:n.alwaysApply!=="false"})}catch{}}};var Z=A(require("node:fs")),xe=A(require("node:path"));var wr=A(require("node:os")),_e=class extends Error{constructor(t,n){super(n);this.code=t;this.name="SkillFactoryError"}},Li=/^[a-z0-9]+(?:-[a-z0-9]+)*$/,Oi=/^#{1,6}\s+\S/m,hr=2*1024,yr=4*1024,_r=60*1024,Gn=24;function Hn(s){return Buffer.byteLength(s,"utf8")}function ot(s){return s.replace(/\r\n?/g,`
-`)}function br(s){if(!s.name||!Li.test(s.name))throw new _e("INVALID_NAME",`Skill name must match lowercase-kebab-case (e.g. "cpp-forge"), got: "${s.name}"`);let e=ot(s.description||"").trim();if(e.length===0)throw new _e("INVALID_DESCRIPTION","Skill description is required");if(Hn(e)>hr)throw new _e("INVALID_DESCRIPTION",`Skill description exceeds ${hr} UTF-8 bytes`);if(s.whenToUse!==void 0&&Hn(s.whenToUse)>yr)throw new _e("INVALID_WHEN_TO_USE",`Skill whenToUse exceeds ${yr} UTF-8 bytes`);let t=ot(s.content||"");if(!Oi.test(t))throw new _e("INVALID_CONTENT","Skill content must be complete Markdown that starts with a heading");if(Hn(t)>_r)throw new _e("INVALID_CONTENT",`Skill content exceeds ${_r} UTF-8 bytes`);if(s.triggers&&s.triggers.length>Gn)throw new _e("INVALID_TRIGGERS",`Skill triggers exceed ${Gn} entries`)}function it(s){br(s);let e=ot(s.content).replace(/\n+$/g,""),t=["---",`name: ${s.name}`,`description: ${JSON.stringify(ot(s.description).trim())}`];s.whenToUse!==void 0&&s.whenToUse.trim().length>0&&t.push(`whenToUse: ${JSON.stringify(ot(s.whenToUse).trim())}`);let n=(s.triggers||[]).map(r=>r.trim()).filter(r=>r.length>0);if(n.length>0){t.push("trigger:");for(let r of n.slice(0,Gn))t.push(`  - ${r}`)}return t.push(`disable-model-invocation: ${String(s.modelInvocable===!1)}`),t.push(`user-invocable: ${String(s.userInvocable===!0)}`),t.push("---"),`${t.join(`
-`)}
+- After creating/updating a skill, tell the user the file path and that a new session (or \`/skills\`) will pick it up.`;
+  }
+  /**
+   * Build full context prompt with all rules and skills.
+   * Optionally accepts a task description for auto-matching skills.
+   */
+  buildFullContextPrompt(taskDescription, excludeRulePatterns, skillsDirs) {
+    let prompt = "";
+    const rulesSection = this.buildPreloadRulesPromptSection(excludeRulePatterns);
+    if (rulesSection) prompt += rulesSection;
+    let preActivatedSkills;
+    if (taskDescription) {
+      preActivatedSkills = this.getAutoMatchedSkills(taskDescription);
+    }
+    const skillsSection = this.buildSkillsPromptSection(preActivatedSkills);
+    if (skillsSection) prompt += skillsSection;
+    if (skillsDirs && skillsDirs.length > 0) {
+      prompt += this.buildMetaSkillPromptSection(skillsDirs);
+    }
+    return prompt;
+  }
+  /**
+   * Classify a directory entry, FOLLOWING SYMLINKS.
+   *
+   * `Dirent.isDirectory()` / `isFile()` are false for a symlink, so a skill
+   * installed the documented way (`ln -s …/skills/langfuse ~/.agents/skills/langfuse`,
+   * the method the Langfuse/Anthropic skill repos prescribe) used to be skipped
+   * silently. A broken link must stay harmless, hence the try/catch.
+   */
+  _entryKind(dir, entry) {
+    if (entry.isDirectory()) return "dir";
+    if (entry.isFile()) return "file";
+    if (!entry.isSymbolicLink()) return "other";
+    try {
+      const stat = fs5.statSync(path6.join(dir, entry.name));
+      if (stat.isDirectory()) return "dir";
+      if (stat.isFile()) return "file";
+    } catch {
+    }
+    return "other";
+  }
+  _scanForSkills(dir) {
+    try {
+      const entries = fs5.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path6.join(dir, entry.name);
+        const kind = this._entryKind(dir, entry);
+        if (kind === "dir") {
+          const skillFile = path6.join(fullPath, "SKILL.md");
+          if (fs5.existsSync(skillFile)) {
+            this._loadSkill(skillFile, entry.name);
+          }
+        } else if (kind === "file" && entry.name === "SKILL.md") {
+          this._loadSkill(fullPath, path6.basename(dir));
+        }
+      }
+    } catch {
+    }
+  }
+  _loadSkill(filePath, fallbackName) {
+    try {
+      const raw = fs5.readFileSync(filePath, "utf-8");
+      const { meta, body } = parseFrontmatter(raw);
+      const triggers = meta.trigger ? meta.trigger.split("\n").map((t) => t.trim()).filter((t) => t.length > 0) : [];
+      const whenToUse = meta.whenToUse?.trim() || void 0;
+      const modelInvocable = meta["disable-model-invocation"] !== "true";
+      const userInvocable = meta["user-invocable"] === "true";
+      this._skills.push({
+        name: meta.name || fallbackName,
+        description: meta.description || "",
+        filePath,
+        content: body,
+        triggers,
+        ...whenToUse ? { whenToUse } : {},
+        modelInvocable,
+        userInvocable
+      });
+    } catch {
+    }
+  }
+  _scanForRules(dir) {
+    try {
+      const entries = fs5.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (this._entryKind(dir, entry) === "file" && entry.name.endsWith(".mdc")) {
+          this._loadRule(path6.join(dir, entry.name));
+        }
+      }
+    } catch {
+    }
+  }
+  _loadRule(filePath) {
+    try {
+      const raw = fs5.readFileSync(filePath, "utf-8");
+      const { meta, body } = parseFrontmatter(raw);
+      this._rules.push({
+        description: meta.description || path6.basename(filePath, ".mdc"),
+        filePath,
+        content: body,
+        alwaysApply: meta.alwaysApply === "true"
+      });
+    } catch {
+    }
+  }
+  /** Load one `agent.md` instruction file as an always-apply rule. */
+  _loadAgentMd(filePath) {
+    try {
+      const raw = fs5.readFileSync(filePath, "utf-8");
+      const { meta, body } = parseFrontmatter(raw);
+      const heading = body.split("\n").map((l) => l.trim()).find((l) => l.length > 0) || "";
+      const fallback = heading.replace(/^#+\s*/, "").slice(0, 120) || path6.basename(filePath);
+      this._rules.push({
+        description: meta.description || `agent.md instructions (${fallback})`,
+        filePath,
+        content: body,
+        // Instructions are active by default; opt out with `alwaysApply: false`.
+        alwaysApply: meta.alwaysApply !== "false"
+      });
+    } catch {
+    }
+  }
+};
 
-${e}
-`}function Sr(s){let e={},t=s;if(s.startsWith("---")){let o=s.indexOf("---",3);if(o>0){let i=s.substring(3,o).trim();t=s.substring(o+3).trim();let a="";for(let l of i.split(`
-`)){let d=l.trim();if(d.startsWith("- ")&&a){let p=d.slice(2).trim();if(p){let u=e[a]||"";e[a]=u?u+`
-`+p:p}}else if(d.includes(":")&&!d.startsWith("-")){let p=d.indexOf(":");a=d.substring(0,p).trim();let u=d.substring(p+1).trim();(u===">"||u==="|")&&(u=""),e[a]=u}else a&&d&&!d.startsWith("-")&&(e[a]=((e[a]||"")+" "+d).trim())}}}let n=o=>{let i=o.trim();if(i.length>=2&&(i.startsWith('"')&&i.endsWith('"')||i.startsWith("'")&&i.endsWith("'")))try{return i.startsWith('"')?JSON.parse(i):i.slice(1,-1)}catch{return i.slice(1,-1)}return i},r=(e.trigger||"").split(`
-`).map(o=>o.trim()).filter(o=>o.length>0);return{name:(e.name||"").trim(),description:n(e.description||""),...e.whenToUse?{whenToUse:n(e.whenToUse)}:{},triggers:r,modelInvocable:e["disable-model-invocation"]!=="true",userInvocable:e["user-invocable"]==="true"}}var Ni="filesystem";function vr(s){let e=[],t=new Set,n=!0;for(let r of s){if(!Z.existsSync(r))continue;let o;try{o=Z.readdirSync(r,{withFileTypes:!0})}catch{continue}for(let i of o){let a=xe.join(r,i.name),l,d=i.name;if(i.isDirectory()){let f=xe.join(a,"SKILL.md");Z.existsSync(f)&&(l=f)}else i.name==="SKILL.md"&&(l=a,d=xe.basename(r));if(!l)continue;let p=`${d}@${l}`;if(t.has(p))continue;t.add(p);let u;try{u=Z.readFileSync(l,"utf-8")}catch{continue}let m=Sr(u),h={name:m.name||d,description:m.description,...m.whenToUse?{whenToUse:m.whenToUse}:{},triggers:m.triggers,source:"filesystem",provider:Ni,path:l,modelInvocable:m.modelInvocable,userInvocable:m.userInvocable};e.push(h)}}return e.sort((r,o)=>r.name.localeCompare(o.name)),{skills:e,complete:n}}var kr=64,Fi=new Set(["a","an","and","for","in","of","on","please","the","this","to","use"]),Ui=["\u8FD9\u4E2A","\u8FD9\u4E9B","\u90A3\u4E2A","\u90A3\u4E9B","\u4E00\u4E2A","\u4E00\u79CD","\u6211\u4EEC","\u4F60\u4EEC","\u4F7F\u7528","\u8FDB\u884C","\u7528\u4E8E","\u9700\u8981","\u53EF\u4EE5","\u8BF7"];function Tr(s){let e=s.normalize("NFKC").toLowerCase(),t=[],n=new Set,r=o=>{o.length<=1||Fi.has(o)||n.has(o)||t.length>=kr||(n.add(o),t.push(o))};for(let o of e.matchAll(/[\p{Script=Latin}\p{Number}]+|[\p{Script=Han}]+/gu)){let i=o[0];if(/^[\p{Script=Han}]+$/u.test(i)){let a=i;for(let d of Ui)a=a.replaceAll(d,"");let l=[...a];for(let d=0;d+1<l.length;d+=1)r(`${l[d]}${l[d+1]}`)}else r(i);if(t.length>=kr)break}return t}function Kn(s,e){if(s===void 0)return 0;let t=0;for(let n of Tr(s))e.has(n)&&(t+=1);return t}function qn(s,e,t=5){let n=Tr(e),r=new Set(n),o=s.skills.map(l=>{let d=Kn(l.name,r),p=Kn(l.whenToUse,r),u=Kn(l.description,r);return{entry:l,nameOverlap:d,whenToUseOverlap:p,descriptionOverlap:u,totalScore:d*3+p*2+u}}).filter(l=>l.totalScore>0).sort((l,d)=>d.totalScore-l.totalScore).slice(0,t),i=o[0],a="UNRELATED";return i&&(i.nameOverlap>0&&i.totalScore>=6?a="COVERED":i.totalScore>=2&&(a="PARTIAL")),{queryTokens:n,candidates:o,classification:a,closest:i}}function Gt(){return xe.join(ge(),"skills")}function Vn(s,e,t={}){br(e);let n=(s&&s.trim().length>0?s:Gt()).replace(/^~(?=$|\/|\\)/,wr.homedir()),r=xe.join(n,e.name),o=xe.join(r,"SKILL.md"),i=Z.existsSync(o);if(i&&!t.force)return{status:"EXISTS",targetPath:o};let a=it(e),l=xe.join(r,`.SKILL.md.${process.pid}.${Date.now()}.tmp`);try{Z.mkdirSync(r,{recursive:!0}),Z.writeFileSync(l,a,"utf-8"),Z.renameSync(l,o)}catch(d){try{Z.rmSync(l,{force:!0})}catch{}throw new _e("PUBLISH_FAILED",`Failed to publish skill "${e.name}": ${d.message}`)}return{status:i?"UPDATED":"CREATED",targetPath:o}}function Ir(s){if(s.path)try{let e=Z.readFileSync(s.path,"utf-8"),t=Sr(e),n=e;if(e.startsWith("---")){let r=e.indexOf(`
----`,3);r>0&&(n=e.substring(r+5).trimStart())}return{raw:e,proposal:{name:t.name||s.name,description:t.description,...t.whenToUse?{whenToUse:t.whenToUse}:{},content:n,triggers:t.triggers,modelInvocable:t.modelInvocable,userInvocable:t.userInvocable}}}catch{return}}function Yn(s){return vr(s)}function xr(s,e){let t=[],n=e!==void 0?`${e}. `:"";return t.push(`${n}${s.name} - ${s.description}`),s.whenToUse&&t.push(`   whenToUse: ${s.whenToUse}`),s.triggers.length>0&&t.push(`   triggers: ${s.triggers.join(", ")}`),s.path&&t.push(`   path: ${s.path}`),t.push(`   invocation: ${s.modelInvocable?"model-invocable":"manual"}${s.userInvocable?" / user-invocable":""}`),t.join(`
-`)}var qt=class extends O{constructor(t){super();this._skillsDirs=t}name="skill_catalog";description="List all available skills (name, description, whenToUse, triggers, path). Pass an optional query to fuzzy-match (recall) existing skills ranked by relevance \u2014 use this BEFORE create_skill to avoid duplicates.";parameters={type:"object",properties:{query:{type:"string",description:"Optional capability/task description used to rank existing skills by relevance (dedup/reuse check)"}},required:[]};async execute(t,n){let r=t._toolCallId||"";if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");let o=Yn(this._skillsDirs),i=t.query?.trim();if(!i){if(o.skills.length===0)return this.success(r,"No skills found. Configure skills directories in config.yaml.");let d=[`Skills catalog (${o.skills.length}):`,""].concat(o.skills.map((p,u)=>xr(p,u+1))).join(`
-`);return this.success(r,d)}let a=qn(o,i);if(a.candidates.length===0)return this.success(r,`No existing skills match "${i}". Safe to CREATE a new skill.`);let l=[`Recall for "${i}" \u2192 ${a.classification} (closest: ${a.closest?.entry.name??"none"}):`,"",...a.candidates.map((d,p)=>xr(d.entry,p+1).concat(`
-   match: name=${d.nameOverlap} whenToUse=${d.whenToUseOverlap} desc=${d.descriptionOverlap}`)),"",a.classification==="COVERED"?"Heuristic: an existing skill already covers this capability \u2014 prefer UPDATE/MERGE instead of CREATE.":a.classification==="PARTIAL"?"Heuristic: an existing skill partially covers this \u2014 consider UPDATE/MERGE with the new behavior.":"Heuristic: overlap is weak \u2014 a new skill may be justified."].join(`
-`);return this.success(r,l)}},Vt=class extends O{constructor(t){super();this._skillsDirs=t}name="create_skill";description="Create a reusable skill: validates the canonical SKILL.md contract (lowercase-kebab-case name, description, whenToUse, content starting with a heading), runs a dedup recall against existing skills, and publishes {skillsDir}/{name}/SKILL.md. Use skill_catalog first to check for duplicates.";parameters={type:"object",properties:{name:{type:"string",description:'Skill name in lowercase-kebab-case (e.g. "cpp-forge")'},description:{type:"string",description:"One or two sentences: what the skill does and when to use it"},content:{type:"string",description:"Complete Markdown body. MUST start with a heading (# ...) and contain executable instructions"},whenToUse:{type:"string",description:"Optional: situations the skill applies to (shown to the agent for self-matching)"},triggers:{type:"array",items:{type:"string"},description:'Optional trigger keywords for auto-matching (e.g. ["commit", "jira"])'},force:{type:"boolean",description:"Overwrite an existing skill with the same name. Default: false (refuses on conflict)."}},required:["name","description","content"]};async execute(t,n){let r=t._toolCallId||"";if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");let o={name:(t.name||"").trim(),description:(t.description||"").trim(),...t.whenToUse?{whenToUse:t.whenToUse.trim()}:{},content:t.content||"",...Array.isArray(t.triggers)?{triggers:t.triggers.map(m=>String(m))}:{}},i=t.force===!0;try{it(o)}catch(m){return this.failure(r,`Invalid skill: ${m.message}`)}let a=Yn(this._skillsDirs),l=qn(a,`${o.name} ${o.description} ${o.whenToUse??""}`.trim()),d=a.skills.find(m=>m.name.toLowerCase()===o.name.toLowerCase());if(d&&!i)return this.failure(r,`Skill "${o.name}" already exists at ${d.path}. Use update_skill to modify it, or pass force: true to overwrite.`);let p=Vn(this._skillsDirs[0],o,{force:i||void 0});if(p.status==="UNSUPPORTED")return this.failure(r,'No skills directory configured \u2014 add "skills:" to config.yaml');let u=l.closest&&l.classification!=="UNRELATED"?`
-Note: recall found "${l.closest.entry.name}" (${l.classification}) \u2014 consider whether this new skill should instead extend it.`:"";return this.success(r,`Skill "${o.name}" ${p.status==="UPDATED"?"updated":"created"} at ${p.targetPath} (${it(o).length} bytes).${u}`)}},Yt=class extends O{constructor(t){super();this._skillsDirs=t}name="update_skill";description="Update an existing skill: loads the current SKILL.md, merges the provided fields, re-renders it in the canonical format and publishes it back. Fields not provided are kept unchanged.";parameters={type:"object",properties:{name:{type:"string",description:"Name of the existing skill to update (lowercase-kebab-case)"},description:{type:"string",description:"Optional new description"},content:{type:"string",description:"Optional complete new Markdown body (must start with a heading)"},whenToUse:{type:"string",description:"Optional new whenToUse"},triggers:{type:"array",items:{type:"string"},description:"Optional new trigger keywords"}},required:["name"]};async execute(t,n){let r=t._toolCallId||"";if(n?.aborted)return this.failure(r,"Tool execution cancelled by user");let o=(t.name||"").trim();if(!o)return this.failure(r,"Missing skill name");let a=Yn(this._skillsDirs).skills.find(u=>u.name.toLowerCase()===o.toLowerCase());if(!a)return this.failure(r,`Skill "${o}" not found. Use skill_catalog to list skills, or create_skill to create it.`);let l=Ir(a);if(!l)return this.failure(r,`Failed to read skill "${o}" at ${a.path}`);let d={name:a.name,description:t.description?.trim()??l.proposal.description,...t.whenToUse!==void 0?{whenToUse:t.whenToUse.trim()}:l.proposal.whenToUse?{whenToUse:l.proposal.whenToUse}:{},content:t.content??l.proposal.content,triggers:Array.isArray(t.triggers)?t.triggers.map(u=>String(u)):l.proposal.triggers,modelInvocable:l.proposal.modelInvocable,userInvocable:l.proposal.userInvocable},p=Vn(this._skillsDirs[0],d,{force:!0});return p.status==="UNSUPPORTED"?this.failure(r,'No skills directory configured \u2014 add "skills:" to config.yaml'):this.success(r,`Skill "${o}" updated at ${p.targetPath} (${it(d).length} bytes). Reload the session to pick up the new content.`)}};var ze=A(require("node:fs")),at=A(require("node:path"));var Me=A(require("node:path")),ji=["strict","loose","off"],zn="strict",Bi="[workspace:",Wi=/^\[workspace:([^\]\n\r]+)\]/m,Hi=4;function Ar(s){let e=typeof s=="string"?s.trim().toLowerCase():"";return ji.includes(e)?e:zn}function de(s){let e=typeof s=="string"?s.trim():"";if(!e)return"";let t;try{t=Me.resolve(e)}catch{return""}for(;t.length>1&&(t.endsWith("/")||t.endsWith("\\"));)t=t.slice(0,-1);return t}function Ki(s){let e=typeof s=="string"?s.trim():"";return e?e.startsWith("/")||/^[A-Za-z]:[\\/]/.test(e)||e.startsWith("\\\\"):!1}function Jn(s){let e=de(s);return e?`${Bi}${e}]`:""}function $r(s){if(typeof s!="string"||!s)return;let e=Wi.exec(s);return e&&de(e[1])||void 0}function Xn(s){if(!s)return;let e=typeof s.task_id=="string"?s.task_id:"";if(Ki(e)){let t=de(e);if(t)return t}return $r(typeof s.content=="string"?s.content:void 0)??$r(typeof s.background=="string"?s.background:void 0)}function Cr(s,e){let t=de(s),n=de(e);if(!t||!n)return!1;if(t===n)return!0;let r=t.endsWith(Me.sep)?t:t+Me.sep;return n.startsWith(r)}function Gi(s,e){let t=de(s),n=de(e);return!t||!n?"unrelated":t===n?"same":Cr(t,n)?"ancestor":Cr(n,t)?"descendant":"unrelated"}function qi(s,e){return Gi(s,e)!=="unrelated"}function Vi(s,e,t=zn){if(t==="off")return!0;let n=Xn(s);return n?qi(n,e):t==="loose"}function Qn(s,e,t=zn){return t==="off"?s:s.filter(n=>Vi(n,e,t))}function Zn(s,e=Hi){let t=de(s);if(!t)return[];let n=[],r=t;for(;n.length<e;){let o=Me.dirname(r);if(!o||o===r||(n.push(r),o===Me.sep))break;r=o}return n}function zt(s,e){if(e)return e[s]??e[s.toLowerCase()]}function Yi(){let s=[...z("mcp.json"),...z(".mcp.json")];for(let e of s)try{if(!ze.existsSync(e))continue;let n=JSON.parse(ze.readFileSync(e,"utf-8")).mcpServers?.tdai_agent_mem;if(!n?.url)continue;return{enabled:!0,endpoint:n.url,api_key:zt("Authorization",n.headers)?.replace(/^Bearer\s+/i,"")??zt("x-tdai-user-key",n.headers)??n.apiKey,service_id:zt("x-tdai-service-id",n.headers)??n.serviceId,user_key:zt("x-tdai-user-key",n.headers),username:n.username??n.user,team_id:n.teamId,agent_id:n.agentId,user_id:n.userId,session_id:n.sessionId,workspace_dir:n.workspaceDir,workspace_scope:n.workspaceScope}}catch{}}function zi(){let s=[at.resolve("config.yaml"),at.resolve("config.json"),...z("config.yaml"),...z("config.json")];for(let e of s)try{if(!ze.existsSync(e))continue;let t=ze.readFileSync(e,"utf-8"),r=(e.endsWith(".json")?JSON.parse(t):Ji(t))?.memory;if(r&&typeof r=="object")return r}catch{}}function Ji(s){let e={},t=!1;for(let n of s.split(`
-`)){let r=n.trim();if(!r||r.startsWith("#"))continue;let o=n.length-n.trimStart().length;if(o===0&&r.endsWith(":")){t=r==="memory:";continue}if(t&&o===2){let i=r.indexOf(":");if(i<=0)continue;let a=r.slice(0,i).trim(),l=r.slice(i+1).trim();l=l.replace(/^["']|["']$/g,""),e.memory||(e.memory={});let d=e.memory;l==="true"?d[a]=!0:l==="false"?d[a]=!1:l!==""&&(d[a]=l)}}return e}function Rr(){let s=zi(),e=Yi();if(!(s?.enabled??e?.enabled??!1))return;let n=s?.endpoint||e?.endpoint||"",r=s?.api_key||e?.api_key||"",o=s?.service_id||e?.service_id||"",i=s?.team_id||e?.team_id||"",a=s?.agent_id||e?.agent_id||"",l=s?.user_id||e?.user_id||"";if(!(!n||!r||!o||!i||!a||!l))return{enabled:!0,endpoint:n,apiKey:r,serviceId:o,userKey:s?.user_key||e?.user_key||r,username:s?.username||e?.username||"",teamId:i,agentId:a,userId:l,sessionId:s?.session_id||e?.session_id||"",recall:s?.recall??!0,capture:s?.capture??!0,workspaceDir:de(s?.workspace_dir||e?.workspace_dir||""),workspaceScope:Ar(s?.workspace_scope??e?.workspace_scope)}}var Jt=class{enabled=!0;config;_workspaceOverride;constructor(e,t){this.config=e,this._workspaceOverride=t?.workspaceDir}get workspaceDir(){let e=de(this._workspaceOverride||this.config.workspaceDir);if(e)return e;try{return de(process.cwd())}catch{return""}}get workspaceTag(){return this.config.workspaceScope==="off"?"":this.workspaceDir}get workspaceScope(){return this.config.workspaceScope}get _sessionId(){return this.config.sessionId||void 0}_defaultSession(){if(this.config.sessionId)return this.config.sessionId;try{let e=at.basename(process.cwd());return e?`code-agent:${e}`:"code-agent"}catch{return"code-agent"}}_iso(e){let t={team_id:this.config.teamId,agent_id:this.config.agentId,user_id:this.config.userId},n=e??this._sessionId;return n&&(t.session_id=n),t}_headers(){let e={"Content-Type":"application/json",Authorization:`Bearer ${this.config.apiKey}`,"x-tdai-service-id":this.config.serviceId};return this.config.userKey&&(e["x-tdai-user-key"]=this.config.userKey),e}async _post(e,t){let n=new AbortController,r=setTimeout(()=>n.abort(),1e4);try{let o=await fetch(`${this.config.endpoint.replace(/\/+$/,"")}${e}`,{method:"POST",headers:this._headers(),body:JSON.stringify(t),signal:n.signal}),i=await o.text(),a;try{a=JSON.parse(i)}catch{throw new Error(`Memory gateway returned non-JSON (HTTP ${o.status}): ${i.slice(0,200)}`)}if(!o.ok||a.code!==0)throw new Error(`Memory API error ${a.code||o.status}: ${a.message}`);return a.data??null}finally{clearTimeout(r)}}async addConversation(e,t,n){let r=t||this._sessionId||this._defaultSession();return await this._post("/v3/conversation/add",{...this._iso(r),session_id:r,messages:e,...n?{task_id:n}:{}})!==null}async searchConversation(e,t=5,n){let r=await this._post("/v3/conversation/search",{...this._iso(null),query:e,limit:t,...n?{task_id:n}:{}});return r?.messages??r?.items??[]}async searchL0Scoped(e,t=5){let n=this.config.workspaceScope,r=this.workspaceDir;if(n==="off"||!r||t<=0)return{items:await this.searchConversation(e,t),hidden:0};let o=await this.searchConversation(e,Math.max(t,t*5)),i=await Promise.all(Zn(r).map(async d=>({tag:d,items:await this.searchConversation(e,t,d).catch(()=>[])}))),a=this._mergeScoped(o,i),l=Qn(a,r,n);return l.sort((d,p)=>{let u=Number(p.score??0)-Number(d.score??0);return u!==0?u:String(p.timestamp??p.created_at??"").localeCompare(String(d.timestamp??d.created_at??""))}),{items:l.slice(0,t),hidden:a.length-l.length}}async queryConversation(e=20){let t=await this._post("/v3/conversation/query",{...this._iso(null),limit:e,offset:0});return t?.messages??t?.items??[]}_mergeScoped(e,t){let n=(i,a)=>(typeof i.id=="string"?i.id:"")||`anon:${a}:${String(i.content??"").slice(0,48)}`,r=new Set,o=[];for(let{tag:i,items:a}of t)for(let l of a){let d=n(l,o.length);r.has(d)||(r.add(d),o.push(Xn(l)?l:{...l,task_id:i}))}for(let i of e){let a=n(i,o.length);r.has(a)||(r.add(a),o.push(i))}return o}async searchAtomic(e,t=5,n,r){return(await this._post("/v3/atomic/search",{...this._iso(null),query:e,limit:t,...n?{type:n}:{},...r?{task_id:r}:{}}))?.items??[]}async searchL1Scoped(e,t=5,n){let r=this.config.workspaceScope,o=this.workspaceDir;if(r==="off"||!o||t<=0)return{items:await this.searchAtomic(e,t,n),hidden:0};let i=Math.max(t,t*5),a=await this.searchAtomic(e,i,n),l=Zn(o),d=await Promise.all(l.map(async m=>({tag:m,items:await this.searchAtomic(e,t,n,m).catch(()=>[])}))),p=this._mergeScoped(a,d),u=Qn(p,o,r);return u.sort((m,h)=>Number(h.score??0)-Number(m.score??0)),{items:u.slice(0,t),hidden:p.length-u.length}}async updateAtomic(e,t,n,r){return await this._post("/v3/atomic/update",{...this._iso(null),id:e,content:t,...n?{background:n}:{},...r?{task_id:r}:{}})!==null}async listScenarios(e){let t=await this._post("/v3/scenario/ls",{...this._iso(null),...e?{path_prefix:e}:{}});return t?.entries??t?.items??[]}async readScenario(e){return(await this._post("/v3/scenario/read",{...this._iso(null),path:e}))?.content??null}async writeScenario(e,t,n){return await this._post("/v3/scenario/write",{...this._iso(null),path:e,content:t,...n?{summary:n}:{}})!==null}async readCore(){return(await this._post("/v3/core/read",this._iso(null)))?.content??null}async writeCore(e){return await this._post("/v3/core/write",{...this._iso(null),content:e})!==null}async recall(e){let t=[];try{let{items:n,hidden:r}=await this.searchL1Scoped(e,5);r>0&&console.log(`[memory] L1 workspace scope (${this.config.workspaceScope}) [${this.workspaceDir}]: hid ${r} memory(ies) tagged to other workspaces`);let o=n.filter(i=>typeof i.content=="string"&&i.content.trim()).map(i=>`- ${i.type?`[${i.type}] `:""}${String(i.content).trim()}`);o.length>0&&t.push(`<relevant-memories>
-${o.join(`
-`)}
-</relevant-memories>`)}catch(n){console.warn(`[memory] L1 recall failed: ${n.message}`)}try{let r=(await this.listScenarios()).map(o=>o.path??o.filename??o.name).filter(o=>typeof o=="string"&&o.length>0);r.length>0&&t.push(`## Shared Scenario Index (L2)
+// src/vs/workbench/contrib/agent/common/agentSkillFactory.ts
+var fs6 = __toESM(require("node:fs"));
+var path7 = __toESM(require("node:path"));
+var os5 = __toESM(require("node:os"));
+var SkillFactoryError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+    this.name = "SkillFactoryError";
+  }
+};
+var NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+var MARKDOWN_HEADING = /^#{1,6}\s+\S/m;
+var MAX_DESCRIPTION_BYTES = 2 * 1024;
+var MAX_WHEN_TO_USE_BYTES = 4 * 1024;
+var MAX_CONTENT_BYTES = 60 * 1024;
+var MAX_TRIGGERS = 24;
+function utf8Bytes(value) {
+  return Buffer.byteLength(value, "utf8");
+}
+function normalizeNewlines(value) {
+  return value.replace(/\r\n?/g, "\n");
+}
+function validateSkillProposal(proposal) {
+  if (!proposal.name || !NAME_PATTERN.test(proposal.name)) {
+    throw new SkillFactoryError(
+      "INVALID_NAME",
+      `Skill name must match lowercase-kebab-case (e.g. "cpp-forge"), got: "${proposal.name}"`
+    );
+  }
+  const description = normalizeNewlines(proposal.description || "").trim();
+  if (description.length === 0) {
+    throw new SkillFactoryError("INVALID_DESCRIPTION", "Skill description is required");
+  }
+  if (utf8Bytes(description) > MAX_DESCRIPTION_BYTES) {
+    throw new SkillFactoryError("INVALID_DESCRIPTION", `Skill description exceeds ${MAX_DESCRIPTION_BYTES} UTF-8 bytes`);
+  }
+  if (proposal.whenToUse !== void 0 && utf8Bytes(proposal.whenToUse) > MAX_WHEN_TO_USE_BYTES) {
+    throw new SkillFactoryError("INVALID_WHEN_TO_USE", `Skill whenToUse exceeds ${MAX_WHEN_TO_USE_BYTES} UTF-8 bytes`);
+  }
+  const content = normalizeNewlines(proposal.content || "");
+  if (!MARKDOWN_HEADING.test(content)) {
+    throw new SkillFactoryError("INVALID_CONTENT", "Skill content must be complete Markdown that starts with a heading");
+  }
+  if (utf8Bytes(content) > MAX_CONTENT_BYTES) {
+    throw new SkillFactoryError("INVALID_CONTENT", `Skill content exceeds ${MAX_CONTENT_BYTES} UTF-8 bytes`);
+  }
+  if (proposal.triggers && proposal.triggers.length > MAX_TRIGGERS) {
+    throw new SkillFactoryError("INVALID_TRIGGERS", `Skill triggers exceed ${MAX_TRIGGERS} entries`);
+  }
+}
+function renderCanonicalSkill(input) {
+  validateSkillProposal(input);
+  const body = normalizeNewlines(input.content).replace(/\n+$/g, "");
+  const metadata = [
+    "---",
+    `name: ${input.name}`,
+    `description: ${JSON.stringify(normalizeNewlines(input.description).trim())}`
+  ];
+  if (input.whenToUse !== void 0 && input.whenToUse.trim().length > 0) {
+    metadata.push(`whenToUse: ${JSON.stringify(normalizeNewlines(input.whenToUse).trim())}`);
+  }
+  const triggers = (input.triggers || []).map((t) => t.trim()).filter((t) => t.length > 0);
+  if (triggers.length > 0) {
+    metadata.push("trigger:");
+    for (const trigger of triggers.slice(0, MAX_TRIGGERS)) {
+      metadata.push(`  - ${trigger}`);
+    }
+  }
+  metadata.push(`disable-model-invocation: ${String(input.modelInvocable === false)}`);
+  metadata.push(`user-invocable: ${String(input.userInvocable === true)}`);
+  metadata.push("---");
+  return `${metadata.join("\n")}
+
+${body}
+`;
+}
+function parseSkillMetadata(raw) {
+  const meta = {};
+  let body = raw;
+  if (raw.startsWith("---")) {
+    const endIdx = raw.indexOf("---", 3);
+    if (endIdx > 0) {
+      const frontmatter = raw.substring(3, endIdx).trim();
+      body = raw.substring(endIdx + 3).trim();
+      let currentKey = "";
+      for (const line of frontmatter.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("- ") && currentKey) {
+          const itemVal = trimmed.slice(2).trim();
+          if (itemVal) {
+            const existing = meta[currentKey] || "";
+            meta[currentKey] = existing ? existing + "\n" + itemVal : itemVal;
+          }
+        } else if (trimmed.includes(":") && !trimmed.startsWith("-")) {
+          const colonIdx = trimmed.indexOf(":");
+          currentKey = trimmed.substring(0, colonIdx).trim();
+          let val = trimmed.substring(colonIdx + 1).trim();
+          if (val === ">" || val === "|") val = "";
+          meta[currentKey] = val;
+        } else if (currentKey && trimmed && !trimmed.startsWith("-")) {
+          meta[currentKey] = ((meta[currentKey] || "") + " " + trimmed).trim();
+        }
+      }
+    }
+  }
+  const unquote = (value) => {
+    const v = value.trim();
+    if (v.length >= 2 && (v.startsWith('"') && v.endsWith('"') || v.startsWith("'") && v.endsWith("'"))) {
+      try {
+        return v.startsWith('"') ? JSON.parse(v) : v.slice(1, -1);
+      } catch {
+        return v.slice(1, -1);
+      }
+    }
+    return v;
+  };
+  const triggers = (meta.trigger || "").split("\n").map((t) => t.trim()).filter((t) => t.length > 0);
+  return {
+    name: (meta.name || "").trim(),
+    description: unquote(meta.description || ""),
+    ...meta.whenToUse ? { whenToUse: unquote(meta.whenToUse) } : {},
+    triggers,
+    modelInvocable: meta["disable-model-invocation"] !== "true",
+    userInvocable: meta["user-invocable"] === "true"
+  };
+}
+var FILESYSTEM_PROVIDER = "filesystem";
+function scanSkillCatalog(dirs) {
+  const skills = [];
+  const seen = /* @__PURE__ */ new Set();
+  const complete = true;
+  for (const dir of dirs) {
+    if (!fs6.existsSync(dir)) continue;
+    let entries;
+    try {
+      entries = fs6.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path7.join(dir, entry.name);
+      let skillFile;
+      let skillName = entry.name;
+      if (entry.isDirectory()) {
+        const candidate = path7.join(fullPath, "SKILL.md");
+        if (fs6.existsSync(candidate)) skillFile = candidate;
+      } else if (entry.name === "SKILL.md") {
+        skillFile = fullPath;
+        skillName = path7.basename(dir);
+      }
+      if (!skillFile) continue;
+      const key = `${skillName}@${skillFile}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let raw;
+      try {
+        raw = fs6.readFileSync(skillFile, "utf-8");
+      } catch {
+        continue;
+      }
+      const meta = parseSkillMetadata(raw);
+      const entrySummary = {
+        name: meta.name || skillName,
+        description: meta.description,
+        ...meta.whenToUse ? { whenToUse: meta.whenToUse } : {},
+        triggers: meta.triggers,
+        source: "filesystem",
+        provider: FILESYSTEM_PROVIDER,
+        path: skillFile,
+        modelInvocable: meta.modelInvocable,
+        userInvocable: meta.userInvocable
+      };
+      skills.push(entrySummary);
+    }
+  }
+  skills.sort((a, b) => a.name.localeCompare(b.name));
+  return { skills, complete };
+}
+var MAX_QUERY_TOKENS = 64;
+var STOP_WORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "for",
+  "in",
+  "of",
+  "on",
+  "please",
+  "the",
+  "this",
+  "to",
+  "use"
+]);
+var CHINESE_STOP_WORDS = [
+  "\u8FD9\u4E2A",
+  "\u8FD9\u4E9B",
+  "\u90A3\u4E2A",
+  "\u90A3\u4E9B",
+  "\u4E00\u4E2A",
+  "\u4E00\u79CD",
+  "\u6211\u4EEC",
+  "\u4F60\u4EEC",
+  "\u4F7F\u7528",
+  "\u8FDB\u884C",
+  "\u7528\u4E8E",
+  "\u9700\u8981",
+  "\u53EF\u4EE5",
+  "\u8BF7"
+];
+function tokenizeForSkillRecall(value) {
+  const normalized = value.normalize("NFKC").toLowerCase();
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (token) => {
+    if (token.length <= 1 || STOP_WORDS.has(token) || seen.has(token) || result.length >= MAX_QUERY_TOKENS) return;
+    seen.add(token);
+    result.push(token);
+  };
+  for (const match of normalized.matchAll(/[\p{Script=Latin}\p{Number}]+|[\p{Script=Han}]+/gu)) {
+    const term = match[0];
+    if (/^[\p{Script=Han}]+$/u.test(term)) {
+      let meaningful = term;
+      for (const stopWord of CHINESE_STOP_WORDS) meaningful = meaningful.replaceAll(stopWord, "");
+      const characters = [...meaningful];
+      for (let index = 0; index + 1 < characters.length; index += 1) {
+        add(`${characters[index]}${characters[index + 1]}`);
+      }
+    } else {
+      add(term);
+    }
+    if (result.length >= MAX_QUERY_TOKENS) break;
+  }
+  return result;
+}
+function overlapCount(value, query) {
+  if (value === void 0) return 0;
+  let count = 0;
+  for (const token of tokenizeForSkillRecall(value)) {
+    if (query.has(token)) count += 1;
+  }
+  return count;
+}
+function recallExistingSkills(snapshot, directEvidence, maxResults = 5) {
+  const queryTokens = tokenizeForSkillRecall(directEvidence);
+  const query = new Set(queryTokens);
+  const scored = snapshot.skills.map((entry) => {
+    const nameOverlap = overlapCount(entry.name, query);
+    const whenToUseOverlap = overlapCount(entry.whenToUse, query);
+    const descriptionOverlap = overlapCount(entry.description, query);
+    return {
+      entry,
+      nameOverlap,
+      whenToUseOverlap,
+      descriptionOverlap,
+      totalScore: nameOverlap * 3 + whenToUseOverlap * 2 + descriptionOverlap
+    };
+  }).filter((c) => c.totalScore > 0).sort((a, b) => b.totalScore - a.totalScore).slice(0, maxResults);
+  const closest = scored[0];
+  let classification = "UNRELATED";
+  if (closest) {
+    if (closest.nameOverlap > 0 && closest.totalScore >= 6) {
+      classification = "COVERED";
+    } else if (closest.totalScore >= 2) {
+      classification = "PARTIAL";
+    }
+  }
+  return { queryTokens, candidates: scored, classification, closest };
+}
+function defaultSkillsDir() {
+  return path7.join(agentHomeDir(), "skills");
+}
+function publishSkill(skillsDir, proposal, options = {}) {
+  validateSkillProposal(proposal);
+  const root = (skillsDir && skillsDir.trim().length > 0 ? skillsDir : defaultSkillsDir()).replace(/^~(?=$|\/|\\)/, os5.homedir());
+  const targetDir = path7.join(root, proposal.name);
+  const targetPath = path7.join(targetDir, "SKILL.md");
+  const existed = fs6.existsSync(targetPath);
+  if (existed && !options.force) {
+    return { status: "EXISTS", targetPath };
+  }
+  const rendered = renderCanonicalSkill(proposal);
+  const tmpPath = path7.join(targetDir, `.SKILL.md.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs6.mkdirSync(targetDir, { recursive: true });
+    fs6.writeFileSync(tmpPath, rendered, "utf-8");
+    fs6.renameSync(tmpPath, targetPath);
+  } catch (err) {
+    try {
+      fs6.rmSync(tmpPath, { force: true });
+    } catch {
+    }
+    throw new SkillFactoryError("PUBLISH_FAILED", `Failed to publish skill "${proposal.name}": ${err.message}`);
+  }
+  return { status: existed ? "UPDATED" : "CREATED", targetPath };
+}
+function readSkillDefinition(entry) {
+  if (!entry.path) return void 0;
+  try {
+    const raw = fs6.readFileSync(entry.path, "utf-8");
+    const meta = parseSkillMetadata(raw);
+    let body = raw;
+    if (raw.startsWith("---")) {
+      const endIdx = raw.indexOf("\n---", 3);
+      if (endIdx > 0) {
+        body = raw.substring(endIdx + 5).trimStart();
+      }
+    }
+    return {
+      raw,
+      proposal: {
+        name: meta.name || entry.name,
+        description: meta.description,
+        ...meta.whenToUse ? { whenToUse: meta.whenToUse } : {},
+        content: body,
+        triggers: meta.triggers,
+        modelInvocable: meta.modelInvocable,
+        userInvocable: meta.userInvocable
+      }
+    };
+  } catch {
+    return void 0;
+  }
+}
+
+// src/vs/workbench/contrib/agent/common/tools/skillTools.ts
+function buildSkillCatalogSnapshot(skillsDirs) {
+  return scanSkillCatalog(skillsDirs);
+}
+function formatCatalogEntry(entry, index) {
+  const lines = [];
+  const header = index !== void 0 ? `${index}. ` : "";
+  lines.push(`${header}${entry.name} - ${entry.description}`);
+  if (entry.whenToUse) lines.push(`   whenToUse: ${entry.whenToUse}`);
+  if (entry.triggers.length > 0) lines.push(`   triggers: ${entry.triggers.join(", ")}`);
+  if (entry.path) lines.push(`   path: ${entry.path}`);
+  lines.push(`   invocation: ${entry.modelInvocable ? "model-invocable" : "manual"}${entry.userInvocable ? " / user-invocable" : ""}`);
+  return lines.join("\n");
+}
+var SkillCatalogTool = class extends AgentTool {
+  constructor(_skillsDirs) {
+    super();
+    this._skillsDirs = _skillsDirs;
+  }
+  name = "skill_catalog";
+  description = "List all available skills (name, description, whenToUse, triggers, path). Pass an optional query to fuzzy-match (recall) existing skills ranked by relevance \u2014 use this BEFORE create_skill to avoid duplicates.";
+  parameters = {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "Optional capability/task description used to rank existing skills by relevance (dedup/reuse check)"
+      }
+    },
+    required: []
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    const snapshot = buildSkillCatalogSnapshot(this._skillsDirs);
+    const query = args.query?.trim();
+    if (!query) {
+      if (snapshot.skills.length === 0) {
+        return this.success(toolCallId, "No skills found. Configure skills directories in config.yaml.");
+      }
+      const body2 = [`Skills catalog (${snapshot.skills.length}):`, ""].concat(snapshot.skills.map((s, i) => formatCatalogEntry(s, i + 1))).join("\n");
+      return this.success(toolCallId, body2);
+    }
+    const recall = recallExistingSkills(snapshot, query);
+    if (recall.candidates.length === 0) {
+      return this.success(toolCallId, `No existing skills match "${query}". Safe to CREATE a new skill.`);
+    }
+    const body = [
+      `Recall for "${query}" \u2192 ${recall.classification} (closest: ${recall.closest?.entry.name ?? "none"}):`,
+      "",
+      ...recall.candidates.map((c, i) => formatCatalogEntry(c.entry, i + 1).concat(`
+   match: name=${c.nameOverlap} whenToUse=${c.whenToUseOverlap} desc=${c.descriptionOverlap}`)),
+      "",
+      recall.classification === "COVERED" ? "Heuristic: an existing skill already covers this capability \u2014 prefer UPDATE/MERGE instead of CREATE." : recall.classification === "PARTIAL" ? "Heuristic: an existing skill partially covers this \u2014 consider UPDATE/MERGE with the new behavior." : "Heuristic: overlap is weak \u2014 a new skill may be justified."
+    ].join("\n");
+    return this.success(toolCallId, body);
+  }
+};
+var CreateSkillTool = class extends AgentTool {
+  constructor(_skillsDirs) {
+    super();
+    this._skillsDirs = _skillsDirs;
+  }
+  name = "create_skill";
+  description = "Create a reusable skill: validates the canonical SKILL.md contract (lowercase-kebab-case name, description, whenToUse, content starting with a heading), runs a dedup recall against existing skills, and publishes {skillsDir}/{name}/SKILL.md. Use skill_catalog first to check for duplicates.";
+  parameters = {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: 'Skill name in lowercase-kebab-case (e.g. "cpp-forge")'
+      },
+      description: {
+        type: "string",
+        description: "One or two sentences: what the skill does and when to use it"
+      },
+      content: {
+        type: "string",
+        description: "Complete Markdown body. MUST start with a heading (# ...) and contain executable instructions"
+      },
+      whenToUse: {
+        type: "string",
+        description: "Optional: situations the skill applies to (shown to the agent for self-matching)"
+      },
+      triggers: {
+        type: "array",
+        items: { type: "string" },
+        description: 'Optional trigger keywords for auto-matching (e.g. ["commit", "jira"])'
+      },
+      force: {
+        type: "boolean",
+        description: "Overwrite an existing skill with the same name. Default: false (refuses on conflict)."
+      }
+    },
+    required: ["name", "description", "content"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    const proposal = {
+      name: (args.name || "").trim(),
+      description: (args.description || "").trim(),
+      ...args.whenToUse ? { whenToUse: args.whenToUse.trim() } : {},
+      content: args.content || "",
+      ...Array.isArray(args.triggers) ? { triggers: args.triggers.map((t) => String(t)) } : {}
+    };
+    const force = args.force === true;
+    try {
+      renderCanonicalSkill(proposal);
+    } catch (err) {
+      return this.failure(toolCallId, `Invalid skill: ${err.message}`);
+    }
+    const snapshot = buildSkillCatalogSnapshot(this._skillsDirs);
+    const recall = recallExistingSkills(snapshot, `${proposal.name} ${proposal.description} ${proposal.whenToUse ?? ""}`.trim());
+    const existing = snapshot.skills.find((s) => s.name.toLowerCase() === proposal.name.toLowerCase());
+    if (existing && !force) {
+      return this.failure(
+        toolCallId,
+        `Skill "${proposal.name}" already exists at ${existing.path}. Use update_skill to modify it, or pass force: true to overwrite.`
+      );
+    }
+    const result = publishSkill(this._skillsDirs[0], proposal, { force: force || void 0 });
+    if (result.status === "UNSUPPORTED") {
+      return this.failure(toolCallId, 'No skills directory configured \u2014 add "skills:" to config.yaml');
+    }
+    const dedupNote = recall.closest && recall.classification !== "UNRELATED" ? `
+Note: recall found "${recall.closest.entry.name}" (${recall.classification}) \u2014 consider whether this new skill should instead extend it.` : "";
+    return this.success(
+      toolCallId,
+      `Skill "${proposal.name}" ${result.status === "UPDATED" ? "updated" : "created"} at ${result.targetPath} (${renderCanonicalSkill(proposal).length} bytes).${dedupNote}`
+    );
+  }
+};
+var UpdateSkillTool = class extends AgentTool {
+  constructor(_skillsDirs) {
+    super();
+    this._skillsDirs = _skillsDirs;
+  }
+  name = "update_skill";
+  description = "Update an existing skill: loads the current SKILL.md, merges the provided fields, re-renders it in the canonical format and publishes it back. Fields not provided are kept unchanged.";
+  parameters = {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: "Name of the existing skill to update (lowercase-kebab-case)"
+      },
+      description: {
+        type: "string",
+        description: "Optional new description"
+      },
+      content: {
+        type: "string",
+        description: "Optional complete new Markdown body (must start with a heading)"
+      },
+      whenToUse: {
+        type: "string",
+        description: "Optional new whenToUse"
+      },
+      triggers: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional new trigger keywords"
+      }
+    },
+    required: ["name"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Tool execution cancelled by user");
+    }
+    const name = (args.name || "").trim();
+    if (!name) {
+      return this.failure(toolCallId, "Missing skill name");
+    }
+    const snapshot = buildSkillCatalogSnapshot(this._skillsDirs);
+    const existing = snapshot.skills.find((s) => s.name.toLowerCase() === name.toLowerCase());
+    if (!existing) {
+      return this.failure(
+        toolCallId,
+        `Skill "${name}" not found. Use skill_catalog to list skills, or create_skill to create it.`
+      );
+    }
+    const definition = readSkillDefinition(existing);
+    if (!definition) {
+      return this.failure(toolCallId, `Failed to read skill "${name}" at ${existing.path}`);
+    }
+    const merged = {
+      name: existing.name,
+      description: args.description?.trim() ?? definition.proposal.description,
+      ...args.whenToUse !== void 0 ? { whenToUse: args.whenToUse.trim() } : definition.proposal.whenToUse ? { whenToUse: definition.proposal.whenToUse } : {},
+      content: args.content ?? definition.proposal.content,
+      triggers: Array.isArray(args.triggers) ? args.triggers.map((t) => String(t)) : definition.proposal.triggers,
+      modelInvocable: definition.proposal.modelInvocable,
+      userInvocable: definition.proposal.userInvocable
+    };
+    const result = publishSkill(this._skillsDirs[0], merged, { force: true });
+    if (result.status === "UNSUPPORTED") {
+      return this.failure(toolCallId, 'No skills directory configured \u2014 add "skills:" to config.yaml');
+    }
+    return this.success(
+      toolCallId,
+      `Skill "${name}" updated at ${result.targetPath} (${renderCanonicalSkill(merged).length} bytes). Reload the session to pick up the new content.`
+    );
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentMemory.ts
+var fs7 = __toESM(require("node:fs"));
+var path9 = __toESM(require("node:path"));
+
+// src/vs/workbench/contrib/agent/common/agentMemoryWorkspace.ts
+var path8 = __toESM(require("node:path"));
+var WORKSPACE_SCOPES = ["strict", "loose", "off"];
+var DEFAULT_WORKSPACE_SCOPE = "strict";
+var WORKSPACE_MARKER_OPEN = "[workspace:";
+var MARKER_RE = /^\[workspace:([^\]\n\r]+)\]/m;
+var MAX_ANCESTOR_QUERIES = 4;
+function parseWorkspaceScope(value) {
+  const v = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return WORKSPACE_SCOPES.includes(v) ? v : DEFAULT_WORKSPACE_SCOPE;
+}
+function normalizeWorkspaceDir(dir) {
+  const raw = typeof dir === "string" ? dir.trim() : "";
+  if (!raw) return "";
+  let resolved;
+  try {
+    resolved = path8.resolve(raw);
+  } catch {
+    return "";
+  }
+  while (resolved.length > 1 && (resolved.endsWith("/") || resolved.endsWith("\\"))) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+function isAbsoluteDirLike(value) {
+  const v = typeof value === "string" ? value.trim() : "";
+  if (!v) return false;
+  return v.startsWith("/") || /^[A-Za-z]:[\\/]/.test(v) || v.startsWith("\\\\");
+}
+function workspaceMarker(dir) {
+  const n = normalizeWorkspaceDir(dir);
+  return n ? `${WORKSPACE_MARKER_OPEN}${n}]` : "";
+}
+function extractWorkspaceFromText(text) {
+  if (typeof text !== "string" || !text) return void 0;
+  const m = MARKER_RE.exec(text);
+  if (!m) return void 0;
+  const dir = normalizeWorkspaceDir(m[1]);
+  return dir || void 0;
+}
+function workspaceTagOfItem(item) {
+  if (!item) return void 0;
+  const taskId = typeof item.task_id === "string" ? item.task_id : "";
+  if (isAbsoluteDirLike(taskId)) {
+    const dir = normalizeWorkspaceDir(taskId);
+    if (dir) return dir;
+  }
+  return extractWorkspaceFromText(typeof item.content === "string" ? item.content : void 0) ?? extractWorkspaceFromText(typeof item.background === "string" ? item.background : void 0);
+}
+function isSubDir(parent, child) {
+  const p = normalizeWorkspaceDir(parent);
+  const c = normalizeWorkspaceDir(child);
+  if (!p || !c) return false;
+  if (p === c) return true;
+  const withSep = p.endsWith(path8.sep) ? p : p + path8.sep;
+  return c.startsWith(withSep);
+}
+function workspaceRelation(noteTag, currentDir) {
+  const a = normalizeWorkspaceDir(noteTag);
+  const b = normalizeWorkspaceDir(currentDir);
+  if (!a || !b) return "unrelated";
+  if (a === b) return "same";
+  if (isSubDir(a, b)) return "ancestor";
+  if (isSubDir(b, a)) return "descendant";
+  return "unrelated";
+}
+function isWorkspaceRelated(noteTag, currentDir) {
+  return workspaceRelation(noteTag, currentDir) !== "unrelated";
+}
+function isWorkspaceVisible(item, currentDir, scope = DEFAULT_WORKSPACE_SCOPE) {
+  if (scope === "off") return true;
+  const tag = workspaceTagOfItem(item);
+  if (!tag) return scope === "loose";
+  return isWorkspaceRelated(tag, currentDir);
+}
+function filterByWorkspace(items, currentDir, scope = DEFAULT_WORKSPACE_SCOPE) {
+  if (scope === "off") return items;
+  return items.filter((it) => isWorkspaceVisible(it, currentDir, scope));
+}
+function workspaceCandidateTags(currentDir, maxAncestors = MAX_ANCESTOR_QUERIES) {
+  const dir = normalizeWorkspaceDir(currentDir);
+  if (!dir) return [];
+  const tags = [];
+  let cur = dir;
+  while (tags.length < maxAncestors) {
+    const parent = path8.dirname(cur);
+    if (!parent || parent === cur) break;
+    tags.push(cur);
+    if (parent === path8.sep) break;
+    cur = parent;
+  }
+  return tags;
+}
+
+// src/vs/workbench/contrib/agent/common/agentMemory.ts
+function env(headerKey, headers) {
+  if (!headers) return void 0;
+  return headers[headerKey] ?? headers[headerKey.toLowerCase()];
+}
+function loadMcpMemoryEntry() {
+  const candidates = [
+    ...agentHomeFileCandidates("mcp.json"),
+    ...agentHomeFileCandidates(".mcp.json")
+  ];
+  for (const file of candidates) {
+    try {
+      if (!fs7.existsSync(file)) continue;
+      const raw = JSON.parse(fs7.readFileSync(file, "utf-8"));
+      const entry = raw.mcpServers?.tdai_agent_mem;
+      if (!entry?.url) continue;
+      return {
+        enabled: true,
+        endpoint: entry.url,
+        api_key: env("Authorization", entry.headers)?.replace(/^Bearer\s+/i, "") ?? env("x-tdai-user-key", entry.headers) ?? entry.apiKey,
+        service_id: env("x-tdai-service-id", entry.headers) ?? entry.serviceId,
+        user_key: env("x-tdai-user-key", entry.headers),
+        username: entry.username ?? entry.user,
+        team_id: entry.teamId,
+        agent_id: entry.agentId,
+        user_id: entry.userId,
+        session_id: entry.sessionId,
+        workspace_dir: entry.workspaceDir,
+        workspace_scope: entry.workspaceScope
+      };
+    } catch {
+    }
+  }
+  return void 0;
+}
+function loadYamlMemorySection() {
+  const candidates = [
+    path9.resolve("config.yaml"),
+    path9.resolve("config.json"),
+    ...agentHomeFileCandidates("config.yaml"),
+    ...agentHomeFileCandidates("config.json")
+  ];
+  for (const file of candidates) {
+    try {
+      if (!fs7.existsSync(file)) continue;
+      const text = fs7.readFileSync(file, "utf-8");
+      const parsed = file.endsWith(".json") ? JSON.parse(text) : parseMemoryYaml(text);
+      const section = parsed?.memory;
+      if (section && typeof section === "object") return section;
+    } catch {
+    }
+  }
+  return void 0;
+}
+function parseMemoryYaml(text) {
+  const result = {};
+  let inMemory = false;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0 && trimmed.endsWith(":")) {
+      inMemory = trimmed === "memory:";
+      continue;
+    }
+    if (inMemory && indent === 2) {
+      const idx = trimmed.indexOf(":");
+      if (idx <= 0) continue;
+      const key = trimmed.slice(0, idx).trim();
+      let val = trimmed.slice(idx + 1).trim();
+      val = val.replace(/^["']|["']$/g, "");
+      if (!result.memory) result.memory = {};
+      const mem = result.memory;
+      if (val === "true") mem[key] = true;
+      else if (val === "false") mem[key] = false;
+      else if (val !== "") mem[key] = val;
+    }
+  }
+  return result;
+}
+function loadMemoryConfig() {
+  const yamlSection = loadYamlMemorySection();
+  const mcpEntry = loadMcpMemoryEntry();
+  const enabled = yamlSection?.enabled ?? mcpEntry?.enabled ?? false;
+  if (!enabled) return void 0;
+  const endpoint = yamlSection?.endpoint || mcpEntry?.endpoint || "";
+  const apiKey = yamlSection?.api_key || mcpEntry?.api_key || "";
+  const serviceId = yamlSection?.service_id || mcpEntry?.service_id || "";
+  const teamId = yamlSection?.team_id || mcpEntry?.team_id || "";
+  const agentId = yamlSection?.agent_id || mcpEntry?.agent_id || "";
+  const userId = yamlSection?.user_id || mcpEntry?.user_id || "";
+  if (!endpoint || !apiKey || !serviceId || !teamId || !agentId || !userId) {
+    return void 0;
+  }
+  return {
+    enabled: true,
+    endpoint,
+    apiKey,
+    serviceId,
+    userKey: yamlSection?.user_key || mcpEntry?.user_key || apiKey,
+    username: yamlSection?.username || mcpEntry?.username || "",
+    teamId,
+    agentId,
+    userId,
+    sessionId: yamlSection?.session_id || mcpEntry?.session_id || "",
+    recall: yamlSection?.recall ?? true,
+    capture: yamlSection?.capture ?? true,
+    workspaceDir: normalizeWorkspaceDir(yamlSection?.workspace_dir || mcpEntry?.workspace_dir || ""),
+    workspaceScope: parseWorkspaceScope(yamlSection?.workspace_scope ?? mcpEntry?.workspace_scope)
+  };
+}
+var MemoryClient = class {
+  enabled = true;
+  config;
+  /** Explicit workspace override (host-provided); falls back to config / cwd. */
+  _workspaceOverride;
+  constructor(config, opts) {
+    this.config = config;
+    this._workspaceOverride = opts?.workspaceDir;
+  }
+  /**
+   * Absolute directory that identifies "this workspace" for L1 tagging/scoping.
+   * Resolution order: constructor override → config `workspace_dir` → process.cwd().
+   */
+  get workspaceDir() {
+    const explicit = normalizeWorkspaceDir(this._workspaceOverride || this.config.workspaceDir);
+    if (explicit) return explicit;
+    try {
+      return normalizeWorkspaceDir(process.cwd());
+    } catch {
+      return "";
+    }
+  }
+  /** The tag written onto L1 notes; '' when scoping is disabled. */
+  get workspaceTag() {
+    return this.config.workspaceScope === "off" ? "" : this.workspaceDir;
+  }
+  get workspaceScope() {
+    return this.config.workspaceScope;
+  }
+  get _sessionId() {
+    return this.config.sessionId || void 0;
+  }
+  /** Stable default session: config override, else derived from the CWD. */
+  _defaultSession() {
+    if (this.config.sessionId) return this.config.sessionId;
+    try {
+      const base = path9.basename(process.cwd());
+      return base ? `code-agent:${base}` : "code-agent";
+    } catch {
+      return "code-agent";
+    }
+  }
+  _iso(sessionId) {
+    const body = {
+      team_id: this.config.teamId,
+      agent_id: this.config.agentId,
+      user_id: this.config.userId
+    };
+    const sid = sessionId !== null && sessionId !== void 0 ? sessionId : this._sessionId;
+    if (sid) body.session_id = sid;
+    return body;
+  }
+  _headers() {
+    const h = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${this.config.apiKey}`,
+      "x-tdai-service-id": this.config.serviceId
+    };
+    if (this.config.userKey) h["x-tdai-user-key"] = this.config.userKey;
+    return h;
+  }
+  /** Core POST with fail-open semantics: throws only on transport-level errors. */
+  async _post(pathname, body) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1e4);
+    try {
+      const res = await fetch(`${this.config.endpoint.replace(/\/+$/, "")}${pathname}`, {
+        method: "POST",
+        headers: this._headers(),
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      const text = await res.text();
+      let envelope;
+      try {
+        envelope = JSON.parse(text);
+      } catch {
+        throw new Error(`Memory gateway returned non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
+      }
+      if (!res.ok || envelope.code !== 0) {
+        throw new Error(`Memory API error ${envelope.code || res.status}: ${envelope.message}`);
+      }
+      return envelope.data ?? null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  // ---- L0 conversation ----
+  async addConversation(messages, sessionId, taskId) {
+    const sid = sessionId || this._sessionId || this._defaultSession();
+    const data = await this._post("/v3/conversation/add", {
+      ...this._iso(sid),
+      session_id: sid,
+      messages,
+      ...taskId ? { task_id: taskId } : {}
+    });
+    return data !== null;
+  }
+  /**
+   * Raw L0 conversation search against the hub.
+   *
+   * NOTE: the v3 data plane answers this endpoint with `data.messages`
+   * (verified live) — reading `data.items` silently returned nothing.
+   *
+   * `taskId` is a first-class server-side filter here too (verified: a bogus
+   * tag yields 0 hits, the workspace tag yields exactly the tagged turns).
+   */
+  async searchConversation(query, limit = 5, taskId) {
+    const data = await this._post("/v3/conversation/search", {
+      ...this._iso(null),
+      query,
+      limit,
+      ...taskId ? { task_id: taskId } : {}
+    });
+    return data?.messages ?? data?.items ?? [];
+  }
+  /**
+   * Workspace-scoped L0 search — the only L0 entry point used by the tool.
+   * Same strategy as `searchL1Scoped`: an over-fetched unfiltered search (which is
+   * what surfaces descendant-workspace and untagged legacy turns) UNION one exact-tag
+   * query per candidate tag (cwd + ancestors), merged, gated, then ranked.
+   */
+  async searchL0Scoped(query, limit = 5) {
+    const scope = this.config.workspaceScope;
+    const ws = this.workspaceDir;
+    if (scope === "off" || !ws || limit <= 0) {
+      return { items: await this.searchConversation(query, limit), hidden: 0 };
+    }
+    const primary = await this.searchConversation(query, Math.max(limit, limit * 5));
+    const tagged = await Promise.all(
+      workspaceCandidateTags(ws).map(async (tag) => ({
+        tag,
+        items: await this.searchConversation(query, limit, tag).catch(() => [])
+      }))
+    );
+    const merged = this._mergeScoped(primary, tagged);
+    const visible = filterByWorkspace(merged, ws, scope);
+    visible.sort((a, b) => {
+      const byScore = Number(b.score ?? 0) - Number(a.score ?? 0);
+      if (byScore !== 0) return byScore;
+      return String(b.timestamp ?? b.created_at ?? "").localeCompare(String(a.timestamp ?? a.created_at ?? ""));
+    });
+    return { items: visible.slice(0, limit), hidden: merged.length - visible.length };
+  }
+  async queryConversation(limit = 20) {
+    const data = await this._post("/v3/conversation/query", {
+      ...this._iso(null),
+      limit,
+      offset: 0
+    });
+    return data?.messages ?? data?.items ?? [];
+  }
+  /**
+   * Merge an unfiltered over-fetch with tag-filtered queries.
+   *
+   * Every item returned by a tag-filtered query is stamped with the tag the hub
+   * filtered on, because /v3/conversation/search does not echo `task_id` back —
+   * without the stamp, a correctly-tagged L0 turn (e.g. an assistant reply that
+   * carries no marker) would look untagged and be withheld in `strict` mode.
+   * Tagged copies win over the unfiltered pool, and duplicates collapse by id.
+   */
+  _mergeScoped(primary, tagged) {
+    const keyOf = (item, index) => {
+      const id = typeof item.id === "string" ? item.id : "";
+      return id || `anon:${index}:${String(item.content ?? "").slice(0, 48)}`;
+    };
+    const seen = /* @__PURE__ */ new Set();
+    const merged = [];
+    for (const { tag, items } of tagged) {
+      for (const item of items) {
+        const key = keyOf(item, merged.length);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(workspaceTagOfItem(item) ? item : { ...item, task_id: tag });
+      }
+    }
+    for (const item of primary) {
+      const key = keyOf(item, merged.length);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+    return merged;
+  }
+  // ---- L1 atomic ----
+  /**
+   * Raw L1 search against the hub.
+   *
+   * `taskId` is a first-class server-side filter (verified against the v3 data
+   * plane); this client stores the workspace directory there, so passing it
+   * restricts the search to notes tagged with exactly that directory.
+   */
+  async searchAtomic(query, limit = 5, type, taskId) {
+    const data = await this._post("/v3/atomic/search", {
+      ...this._iso(null),
+      query,
+      limit,
+      ...type ? { type } : {},
+      ...taskId ? { task_id: taskId } : {}
+    });
+    return data?.items ?? [];
+  }
+  /**
+   * Workspace-scoped L1 search: the only L1 entry point used for recall.
+   *
+   * Candidates = an over-fetched unfiltered search (which is what surfaces
+   * descendants-of-cwd notes and untagged legacy notes) UNION one exact-tag query per
+   * candidate tag (cwd + ancestors), so a workspace with few notes is still found even
+   * when the global top-N is crowded by other projects. Everything is then gated by the
+   * workspace rule before the caller sees it.
+   */
+  async searchL1Scoped(query, limit = 5, type) {
+    const scope = this.config.workspaceScope;
+    const ws = this.workspaceDir;
+    if (scope === "off" || !ws || limit <= 0) {
+      return { items: await this.searchAtomic(query, limit, type), hidden: 0 };
+    }
+    const overfetch = Math.max(limit, limit * 5);
+    const primary = await this.searchAtomic(query, overfetch, type);
+    const ancestorTags = workspaceCandidateTags(ws);
+    const tagged = await Promise.all(
+      ancestorTags.map(async (tag) => ({
+        tag,
+        items: await this.searchAtomic(query, limit, type, tag).catch(() => [])
+      }))
+    );
+    const merged = this._mergeScoped(primary, tagged);
+    const visible = filterByWorkspace(merged, ws, scope);
+    visible.sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0));
+    return { items: visible.slice(0, limit), hidden: merged.length - visible.length };
+  }
+  async updateAtomic(id, content, background, taskId) {
+    const data = await this._post("/v3/atomic/update", {
+      ...this._iso(null),
+      id,
+      content,
+      ...background ? { background } : {},
+      ...taskId ? { task_id: taskId } : {}
+    });
+    return data !== null;
+  }
+  // ---- L2 scenario ----
+  async listScenarios(pathPrefix) {
+    const data = await this._post("/v3/scenario/ls", {
+      ...this._iso(null),
+      ...pathPrefix ? { path_prefix: pathPrefix } : {}
+    });
+    return data?.entries ?? data?.items ?? [];
+  }
+  async readScenario(pathname) {
+    const data = await this._post("/v3/scenario/read", {
+      ...this._iso(null),
+      path: pathname
+    });
+    return data?.content ?? null;
+  }
+  async writeScenario(pathname, content, summary) {
+    const data = await this._post("/v3/scenario/write", {
+      ...this._iso(null),
+      path: pathname,
+      content,
+      ...summary ? { summary } : {}
+    });
+    return data !== null;
+  }
+  // ---- L3 core (persona) ----
+  async readCore() {
+    const data = await this._post("/v3/core/read", this._iso(null));
+    return data?.content ?? null;
+  }
+  async writeCore(content) {
+    const data = await this._post("/v3/core/write", {
+      ...this._iso(null),
+      content
+    });
+    return data !== null;
+  }
+  // ---- IMemoryIntegration (AgentLoop hooks) ----
+  /**
+   * Recall relevant memories for the task: L1 atomic search (workspace-scoped)
+   * + L2 scenario index + L3 persona. All three run independently; a failure in
+   * one never blocks the others. Returns a formatted context block or undefined.
+   *
+   * L2/L3 are intentionally cross-project; L0 and L1 are scoped to the workspace
+   * directory (same dir, or an ancestor/descendant of it). L0 is never injected
+   * automatically — it is reachable only through the `tdai_conversation_search`
+   * tool, which applies the very same scope.
+   */
+  async recall(task) {
+    const sections = [];
+    try {
+      const { items: atoms, hidden } = await this.searchL1Scoped(task, 5);
+      if (hidden > 0) {
+        console.log(`[memory] L1 workspace scope (${this.config.workspaceScope}) [${this.workspaceDir}]: hid ${hidden} memory(ies) tagged to other workspaces`);
+      }
+      const lines = atoms.filter((a) => typeof a.content === "string" && a.content.trim()).map((a) => {
+        const type = a.type ? `[${a.type}] ` : "";
+        return `- ${type}${String(a.content).trim()}`;
+      });
+      if (lines.length > 0) {
+        sections.push(`<relevant-memories>
+${lines.join("\n")}
+</relevant-memories>`);
+      }
+    } catch (err) {
+      console.warn(`[memory] L1 recall failed: ${err.message}`);
+    }
+    try {
+      const scenarios = await this.listScenarios();
+      const paths = scenarios.map((s) => s.path ?? s.filename ?? s.name).filter((p) => typeof p === "string" && p.length > 0);
+      if (paths.length > 0) {
+        sections.push(
+          `## Shared Scenario Index (L2)
 *\u4EE5\u4E0B\u573A\u666F\u6587\u4EF6\u53EF\u901A\u8FC7 tdai_read_file \u8BFB\u53D6\u8BE6\u60C5*
-`+r.map(o=>`- \`${o}\``).join(`
-`))}catch(n){console.warn(`[memory] L2 recall failed: ${n.message}`)}try{let n=await this.readCore();n&&n.trim()&&t.push(`<user-persona>
-${n.trim()}
-</user-persona>`)}catch(n){console.warn(`[memory] L3 recall failed: ${n.message}`)}if(t.length!==0)return t.join(`
+` + paths.map((p) => `- \`${p}\``).join("\n")
+        );
+      }
+    } catch (err) {
+      console.warn(`[memory] L2 recall failed: ${err.message}`);
+    }
+    try {
+      const core = await this.readCore();
+      if (core && core.trim()) {
+        sections.push(`<user-persona>
+${core.trim()}
+</user-persona>`);
+      }
+    } catch (err) {
+      console.warn(`[memory] L3 recall failed: ${err.message}`);
+    }
+    if (sections.length === 0) return void 0;
+    return sections.join("\n\n");
+  }
+  /**
+   * Capture the finished task exchange into L0. The memory hub's offload
+   * pipeline later distills L0 → L1 → L2 → L3, so raw turns are the right
+   * input here. Fail-open: never throws into the main agent flow.
+   *
+   * The workspace directory is stamped on the turn three times: as the hub's
+   * `task_id` field (filterable server-side, but NOT echoed back by
+   * /v3/conversation/search), and as a `[workspace:<dir>]` marker line inside
+   * BOTH captured messages. The marker is what makes a turn attributable when
+   * it is only reachable through the unfiltered search (e.g. a turn from a
+   * sub-directory of this workspace); without it, a marker-less assistant reply
+   * would be indistinguishable from untagged legacy data.
+   */
+  async capture(task, assistantContent) {
+    try {
+      const tag = this.workspaceTag;
+      const marker = tag ? workspaceMarker(tag) : "";
+      const stamp = (text) => marker ? `${marker}
+${text}` : text;
+      const messages = [];
+      if (task && task.trim()) {
+        messages.push({ role: "user", content: stamp(task.slice(0, 8e3)) });
+      }
+      if (assistantContent && assistantContent.trim()) {
+        messages.push({ role: "assistant", content: stamp(assistantContent.slice(0, 8e3)) });
+      }
+      if (messages.length === 0) return;
+      const ok = await this.addConversation(messages, void 0, tag || void 0);
+      if (ok) {
+        console.log(`[memory] L0 captured: ${messages.length} message(s) -> ${this.config.username || this.config.userId}${tag ? ` [workspace ${tag}]` : ""}`);
+      }
+    } catch (err) {
+      console.warn(`[memory] capture failed (non-fatal): ${err.message}`);
+    }
+  }
+};
+var MemoryTool = class extends AgentTool {
+  constructor(_client) {
+    super();
+    this._client = _client;
+  }
+};
+var MemorySearchTool = class extends MemoryTool {
+  name = "tdai_memory_search";
+  description = "Search shared agent memory (L1 atomic facts: user preferences, rules, past decisions, project conventions) on the tdai_agent_mem hub. Use when you need knowledge stored by previous agent runs on any machine. L1 is scoped to the current workspace directory: only memories tagged with this directory (or one of its parents/children) are returned.";
+  parameters = {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Natural-language query describing the fact you are looking for" },
+      limit: { type: "number", description: "Max results, default 5" }
+    },
+    required: ["query"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (signal?.aborted) return this.failure(toolCallId, "Tool execution cancelled by user");
+    try {
+      const { items, hidden } = await this._client.searchL1Scoped(String(args.query || ""), args.limit || 5);
+      const scopeNote = hidden > 0 ? `
 
-`)}async capture(e,t){try{let n=this.workspaceTag,r=n?Jn(n):"",o=l=>r?`${r}
-${l}`:l,i=[];if(e&&e.trim()&&i.push({role:"user",content:o(e.slice(0,8e3))}),t&&t.trim()&&i.push({role:"assistant",content:o(t.slice(0,8e3))}),i.length===0)return;await this.addConversation(i,void 0,n||void 0)&&console.log(`[memory] L0 captured: ${i.length} message(s) -> ${this.config.username||this.config.userId}${n?` [workspace ${n}]`:""}`)}catch(n){console.warn(`[memory] capture failed (non-fatal): ${n.message}`)}}},Ye=class extends O{constructor(t){super();this._client=t}},Xt=class extends Ye{name="tdai_memory_search";description="Search shared agent memory (L1 atomic facts: user preferences, rules, past decisions, project conventions) on the tdai_agent_mem hub. Use when you need knowledge stored by previous agent runs on any machine. L1 is scoped to the current workspace directory: only memories tagged with this directory (or one of its parents/children) are returned.";parameters={type:"object",properties:{query:{type:"string",description:"Natural-language query describing the fact you are looking for"},limit:{type:"number",description:"Max results, default 5"}},required:["query"]};async execute(e,t){let n=e._toolCallId||"";if(t?.aborted)return this.failure(n,"Tool execution cancelled by user");try{let{items:r,hidden:o}=await this._client.searchL1Scoped(String(e.query||""),e.limit||5),i=o>0?`
+(workspace scope \`${this._client.workspaceScope}\` on \`${this._client.workspaceDir}\`: ${hidden} memory(ies) tagged to other workspaces were withheld)` : "";
+      if (items.length === 0) {
+        return this.success(toolCallId, `(no matching memories found in this workspace)${scopeNote}`);
+      }
+      const out = items.map((it, i) => {
+        const id = it.id ? `
+id: ${it.id}` : "";
+        const type = it.type ? `
+type: ${it.type}` : "";
+        const background = it.background ?? it.scene_name ? `
+background: ${String(it.background ?? it.scene_name)}` : "";
+        return `[${i + 1}]${type}${id}
+${String(it.content)}${background}`;
+      }).join("\n\n");
+      return this.success(toolCallId, out + scopeNote);
+    } catch (err) {
+      return this.failure(toolCallId, `memory_search failed: ${err.message}`);
+    }
+  }
+};
+var ConversationSearchTool = class extends MemoryTool {
+  name = "tdai_conversation_search";
+  description = "Search raw past conversation history (L0) stored on the tdai_agent_mem hub \u2014 useful when the exact wording of a previous exchange matters. L0 is scoped to the current workspace directory: only conversations tagged with this directory (or one of its parents/children) are returned.";
+  parameters = {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Search query" },
+      limit: { type: "number", description: "Max results, default 5" }
+    },
+    required: ["query"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (signal?.aborted) return this.failure(toolCallId, "Tool execution cancelled by user");
+    try {
+      const { items, hidden } = await this._client.searchL0Scoped(String(args.query || ""), args.limit || 5);
+      const scopeNote = hidden > 0 ? `
 
-(workspace scope \`${this._client.workspaceScope}\` on \`${this._client.workspaceDir}\`: ${o} memory(ies) tagged to other workspaces were withheld)`:"";if(r.length===0)return this.success(n,`(no matching memories found in this workspace)${i}`);let a=r.map((l,d)=>{let p=l.id?`
-id: ${l.id}`:"",u=l.type?`
-type: ${l.type}`:"",m=l.background??l.scene_name?`
-background: ${String(l.background??l.scene_name)}`:"";return`[${d+1}]${u}${p}
-${String(l.content)}${m}`}).join(`
+(workspace scope \`${this._client.workspaceScope}\` on \`${this._client.workspaceDir}\`: ${hidden} conversation(s) from other workspaces were withheld)` : "";
+      if (items.length === 0) {
+        return this.success(toolCallId, `(no matching conversations found in this workspace)${scopeNote}`);
+      }
+      const out = items.map((it, i) => {
+        const role = it.role ? `${it.role}: ` : "";
+        const when = it.timestamp ?? it.created_at ? `
+(time: ${String(it.timestamp ?? it.created_at)})` : "";
+        return `[${i + 1}]${when}
+${role}${String(it.content ?? "").slice(0, 1e3)}`;
+      }).join("\n\n");
+      return this.success(toolCallId, out + scopeNote);
+    } catch (err) {
+      return this.failure(toolCallId, `conversation_search failed: ${err.message}`);
+    }
+  }
+};
+var MemoryReadTool = class extends MemoryTool {
+  name = "tdai_read_file";
+  description = 'Read a shared memory file from the tdai_agent_mem hub: L3 persona ("core") or an L2 scenario file by path (e.g. "work.md"). Paths come from the Shared Scenario Index.';
+  parameters = {
+    type: "object",
+    properties: {
+      path: { type: "string", description: 'File path, or "core" for the L3 persona' }
+    },
+    required: ["path"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (signal?.aborted) return this.failure(toolCallId, "Tool execution cancelled by user");
+    const p = String(args.path || "");
+    try {
+      if (p === "core") {
+        const content2 = await this._client.readCore();
+        return this.success(toolCallId, content2 ?? "(core persona is empty)");
+      }
+      const content = await this._client.readScenario(p);
+      if (content === null) return this.failure(toolCallId, `Scenario file not found: ${p}`);
+      return this.success(toolCallId, content);
+    } catch (err) {
+      return this.failure(toolCallId, `read_file failed: ${err.message}`);
+    }
+  }
+};
+var MemoryWriteTool = class extends MemoryTool {
+  name = "tdai_memory_write";
+  description = "Write knowledge to the tdai_agent_mem hub at a specific memory tier: l1 = atomic fact (needs an existing note id), l2 = scenario file (updates an existing path), l3 = user persona (core). L0 conversations are captured automatically after each task. L1 notes written here are tagged with the current workspace directory so they are only recalled in that workspace (or its parent/child directories).";
+  parameters = {
+    type: "object",
+    properties: {
+      layer: { type: "string", enum: ["l1", "l2", "l3"], description: "Memory tier: l1 atomic, l2 scenario, l3 persona core" },
+      content: { type: "string", description: "Content to store" },
+      id: { type: "string", description: "L1 atomic note id (required for layer=l1)" },
+      path: { type: "string", description: "L2 scenario file path (required for layer=l2)" },
+      background: { type: "string", description: "L1 background/context (optional)" },
+      summary: { type: "string", description: "L2 file summary (optional)" }
+    },
+    required: ["layer", "content"]
+  };
+  async execute(args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (signal?.aborted) return this.failure(toolCallId, "Tool execution cancelled by user");
+    const layer = String(args.layer || "").toLowerCase();
+    const content = String(args.content || "");
+    try {
+      if (layer === "l3") {
+        const ok = await this._client.writeCore(content);
+        return ok ? this.success(toolCallId, "L3 persona core updated.") : this.failure(toolCallId, "write failed");
+      }
+      if (layer === "l2") {
+        const p = String(args.path || "");
+        if (!p) return this.failure(toolCallId, 'layer=l2 requires "path" (an existing scenario file)');
+        const ok = await this._client.writeScenario(p, content, args.summary ? String(args.summary) : void 0);
+        return ok ? this.success(toolCallId, `L2 scenario updated: ${p}`) : this.failure(toolCallId, "write failed (file must already exist)");
+      }
+      if (layer === "l1") {
+        const id = String(args.id || "");
+        if (!id) return this.failure(toolCallId, 'layer=l1 requires "id" of an existing atomic note');
+        const tag = this._client.workspaceTag;
+        const marker = tag ? workspaceMarker(tag) : "";
+        const bg = args.background ? String(args.background) : "";
+        const background = marker ? `${bg ? `${bg}
+` : ""}${marker}` : bg || void 0;
+        const ok = await this._client.updateAtomic(id, content, background, tag || void 0);
+        return ok ? this.success(toolCallId, `L1 atomic note updated: ${id}${tag ? ` (workspace ${tag})` : ""}`) : this.failure(toolCallId, "update failed (note must already exist)");
+      }
+      return this.failure(toolCallId, `Unknown layer: ${layer} (use l1 | l2 | l3)`);
+    } catch (err) {
+      return this.failure(toolCallId, `memory_write failed: ${err.message}`);
+    }
+  }
+};
 
-`);return this.success(n,a+i)}catch(r){return this.failure(n,`memory_search failed: ${r.message}`)}}},Qt=class extends Ye{name="tdai_conversation_search";description="Search raw past conversation history (L0) stored on the tdai_agent_mem hub \u2014 useful when the exact wording of a previous exchange matters. L0 is scoped to the current workspace directory: only conversations tagged with this directory (or one of its parents/children) are returned.";parameters={type:"object",properties:{query:{type:"string",description:"Search query"},limit:{type:"number",description:"Max results, default 5"}},required:["query"]};async execute(e,t){let n=e._toolCallId||"";if(t?.aborted)return this.failure(n,"Tool execution cancelled by user");try{let{items:r,hidden:o}=await this._client.searchL0Scoped(String(e.query||""),e.limit||5),i=o>0?`
+// src/vs/workbench/contrib/agent/common/agentSelfImprove.ts
+var fs8 = __toESM(require("node:fs"));
+var path10 = __toESM(require("node:path"));
+var import_node_child_process2 = require("node:child_process");
+var DEFAULT_SELF_UPDATE_CONFIG = {
+  enabled: true,
+  allowRelease: false,
+  allowPush: false,
+  evidenceDays: 14,
+  evidenceTasks: 200,
+  remote: "origin",
+  releaseScripts: ["typecheck", "test", "pack"],
+  installCommand: ""
+};
+function parseSelfUpdateYaml(text) {
+  const out = {};
+  let inSection = false;
+  let inScripts = false;
+  let seen = false;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0 && trimmed.endsWith(":")) {
+      inSection = trimmed === "self_update:";
+      inScripts = false;
+      continue;
+    }
+    if (!inSection) continue;
+    if (trimmed.startsWith("- ")) {
+      if (inScripts) {
+        const value2 = parseScalarValue(trimmed.slice(2));
+        if (value2) {
+          out.releaseScripts = out.releaseScripts || [];
+          out.releaseScripts.push(value2);
+          seen = true;
+        }
+      }
+      continue;
+    }
+    if (indent !== 2) continue;
+    const idx = trimmed.indexOf(":");
+    if (idx <= 0) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const value = parseScalarValue(trimmed.slice(idx + 1));
+    inScripts = key === "release_scripts";
+    seen = true;
+    const bool = (v) => ["1", "true", "yes", "on"].includes(v.toLowerCase()) ? true : ["0", "false", "no", "off"].includes(v.toLowerCase()) ? false : void 0;
+    const num = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : void 0;
+    };
+    if (key === "enabled") out.enabled = bool(value);
+    else if (key === "allow_release") out.allowRelease = bool(value);
+    else if (key === "allow_push") out.allowPush = bool(value);
+    else if (key === "evidence_days") out.evidenceDays = num(value);
+    else if (key === "evidence_tasks") out.evidenceTasks = num(value);
+    else if (key === "remote") out.remote = value;
+    else if (key === "install_command") out.installCommand = value;
+  }
+  return seen ? out : void 0;
+}
+function loadSelfUpdateConfig() {
+  const candidates = [
+    path10.resolve("config.yaml"),
+    path10.resolve("config.json"),
+    ...agentHomeFileCandidates("config.yaml"),
+    ...agentHomeFileCandidates("config.json")
+  ];
+  for (const file of candidates) {
+    try {
+      if (!fs8.existsSync(file)) continue;
+      const text = fs8.readFileSync(file, "utf-8");
+      let parsed;
+      if (file.endsWith(".json")) {
+        const json = JSON.parse(text);
+        parsed = json?.self_update;
+      } else {
+        parsed = parseSelfUpdateYaml(text);
+      }
+      if (parsed) {
+        const merged = { ...DEFAULT_SELF_UPDATE_CONFIG, ...parsed };
+        if (!merged.allowRelease) merged.allowPush = false;
+        return merged;
+      }
+    } catch {
+    }
+  }
+  return { ...DEFAULT_SELF_UPDATE_CONFIG };
+}
+var MAX_SIGNATURE_CHARS = 160;
+var MAX_EXAMPLE_CHARS = 240;
+function looksLikePath(value) {
+  return value.startsWith("/") || value.includes("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+function normalizeFailureSignature(text) {
+  return text.replace(/\b[0-9a-f]{8,}\b/gi, "<id>").replace(/(\d+(?:\.\d+)?)\s*(ms|msec|s|sec|secs|m|min|mins|h|hr|hrs|kb|mb|gb|tb|%)\b/gi, "<n>$2").replace(/'(?:[^'\\]|\\.){0,300}'/g, (m) => looksLikePath(m.slice(1, -1)) ? "<path>" : "<str>").replace(/"(?:[^"\\]|\\.){0,300}"/g, (m) => looksLikePath(m.slice(1, -1)) ? "<path>" : "<str>").replace(/\/(?:[\w.@-]+\/)+[\w.@-]+/g, "<path>").replace(/\b\d+(?:\.\d+)?\b/g, "<n>").replace(/\s+/g, " ").trim().slice(0, MAX_SIGNATURE_CHARS);
+}
+function readTaskLogs(dir, maxTasks) {
+  let files = [];
+  try {
+    files = fs8.readdirSync(dir).filter((f) => f.startsWith("task_") && f.endsWith(".json"));
+  } catch {
+    return { logs: [], filesOnDisk: 0, truncated: false };
+  }
+  files.sort().reverse();
+  const truncated = files.length > maxTasks;
+  const logs = [];
+  for (const file of files.slice(0, maxTasks)) {
+    try {
+      logs.push(JSON.parse(fs8.readFileSync(path10.join(dir, file), "utf-8")));
+    } catch {
+    }
+  }
+  return { logs, filesOnDisk: files.length, truncated };
+}
+function countFiles(dir, pred) {
+  try {
+    return fs8.readdirSync(dir).filter(pred).length;
+  } catch {
+    return 0;
+  }
+}
+function collectRunEvidence(opts = {}) {
+  const now = opts.now ?? Date.now();
+  const days = opts.days ?? DEFAULT_SELF_UPDATE_CONFIG.evidenceDays;
+  const maxTasks = opts.maxTasks ?? DEFAULT_SELF_UPDATE_CONFIG.evidenceTasks;
+  const maxGroups = opts.maxGroups ?? 25;
+  const tasksDir2 = opts.tasksDir ?? path10.join(agentHomeDir(), "tasks");
+  const sessionsDir2 = opts.sessionsDir ?? path10.join(agentHomeDir(), "sessions");
+  const { logs, filesOnDisk, truncated } = readTaskLogs(tasksDir2, maxTasks);
+  const cutoff = now - days * 24 * 60 * 60 * 1e3;
+  const inWindow = logs.filter((l) => (l.startedAt ?? 0) >= cutoff);
+  const statusCounts = {};
+  const toolCalls = /* @__PURE__ */ new Map();
+  const toolFailureGroups = /* @__PURE__ */ new Map();
+  const taskFailureGroups = /* @__PURE__ */ new Map();
+  const issueGroups = /* @__PURE__ */ new Map();
+  const summaries = [];
+  let totalSteps = 0;
+  let totalToolCalls = 0;
+  let totalTokens = 0;
+  let firstAt;
+  let lastAt;
+  const noteIssue = (kind, taskId, detail) => {
+    const existing = issueGroups.get(kind) ?? { kind, count: 0, taskIds: [], example: detail };
+    existing.count++;
+    if (!existing.taskIds.includes(taskId)) existing.taskIds.push(taskId);
+    if (!existing.example && detail) existing.example = detail;
+    issueGroups.set(kind, existing);
+  };
+  const noteFailure = (group, taskId) => {
+    const key = `${group.scope}|${group.tool ?? ""}|${group.signature}`;
+    const map = group.scope === "tool" ? toolFailureGroups : taskFailureGroups;
+    const existing = map.get(key) ?? group;
+    existing.count++;
+    if (!existing.taskIds.includes(taskId)) existing.taskIds.push(taskId);
+    map.set(key, existing);
+  };
+  for (const log2 of inWindow) {
+    const taskId = log2.id;
+    statusCounts[log2.status] = (statusCounts[log2.status] ?? 0) + 1;
+    totalSteps += log2.totalSteps ?? 0;
+    totalToolCalls += log2.totalToolCalls ?? 0;
+    const tokens = log2.tokenUsage?.totalTokens ?? 0;
+    totalTokens += tokens;
+    if (log2.startedAt) {
+      firstAt = firstAt === void 0 ? log2.startedAt : Math.min(firstAt, log2.startedAt);
+      lastAt = lastAt === void 0 ? log2.startedAt : Math.max(lastAt, log2.startedAt);
+    }
+    summaries.push({
+      taskId,
+      task: (log2.task ?? "").slice(0, 160),
+      status: log2.status,
+      steps: log2.totalSteps ?? 0,
+      toolCalls: log2.totalToolCalls ?? 0,
+      durationMs: log2.durationMs ?? 0,
+      tokens
+    });
+    if (log2.status === "failed" && log2.error) {
+      noteFailure({
+        scope: "task",
+        signature: normalizeFailureSignature(String(log2.error)),
+        count: 0,
+        example: String(log2.error).slice(0, MAX_EXAMPLE_CHARS),
+        taskIds: []
+      }, taskId);
+    }
+    for (const signal of log2.issueSignals ?? []) {
+      noteIssue(signal.kind, taskId, signal.detail);
+    }
+    for (const sw of log2.modelSwitches ?? []) {
+      noteIssue(`model-switch:${sw.reason}`, taskId, `${sw.from} \u2192 ${sw.to}`);
+    }
+    for (const step of log2.steps ?? []) {
+      for (const exec of step.toolExecutions ?? []) {
+        const stat = toolCalls.get(exec.toolName) ?? { calls: 0, failures: 0, maxMs: 0 };
+        stat.calls++;
+        stat.maxMs = Math.max(stat.maxMs, exec.durationMs ?? 0);
+        if (!exec.success) {
+          stat.failures++;
+          const raw = exec.error || exec.result || "tool failed";
+          noteFailure({
+            scope: "tool",
+            tool: exec.toolName,
+            signature: normalizeFailureSignature(String(raw)),
+            count: 0,
+            example: String(raw).slice(0, MAX_EXAMPLE_CHARS),
+            taskIds: []
+          }, taskId);
+          const unknown = /unknown tool:\s*(\S+)/i.exec(String(raw));
+          if (unknown) noteIssue("unknown-tool", taskId, unknown[1]);
+        }
+        toolCalls.set(exec.toolName, stat);
+      }
+    }
+  }
+  const toolStats = [...toolCalls.entries()].map(([tool, s]) => ({
+    tool,
+    calls: s.calls,
+    failures: s.failures,
+    failureRate: s.calls > 0 ? Number((s.failures / s.calls).toFixed(3)) : 0,
+    maxMs: s.maxMs
+  })).sort((a, b) => b.failures - a.failures || b.calls - a.calls);
+  const byCount = (a, b) => b.count - a.count;
+  const failureGroups = [...toolFailureGroups.values(), ...taskFailureGroups.values()].sort((a, b) => b.count - a.count).slice(0, maxGroups);
+  const issueList = [...issueGroups.values()].sort(byCount).slice(0, maxGroups);
+  const notes = [];
+  notes.push("Session transcripts are NOT read (bounded by design): only per-task execution logs.");
+  if (truncated) notes.push(`Scanned the newest ${maxTasks} of ${filesOnDisk} task logs (cap reached).`);
+  if (filesOnDisk === 0) notes.push(`No task logs under ${tasksDir2} \u2014 evidence is empty, not "healthy".`);
+  if (logs.length > 0 && inWindow.length < logs.length) {
+    notes.push(`${logs.length - inWindow.length} scanned log(s) fall outside the ${days}-day window.`);
+  }
+  return {
+    generatedAt: now,
+    windowDays: days,
+    tasksDir: tasksDir2,
+    filesOnDisk,
+    scannedTasks: logs.length,
+    tasksInWindow: inWindow.length,
+    firstAt,
+    lastAt,
+    statusCounts,
+    totalSteps,
+    totalToolCalls,
+    totalTokens,
+    toolStats,
+    failureGroups,
+    issueGroups: issueList,
+    costlyTasks: [...summaries].sort((a, b) => b.tokens - a.tokens || b.durationMs - a.durationMs).slice(0, 10),
+    failingTasks: summaries.filter((s) => s.status !== "completed").sort((a, b) => b.durationMs - a.durationMs).slice(0, 10),
+    sessionsInWindow: countFiles(sessionsDir2, (f) => f.startsWith("session_") && f.endsWith(".json")),
+    notes
+  };
+}
+function formatEvidenceReport(e) {
+  const lines = [];
+  const ts = (v) => v ? new Date(v).toISOString().slice(0, 16).replace("T", " ") : "?";
+  lines.push(`RUN EVIDENCE \u2014 last ${e.windowDays} days (${e.tasksInWindow}/${e.filesOnDisk} task logs)`);
+  lines.push(`  window: ${ts(e.firstAt)} .. ${ts(e.lastAt)}`);
+  lines.push(`  tasks: ${e.tasksInWindow} | steps: ${e.totalSteps} | tool calls: ${e.totalToolCalls} | tokens: ${e.totalTokens}`);
+  lines.push(`  status: ${Object.entries(e.statusCounts).map(([k, v]) => `${k} ${v}`).join(" | ") || "(none)"}`);
+  if (e.issueGroups.length > 0) {
+    lines.push("");
+    lines.push("RUN SIGNALS (from task logs)");
+    for (const g of e.issueGroups) {
+      lines.push(`  ${g.count}x ${g.kind}${g.example ? ` \u2014 ${g.example.slice(0, 120)}` : ""} (tasks: ${g.taskIds.slice(0, 5).join(", ")})`);
+    }
+  }
+  if (e.failureGroups.length > 0) {
+    lines.push("");
+    lines.push("FAILURES (grouped by normalized error \u2014 the raw count is the repeat rate)");
+    for (const g of e.failureGroups) {
+      const where = g.scope === "tool" ? `tool ${g.tool}` : "task";
+      lines.push(`  ${g.count}x [${where}] ${g.signature}`);
+      lines.push(`        e.g. ${g.example.replace(/\s+/g, " ").slice(0, 160)}`);
+      lines.push(`        tasks: ${g.taskIds.slice(0, 6).join(", ")}`);
+    }
+  }
+  if (e.toolStats.length > 0) {
+    lines.push("");
+    lines.push("TOOL USE (by failures, then calls)");
+    for (const t of e.toolStats.slice(0, 20)) {
+      lines.push(`  ${t.tool.padEnd(18)} ${String(t.calls).padStart(5)} calls  ${String(t.failures).padStart(3)} failed  (${(t.failureRate * 100).toFixed(1)}%)  max ${(t.maxMs / 1e3).toFixed(1)}s`);
+    }
+  }
+  if (e.costlyTasks.length > 0) {
+    lines.push("");
+    lines.push("COSTLIEST TASKS");
+    for (const t of e.costlyTasks) {
+      lines.push(`  ${t.taskId} ${String(t.tokens).padStart(7)} tok ${String(Math.round(t.durationMs / 1e3)).padStart(5)}s steps=${t.steps} tools=${t.toolCalls} [${t.status}] ${t.task.slice(0, 70)}`);
+    }
+  }
+  if (e.failingTasks.length > 0) {
+    lines.push("");
+    lines.push("NON-COMPLETED TASKS");
+    for (const t of e.failingTasks) {
+      lines.push(`  ${t.taskId} [${t.status}] steps=${t.steps} ${t.task.slice(0, 90)}`);
+    }
+  }
+  lines.push("");
+  lines.push("NOTES");
+  for (const n of e.notes) lines.push(`  - ${n}`);
+  lines.push("");
+  lines.push("Facts only \u2014 deciding which finding is a real defect (and whether it is worth changing) is the reviewer's job.");
+  return lines.join("\n");
+}
+function buildSelfEvolvePromptSection(config) {
+  if (!config.enabled) return "";
+  const lines = [];
+  lines.push("");
+  lines.push("## Self-evolution (find your own defects, then release the fix)");
+  lines.push("");
+  lines.push("You can inspect your own run history and release a fix for a defect you find there.");
+  lines.push("Never skip a step \u2014 a change without the evidence below is not a fix, it is a guess.");
+  lines.push("");
+  lines.push("1. **Evidence first.** Call `agent_self_scan` before proposing anything. It returns facts");
+  lines.push("   (tool histograms, failure signatures grouped by normalized error, run signals).");
+  lines.push("   Repeated signatures and high failure rates are candidates; a single failure is not.");
+  lines.push("");
+  lines.push("2. **Judge against the user's task, not against elegance.** Evidence says a thing is true,");
+  lines.push("   it does not say the thing is wrong. A tool that failed once because the user passed a bad");
+  lines.push("   path is not a defect. If the evidence supports two readings, say both and ask.");
+  lines.push("");
+  lines.push("3. **Read only what the signature points at.** Find the code path behind the group");
+  lines.push("   (grep the tool name / error text), and prefer the smallest change that removes the");
+  lines.push('   failure mode. Do not "improve" neighbouring code.');
+  lines.push("");
+  lines.push("4. **Write the failing case down first.** Add or extend a test that fails before your change");
+  lines.push("   and passes after it. No test, no release.");
+  lines.push("");
+  lines.push("5. **Say the plan out loud before editing**, including what you decided NOT to change and why.");
+  lines.push("   If the plan turns out to be impossible, stop and explain the alternative \u2014 never silently swap it.");
+  lines.push("");
+  if (config.allowRelease) {
+    lines.push("6. **Release through the gate.** Call `agent_release` with a conventional commit message");
+    lines.push("   (it bumps the version, runs typecheck + tests, packs, smokes the built CLI, then commits" + (config.allowPush ? " and pushes)." : "; pushing needs allow_push in config."));
+    lines.push("   It aborts at the first failure and leaves nothing half-published. Report its step-by-step");
+    lines.push("   output verbatim; never claim a release you did not see the pipeline confirm.");
+  } else {
+    lines.push("6. **Stop before releasing.** `self_update.allow_release` is off, so you may prepare and");
+    lines.push("   verify the fix but must hand the release to the user (version bump, tests, pack, commit).");
+  }
+  lines.push("");
+  lines.push("Full method: docs/self-evolve.md");
+  return lines.join("\n");
+}
+var DEFAULT_COMMAND_TIMEOUT_MS = 30 * 60 * 1e3;
+var OUTPUT_TAIL_CHARS = 4e3;
+var defaultCommandRunner = (cmd, args, opts) => new Promise((resolve12) => {
+  const child = (0, import_node_child_process2.spawn)(cmd, args, { cwd: opts.cwd, shell: opts.shell ?? false });
+  let stdout = "";
+  let stderr = "";
+  let done = false;
+  const finish = (code) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    resolve12({ code, stdout, stderr });
+  };
+  const timer = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+    }
+    stderr += `
+[timeout after ${opts.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS}ms]`;
+    finish(124);
+  }, opts.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
+  child.stdout?.on("data", (d) => {
+    stdout += d.toString();
+  });
+  child.stderr?.on("data", (d) => {
+    stderr += d.toString();
+  });
+  child.on("error", (err) => {
+    stderr += String(err.message);
+    finish(127);
+  });
+  child.on("close", (code) => finish(code ?? 1));
+  if (child.stdin) {
+    if (opts.stdin !== void 0) child.stdin.write(opts.stdin);
+    child.stdin.end();
+  }
+});
+function bumpVersion(version, kind) {
+  if (kind === "none") return version;
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!m) throw new Error(`Cannot bump version: "${version}" is not semver`);
+  const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (kind === "major") return `${major + 1}.0.0`;
+  if (kind === "minor") return `${major}.${minor + 1}.0`;
+  return `${major}.${minor}.${patch + 1}`;
+}
+function tail(text) {
+  const combined = text.trim();
+  return combined.length > OUTPUT_TAIL_CHARS ? `\u2026
+${combined.slice(-OUTPUT_TAIL_CHARS)}` : combined;
+}
+async function runReleasePipeline(opts) {
+  const repoDir = opts.repoDir ?? process.cwd();
+  const run = opts.run ?? defaultCommandRunner;
+  const dryRun = opts.dryRun ?? false;
+  const remote = opts.remote ?? "origin";
+  const scripts = opts.scripts ?? DEFAULT_SELF_UPDATE_CONFIG.releaseScripts;
+  const wantPush = opts.push ?? false;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+  const pkgPath = path10.join(repoDir, "package.json");
+  const steps = [];
+  const notes = [];
+  let versionFrom = "";
+  let versionTo = "";
+  let committed = false;
+  let commitHash;
+  let pushed = false;
+  let abortedAt;
+  let abortReason;
+  const record = (step) => {
+    steps.push(step);
+    return step;
+  };
+  if (dryRun) {
+    notes.push("dry-run validates preflight only (repo state, semver, branch): the version bump, the release scripts and the commit are skipped because each of them writes to the tree/index.");
+  }
+  const abort = (name, reason) => {
+    abortedAt = name;
+    abortReason = reason;
+    return report(false);
+  };
+  const report = (ok) => ({
+    ok,
+    dryRun,
+    repoDir,
+    versionFrom,
+    versionTo,
+    committed,
+    commitHash,
+    pushed,
+    steps,
+    abortedAt,
+    abortReason,
+    notes
+  });
+  let currentVersion = "";
+  try {
+    const pkg = JSON.parse(fs8.readFileSync(pkgPath, "utf-8"));
+    currentVersion = String(pkg.version ?? "");
+  } catch (err) {
+    record({ name: "read-package.json", cmd: pkgPath, code: 1, ok: false, ms: 0, outputTail: err.message });
+    return abort("read-package.json", `cannot read ${pkgPath}`);
+  }
+  versionFrom = currentVersion;
+  if (!/^\d+\.\d+\.\d+/.test(currentVersion)) {
+    return abort("read-package.json", `package.json version "${currentVersion}" is not semver`);
+  }
+  record({ name: "read-package.json", code: 0, ok: true, ms: 0 });
+  const git = async (args) => run("git", args, { cwd: repoDir, timeoutMs: 6e4 });
+  let t0 = Date.now();
+  const gitDir = await git(["rev-parse", "--git-dir"]);
+  record({ name: "git-repository", cmd: "git rev-parse --git-dir", code: gitDir.code, ok: gitDir.code === 0, ms: Date.now() - t0, outputTail: gitDir.code === 0 ? void 0 : tail(gitDir.stderr || gitDir.stdout) });
+  if (gitDir.code !== 0) return abort("git-repository", `${repoDir} is not a git repository`);
+  const inProgress = [".git/MERGE_HEAD", ".git/rebase-merge", ".git/rebase-apply", ".git/CHERRY_PICK_HEAD"].filter((p) => fs8.existsSync(path10.join(repoDir, p)));
+  t0 = Date.now();
+  const unmerged = await git(["diff", "--name-only", "--diff-filter=U"]);
+  const conflicting = unmerged.stdout.trim().split("\n").filter(Boolean);
+  const stateOk = inProgress.length === 0 && conflicting.length === 0;
+  record({
+    name: "git-state",
+    cmd: "git diff --name-only --diff-filter=U",
+    code: stateOk ? 0 : 1,
+    ok: stateOk,
+    ms: Date.now() - t0,
+    outputTail: stateOk ? void 0 : `in-progress: ${inProgress.join(", ")}; unmerged: ${conflicting.slice(0, 10).join(", ")}`
+  });
+  if (!stateOk) return abort("git-state", "a merge/rebase/cherry-pick is in progress or files are unmerged");
+  t0 = Date.now();
+  const branch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  const branchName = branch.stdout.trim();
+  const detached = branchName === "HEAD" || branchName === "";
+  const branchOk = !(wantPush && detached);
+  record({
+    name: "git-branch",
+    cmd: "git rev-parse --abbrev-ref HEAD",
+    code: branchOk ? 0 : 1,
+    ok: branchOk,
+    ms: Date.now() - t0,
+    outputTail: branchOk ? void 0 : "HEAD is detached \u2014 nothing to push"
+  });
+  if (!branchOk) return abort("git-branch", "cannot push from a detached HEAD");
+  try {
+    versionTo = bumpVersion(currentVersion, opts.bump ?? "patch");
+  } catch (err) {
+    return abort("bump-version", err.message);
+  }
+  t0 = Date.now();
+  if (dryRun) {
+    record({ name: "bump-version", code: 0, ok: true, ms: 0, skipped: true, outputTail: `dry-run: would write ${currentVersion} \u2192 ${versionTo}` });
+  } else {
+    const raw = fs8.readFileSync(pkgPath, "utf-8");
+    const updated = raw.replace(/("version"\s*:\s*")([^"]*)(")/, `$1${versionTo}$3`);
+    fs8.writeFileSync(pkgPath, updated, "utf-8");
+    const written = /"version"\s*:\s*"([^"]+)"/.exec(updated)?.[1];
+    const ok = written === versionTo;
+    record({ name: "bump-version", code: ok ? 0 : 1, ok, ms: Date.now() - t0, outputTail: ok ? `${currentVersion} \u2192 ${versionTo}` : `wrote "${written}"` });
+    if (!ok) return abort("bump-version", "package.json version was not updated");
+  }
+  if (!dryRun) {
+    for (const script of scripts) {
+      t0 = Date.now();
+      const res = await run("npm", ["run", script], { cwd: repoDir, timeoutMs });
+      const ok = res.code === 0;
+      record({ name: `npm run ${script}`, cmd: `npm run ${script}`, code: res.code, ok, ms: Date.now() - t0, outputTail: ok ? void 0 : tail(res.stdout + "\n" + res.stderr) });
+      if (!ok) {
+        restoreVersion(pkgPath, versionFrom);
+        notes.push(`package.json version restored to ${versionFrom} (no commit was made).`);
+        return abort(`npm run ${script}`, `${script} failed (exit ${res.code}); aborting before commit`);
+      }
+    }
+    if (opts.installCommand) {
+      t0 = Date.now();
+      const res = await run(opts.installCommand, [], { cwd: repoDir, timeoutMs, shell: true });
+      const ok = res.code === 0;
+      record({ name: "install", cmd: opts.installCommand, code: res.code, ok, ms: Date.now() - t0, outputTail: ok ? void 0 : tail(res.stdout + "\n" + res.stderr) });
+      if (!ok) {
+        restoreVersion(pkgPath, versionFrom);
+        notes.push(`package.json version restored to ${versionFrom} (no commit was made).`);
+        return abort("install", `install command failed (exit ${res.code})`);
+      }
+    }
+    const cliPath = path10.join(repoDir, "build", "agent-cli.js");
+    if (fs8.existsSync(cliPath)) {
+      t0 = Date.now();
+      const res = await run(process.execPath, [cliPath, "--version"], { cwd: repoDir, timeoutMs: 6e4 });
+      const seen = (res.stdout + res.stderr).trim();
+      const ok = res.code === 0 && seen.includes(versionTo);
+      record({
+        name: "smoke built CLI",
+        cmd: `node build/agent-cli.js --version`,
+        code: ok ? 0 : 1,
+        ok,
+        ms: Date.now() - t0,
+        outputTail: ok ? seen.split("\n")[0] : `expected version ${versionTo}, got "${seen.slice(0, 120)}"`
+      });
+      if (!ok) {
+        restoreVersion(pkgPath, versionFrom);
+        notes.push(`package.json version restored to ${versionFrom} (no commit was made).`);
+        return abort("smoke built CLI", `build/agent-cli.js does not report ${versionTo}`);
+      }
+    } else {
+      record({ name: "smoke built CLI", code: 0, ok: true, ms: 0, skipped: true, outputTail: "no build/agent-cli.js (pack step not in release_scripts)" });
+    }
+  } else {
+    record({ name: "verification", code: 0, ok: true, ms: 0, skipped: true, outputTail: `dry-run: would run ${scripts.map((s) => `npm run ${s}`).join(", ")}` });
+  }
+  if (dryRun) {
+    record({ name: "git add -A", code: 0, ok: true, ms: 0, skipped: true, outputTail: "dry-run: would stage all changes" });
+    record({ name: "git commit", code: 0, ok: true, ms: 0, skipped: true, outputTail: "dry-run: would commit" });
+    record({
+      name: "git push",
+      code: 0,
+      ok: true,
+      ms: 0,
+      skipped: true,
+      outputTail: wantPush ? `dry-run: would push to ${remote}` : "push not requested (allow_push is off)"
+    });
+    return report(true);
+  }
+  const message = opts.trailer === false ? opts.commitMessage : `${opts.commitMessage.trimEnd()}
 
-(workspace scope \`${this._client.workspaceScope}\` on \`${this._client.workspaceDir}\`: ${o} conversation(s) from other workspaces were withheld)`:"";if(r.length===0)return this.success(n,`(no matching conversations found in this workspace)${i}`);let a=r.map((l,d)=>{let p=l.role?`${l.role}: `:"",u=l.timestamp??l.created_at?`
-(time: ${String(l.timestamp??l.created_at)})`:"";return`[${d+1}]${u}
-${p}${String(l.content??"").slice(0,1e3)}`}).join(`
+Verified-by: code-agent self-update ${versionFrom} -> ${versionTo}
+` + steps.filter((s) => !s.skipped && s.cmd).map((s) => `  ${s.name} (${(s.ms / 1e3).toFixed(1)}s)`).join("\n");
+  t0 = Date.now();
+  const add = await git(["add", "-A"]);
+  record({ name: "git add -A", cmd: "git add -A", code: add.code, ok: add.code === 0, ms: Date.now() - t0, outputTail: add.code === 0 ? void 0 : tail(add.stderr) });
+  if (add.code !== 0) {
+    restoreVersion(pkgPath, versionFrom);
+    return abort("git add -A", "staging failed");
+  }
+  const staged = await git(["diff", "--cached", "--name-only"]);
+  if (staged.stdout.trim() === "") {
+    record({ name: "git commit", code: 0, ok: true, ms: 0, skipped: true, outputTail: "nothing staged \u2014 skipped" });
+    notes.push("Nothing was staged, so no commit was created.");
+    return report(true);
+  }
+  t0 = Date.now();
+  const commit = await run("git", ["commit", "-F", "-"], { cwd: repoDir, timeoutMs: 12e4, stdin: message });
+  record({ name: "git commit", cmd: "git commit -F -", code: commit.code, ok: commit.code === 0, ms: Date.now() - t0, outputTail: commit.code === 0 ? void 0 : tail(commit.stderr || commit.stdout) });
+  if (commit.code !== 0) {
+    notes.push(`Commit failed; package.json still holds ${versionTo} \u2014 the change is staged, fix and re-run.`);
+    return abort("git commit", "commit failed");
+  }
+  committed = true;
+  const rev = await git(["rev-parse", "HEAD"]);
+  commitHash = rev.stdout.trim() || void 0;
+  if (!wantPush) {
+    record({ name: "git push", code: 0, ok: true, ms: 0, skipped: true, outputTail: "push not requested (allow_push is off)" });
+    return report(true);
+  }
+  t0 = Date.now();
+  const push = await git(["push", remote, "HEAD"]);
+  const pushOk = push.code === 0;
+  record({ name: "git push", cmd: `git push ${remote} HEAD`, code: push.code, ok: pushOk, ms: Date.now() - t0, outputTail: pushOk ? void 0 : tail(push.stderr || push.stdout) });
+  if (!pushOk) {
+    notes.push("The commit exists locally; only the push failed. Re-run to push (no force push is ever attempted).");
+    return abort("git push", `push to ${remote} failed`);
+  }
+  pushed = true;
+  return report(true);
+}
+function restoreVersion(pkgPath, version) {
+  try {
+    const raw = fs8.readFileSync(pkgPath, "utf-8");
+    fs8.writeFileSync(pkgPath, raw.replace(/("version"\s*:\s*")([^"]*)(")/, `$1${version}$3`), "utf-8");
+  } catch {
+  }
+}
+function formatReleaseReport(r) {
+  const lines = [];
+  lines.push(`${r.ok ? "RELEASE OK" : "RELEASE ABORTED"}${r.dryRun ? " (dry run)" : ""} \u2014 ${r.repoDir}`);
+  lines.push(`  version: ${r.versionFrom} \u2192 ${r.versionTo}`);
+  for (const s of r.steps) {
+    const mark = s.skipped ? "\u2013" : s.ok ? "\u2713" : "\u2717";
+    lines.push(`  ${mark} ${s.name} (${(s.ms / 1e3).toFixed(1)}s)${s.outputTail ? ` \u2014 ${s.outputTail.replace(/\s+/g, " ").slice(0, 200)}` : ""}`);
+  }
+  lines.push(`  committed: ${r.committed}${r.commitHash ? ` (${r.commitHash.slice(0, 10)})` : ""} | pushed: ${r.pushed}`);
+  if (r.abortedAt) lines.push(`  aborted at: ${r.abortedAt} \u2014 ${r.abortReason}`);
+  for (const n of r.notes) lines.push(`  note: ${n}`);
+  return lines.join("\n");
+}
 
-`);return this.success(n,a+i)}catch(r){return this.failure(n,`conversation_search failed: ${r.message}`)}}},Zt=class extends Ye{name="tdai_read_file";description='Read a shared memory file from the tdai_agent_mem hub: L3 persona ("core") or an L2 scenario file by path (e.g. "work.md"). Paths come from the Shared Scenario Index.';parameters={type:"object",properties:{path:{type:"string",description:'File path, or "core" for the L3 persona'}},required:["path"]};async execute(e,t){let n=e._toolCallId||"";if(t?.aborted)return this.failure(n,"Tool execution cancelled by user");let r=String(e.path||"");try{if(r==="core"){let i=await this._client.readCore();return this.success(n,i??"(core persona is empty)")}let o=await this._client.readScenario(r);return o===null?this.failure(n,`Scenario file not found: ${r}`):this.success(n,o)}catch(o){return this.failure(n,`read_file failed: ${o.message}`)}}},en=class extends Ye{name="tdai_memory_write";description="Write knowledge to the tdai_agent_mem hub at a specific memory tier: l1 = atomic fact (needs an existing note id), l2 = scenario file (updates an existing path), l3 = user persona (core). L0 conversations are captured automatically after each task. L1 notes written here are tagged with the current workspace directory so they are only recalled in that workspace (or its parent/child directories).";parameters={type:"object",properties:{layer:{type:"string",enum:["l1","l2","l3"],description:"Memory tier: l1 atomic, l2 scenario, l3 persona core"},content:{type:"string",description:"Content to store"},id:{type:"string",description:"L1 atomic note id (required for layer=l1)"},path:{type:"string",description:"L2 scenario file path (required for layer=l2)"},background:{type:"string",description:"L1 background/context (optional)"},summary:{type:"string",description:"L2 file summary (optional)"}},required:["layer","content"]};async execute(e,t){let n=e._toolCallId||"";if(t?.aborted)return this.failure(n,"Tool execution cancelled by user");let r=String(e.layer||"").toLowerCase(),o=String(e.content||"");try{if(r==="l3")return await this._client.writeCore(o)?this.success(n,"L3 persona core updated."):this.failure(n,"write failed");if(r==="l2"){let i=String(e.path||"");return i?await this._client.writeScenario(i,o,e.summary?String(e.summary):void 0)?this.success(n,`L2 scenario updated: ${i}`):this.failure(n,"write failed (file must already exist)"):this.failure(n,'layer=l2 requires "path" (an existing scenario file)')}if(r==="l1"){let i=String(e.id||"");if(!i)return this.failure(n,'layer=l1 requires "id" of an existing atomic note');let a=this._client.workspaceTag,l=a?Jn(a):"",d=e.background?String(e.background):"",p=l?`${d?`${d}
-`:""}${l}`:d||void 0;return await this._client.updateAtomic(i,o,p,a||void 0)?this.success(n,`L1 atomic note updated: ${i}${a?` (workspace ${a})`:""}`):this.failure(n,"update failed (note must already exist)")}return this.failure(n,`Unknown layer: ${r} (use l1 | l2 | l3)`)}catch(i){return this.failure(n,`memory_write failed: ${i.message}`)}}};var ne=A(require("node:fs")),ke=A(require("node:path")),Lr=require("node:child_process");var lt={enabled:!0,allowRelease:!1,allowPush:!1,evidenceDays:14,evidenceTasks:200,remote:"origin",releaseScripts:["typecheck","test","pack"],installCommand:""};function Xi(s){let e={},t=!1,n=!1,r=!1;for(let o of s.split(`
-`)){let i=o.trim();if(!i||i.startsWith("#"))continue;let a=o.length-o.trimStart().length;if(a===0&&i.endsWith(":")){t=i==="self_update:",n=!1;continue}if(!t)continue;if(i.startsWith("- ")){if(n){let h=Ne(i.slice(2));h&&(e.releaseScripts=e.releaseScripts||[],e.releaseScripts.push(h),r=!0)}continue}if(a!==2)continue;let l=i.indexOf(":");if(l<=0)continue;let d=i.slice(0,l).trim(),p=Ne(i.slice(l+1));n=d==="release_scripts",r=!0;let u=h=>["1","true","yes","on"].includes(h.toLowerCase())?!0:["0","false","no","off"].includes(h.toLowerCase())?!1:void 0,m=h=>{let f=Number(h);return Number.isFinite(f)&&f>0?f:void 0};d==="enabled"?e.enabled=u(p):d==="allow_release"?e.allowRelease=u(p):d==="allow_push"?e.allowPush=u(p):d==="evidence_days"?e.evidenceDays=m(p):d==="evidence_tasks"?e.evidenceTasks=m(p):d==="remote"?e.remote=p:d==="install_command"&&(e.installCommand=p)}return r?e:void 0}function Or(){let s=[ke.resolve("config.yaml"),ke.resolve("config.json"),...z("config.yaml"),...z("config.json")];for(let e of s)try{if(!ne.existsSync(e))continue;let t=ne.readFileSync(e,"utf-8"),n;if(e.endsWith(".json")?n=JSON.parse(t)?.self_update:n=Xi(t),n){let r={...lt,...n};return r.allowRelease||(r.allowPush=!1),r}}catch{}return{...lt}}var Qi=160,Er=240;function Mr(s){return s.startsWith("/")||s.includes("/")||/^[A-Za-z]:[\\/]/.test(s)}function Pr(s){return s.replace(/\b[0-9a-f]{8,}\b/gi,"<id>").replace(/(\d+(?:\.\d+)?)\s*(ms|msec|s|sec|secs|m|min|mins|h|hr|hrs|kb|mb|gb|tb|%)\b/gi,"<n>$2").replace(/'(?:[^'\\]|\\.){0,300}'/g,e=>Mr(e.slice(1,-1))?"<path>":"<str>").replace(/"(?:[^"\\]|\\.){0,300}"/g,e=>Mr(e.slice(1,-1))?"<path>":"<str>").replace(/\/(?:[\w.@-]+\/)+[\w.@-]+/g,"<path>").replace(/\b\d+(?:\.\d+)?\b/g,"<n>").replace(/\s+/g," ").trim().slice(0,Qi)}function Zi(s,e){let t=[];try{t=ne.readdirSync(s).filter(o=>o.startsWith("task_")&&o.endsWith(".json"))}catch{return{logs:[],filesOnDisk:0,truncated:!1}}t.sort().reverse();let n=t.length>e,r=[];for(let o of t.slice(0,e))try{r.push(JSON.parse(ne.readFileSync(ke.join(s,o),"utf-8")))}catch{}return{logs:r,filesOnDisk:t.length,truncated:n}}function ea(s,e){try{return ne.readdirSync(s).filter(e).length}catch{return 0}}function nn(s={}){let e=s.now??Date.now(),t=s.days??lt.evidenceDays,n=s.maxTasks??lt.evidenceTasks,r=s.maxGroups??25,o=s.tasksDir??ke.join(ge(),"tasks"),i=s.sessionsDir??ke.join(ge(),"sessions"),{logs:a,filesOnDisk:l,truncated:d}=Zi(o,n),p=e-t*24*60*60*1e3,u=a.filter(I=>(I.startedAt??0)>=p),m={},h=new Map,f=new Map,w=new Map,b=new Map,S=[],_=0,k=0,v=0,C,E,R=(I,$,J)=>{let W=b.get(I)??{kind:I,count:0,taskIds:[],example:J};W.count++,W.taskIds.includes($)||W.taskIds.push($),!W.example&&J&&(W.example=J),b.set(I,W)},j=(I,$)=>{let J=`${I.scope}|${I.tool??""}|${I.signature}`,W=I.scope==="tool"?f:w,V=W.get(J)??I;V.count++,V.taskIds.includes($)||V.taskIds.push($),W.set(J,V)};for(let I of u){let $=I.id;m[I.status]=(m[I.status]??0)+1,_+=I.totalSteps??0,k+=I.totalToolCalls??0;let J=I.tokenUsage?.totalTokens??0;v+=J,I.startedAt&&(C=C===void 0?I.startedAt:Math.min(C,I.startedAt),E=E===void 0?I.startedAt:Math.max(E,I.startedAt)),S.push({taskId:$,task:(I.task??"").slice(0,160),status:I.status,steps:I.totalSteps??0,toolCalls:I.totalToolCalls??0,durationMs:I.durationMs??0,tokens:J}),I.status==="failed"&&I.error&&j({scope:"task",signature:Pr(String(I.error)),count:0,example:String(I.error).slice(0,Er),taskIds:[]},$);for(let W of I.issueSignals??[])R(W.kind,$,W.detail);for(let W of I.modelSwitches??[])R(`model-switch:${W.reason}`,$,`${W.from} \u2192 ${W.to}`);for(let W of I.steps??[])for(let V of W.toolExecutions??[]){let pe=h.get(V.toolName)??{calls:0,failures:0,maxMs:0};if(pe.calls++,pe.maxMs=Math.max(pe.maxMs,V.durationMs??0),!V.success){pe.failures++;let ce=V.error||V.result||"tool failed";j({scope:"tool",tool:V.toolName,signature:Pr(String(ce)),count:0,example:String(ce).slice(0,Er),taskIds:[]},$);let Ce=/unknown tool:\s*(\S+)/i.exec(String(ce));Ce&&R("unknown-tool",$,Ce[1])}h.set(V.toolName,pe)}}let F=[...h.entries()].map(([I,$])=>({tool:I,calls:$.calls,failures:$.failures,failureRate:$.calls>0?Number(($.failures/$.calls).toFixed(3)):0,maxMs:$.maxMs})).sort((I,$)=>$.failures-I.failures||$.calls-I.calls),P=(I,$)=>$.count-I.count,le=[...f.values(),...w.values()].sort((I,$)=>$.count-I.count).slice(0,r),ee=[...b.values()].sort(P).slice(0,r),ae=[];return ae.push("Session transcripts are NOT read (bounded by design): only per-task execution logs."),d&&ae.push(`Scanned the newest ${n} of ${l} task logs (cap reached).`),l===0&&ae.push(`No task logs under ${o} \u2014 evidence is empty, not "healthy".`),a.length>0&&u.length<a.length&&ae.push(`${a.length-u.length} scanned log(s) fall outside the ${t}-day window.`),{generatedAt:e,windowDays:t,tasksDir:o,filesOnDisk:l,scannedTasks:a.length,tasksInWindow:u.length,firstAt:C,lastAt:E,statusCounts:m,totalSteps:_,totalToolCalls:k,totalTokens:v,toolStats:F,failureGroups:le,issueGroups:ee,costlyTasks:[...S].sort((I,$)=>$.tokens-I.tokens||$.durationMs-I.durationMs).slice(0,10),failingTasks:S.filter(I=>I.status!=="completed").sort((I,$)=>$.durationMs-I.durationMs).slice(0,10),sessionsInWindow:ea(i,I=>I.startsWith("session_")&&I.endsWith(".json")),notes:ae}}function sn(s){let e=[],t=n=>n?new Date(n).toISOString().slice(0,16).replace("T"," "):"?";if(e.push(`RUN EVIDENCE \u2014 last ${s.windowDays} days (${s.tasksInWindow}/${s.filesOnDisk} task logs)`),e.push(`  window: ${t(s.firstAt)} .. ${t(s.lastAt)}`),e.push(`  tasks: ${s.tasksInWindow} | steps: ${s.totalSteps} | tool calls: ${s.totalToolCalls} | tokens: ${s.totalTokens}`),e.push(`  status: ${Object.entries(s.statusCounts).map(([n,r])=>`${n} ${r}`).join(" | ")||"(none)"}`),s.issueGroups.length>0){e.push(""),e.push("RUN SIGNALS (from task logs)");for(let n of s.issueGroups)e.push(`  ${n.count}x ${n.kind}${n.example?` \u2014 ${n.example.slice(0,120)}`:""} (tasks: ${n.taskIds.slice(0,5).join(", ")})`)}if(s.failureGroups.length>0){e.push(""),e.push("FAILURES (grouped by normalized error \u2014 the raw count is the repeat rate)");for(let n of s.failureGroups){let r=n.scope==="tool"?`tool ${n.tool}`:"task";e.push(`  ${n.count}x [${r}] ${n.signature}`),e.push(`        e.g. ${n.example.replace(/\s+/g," ").slice(0,160)}`),e.push(`        tasks: ${n.taskIds.slice(0,6).join(", ")}`)}}if(s.toolStats.length>0){e.push(""),e.push("TOOL USE (by failures, then calls)");for(let n of s.toolStats.slice(0,20))e.push(`  ${n.tool.padEnd(18)} ${String(n.calls).padStart(5)} calls  ${String(n.failures).padStart(3)} failed  (${(n.failureRate*100).toFixed(1)}%)  max ${(n.maxMs/1e3).toFixed(1)}s`)}if(s.costlyTasks.length>0){e.push(""),e.push("COSTLIEST TASKS");for(let n of s.costlyTasks)e.push(`  ${n.taskId} ${String(n.tokens).padStart(7)} tok ${String(Math.round(n.durationMs/1e3)).padStart(5)}s steps=${n.steps} tools=${n.toolCalls} [${n.status}] ${n.task.slice(0,70)}`)}if(s.failingTasks.length>0){e.push(""),e.push("NON-COMPLETED TASKS");for(let n of s.failingTasks)e.push(`  ${n.taskId} [${n.status}] steps=${n.steps} ${n.task.slice(0,90)}`)}e.push(""),e.push("NOTES");for(let n of s.notes)e.push(`  - ${n}`);return e.push(""),e.push("Facts only \u2014 deciding which finding is a real defect (and whether it is worth changing) is the reviewer's job."),e.join(`
-`)}function Nr(s){if(!s.enabled)return"";let e=[];return e.push(""),e.push("## Self-evolution (find your own defects, then release the fix)"),e.push(""),e.push("You can inspect your own run history and release a fix for a defect you find there."),e.push("Never skip a step \u2014 a change without the evidence below is not a fix, it is a guess."),e.push(""),e.push("1. **Evidence first.** Call `agent_self_scan` before proposing anything. It returns facts"),e.push("   (tool histograms, failure signatures grouped by normalized error, run signals)."),e.push("   Repeated signatures and high failure rates are candidates; a single failure is not."),e.push(""),e.push("2. **Judge against the user's task, not against elegance.** Evidence says a thing is true,"),e.push("   it does not say the thing is wrong. A tool that failed once because the user passed a bad"),e.push("   path is not a defect. If the evidence supports two readings, say both and ask."),e.push(""),e.push("3. **Read only what the signature points at.** Find the code path behind the group"),e.push("   (grep the tool name / error text), and prefer the smallest change that removes the"),e.push('   failure mode. Do not "improve" neighbouring code.'),e.push(""),e.push("4. **Write the failing case down first.** Add or extend a test that fails before your change"),e.push("   and passes after it. No test, no release."),e.push(""),e.push("5. **Say the plan out loud before editing**, including what you decided NOT to change and why."),e.push("   If the plan turns out to be impossible, stop and explain the alternative \u2014 never silently swap it."),e.push(""),s.allowRelease?(e.push("6. **Release through the gate.** Call `agent_release` with a conventional commit message"),e.push("   (it bumps the version, runs typecheck + tests, packs, smokes the built CLI, then commits"+(s.allowPush?" and pushes).":"; pushing needs allow_push in config.")),e.push("   It aborts at the first failure and leaves nothing half-published. Report its step-by-step"),e.push("   output verbatim; never claim a release you did not see the pipeline confirm.")):(e.push("6. **Stop before releasing.** `self_update.allow_release` is off, so you may prepare and"),e.push("   verify the fix but must hand the release to the user (version bump, tests, pack, commit).")),e.push(""),e.push("Full method: docs/self-evolve.md"),e.join(`
-`)}var es=1800*1e3,Dr=4e3,ta=(s,e,t)=>new Promise(n=>{let r=(0,Lr.spawn)(s,e,{cwd:t.cwd,shell:t.shell??!1}),o="",i="",a=!1,l=p=>{a||(a=!0,clearTimeout(d),n({code:p,stdout:o,stderr:i}))},d=setTimeout(()=>{try{r.kill("SIGKILL")}catch{}i+=`
-[timeout after ${t.timeoutMs??es}ms]`,l(124)},t.timeoutMs??es);r.stdout?.on("data",p=>{o+=p.toString()}),r.stderr?.on("data",p=>{i+=p.toString()}),r.on("error",p=>{i+=String(p.message),l(127)}),r.on("close",p=>l(p??1)),r.stdin&&(t.stdin!==void 0&&r.stdin.write(t.stdin),r.stdin.end())});function na(s,e){if(e==="none")return s;let t=/^(\d+)\.(\d+)\.(\d+)/.exec(s.trim());if(!t)throw new Error(`Cannot bump version: "${s}" is not semver`);let[n,r,o]=[Number(t[1]),Number(t[2]),Number(t[3])];return e==="major"?`${n+1}.0.0`:e==="minor"?`${n}.${r+1}.0`:`${n}.${r}.${o+1}`}function Je(s){let e=s.trim();return e.length>Dr?`\u2026
-${e.slice(-Dr)}`:e}async function Fr(s){let e=s.repoDir??process.cwd(),t=s.run??ta,n=s.dryRun??!1,r=s.remote??"origin",o=s.scripts??lt.releaseScripts,i=s.push??!1,a=s.timeoutMs??es,l=ke.join(e,"package.json"),d=[],p=[],u="",m="",h=!1,f,w=!1,b,S,_=L=>(d.push(L),L);n&&p.push("dry-run validates preflight only (repo state, semver, branch): the version bump, the release scripts and the commit are skipped because each of them writes to the tree/index.");let k=(L,q)=>(b=L,S=q,v(!1)),v=L=>({ok:L,dryRun:n,repoDir:e,versionFrom:u,versionTo:m,committed:h,commitHash:f,pushed:w,steps:d,abortedAt:b,abortReason:S,notes:p}),C="";try{let L=JSON.parse(ne.readFileSync(l,"utf-8"));C=String(L.version??"")}catch(L){return _({name:"read-package.json",cmd:l,code:1,ok:!1,ms:0,outputTail:L.message}),k("read-package.json",`cannot read ${l}`)}if(u=C,!/^\d+\.\d+\.\d+/.test(C))return k("read-package.json",`package.json version "${C}" is not semver`);_({name:"read-package.json",code:0,ok:!0,ms:0});let E=async L=>t("git",L,{cwd:e,timeoutMs:6e4}),R=Date.now(),j=await E(["rev-parse","--git-dir"]);if(_({name:"git-repository",cmd:"git rev-parse --git-dir",code:j.code,ok:j.code===0,ms:Date.now()-R,outputTail:j.code===0?void 0:Je(j.stderr||j.stdout)}),j.code!==0)return k("git-repository",`${e} is not a git repository`);let F=[".git/MERGE_HEAD",".git/rebase-merge",".git/rebase-apply",".git/CHERRY_PICK_HEAD"].filter(L=>ne.existsSync(ke.join(e,L)));R=Date.now();let le=(await E(["diff","--name-only","--diff-filter=U"])).stdout.trim().split(`
-`).filter(Boolean),ee=F.length===0&&le.length===0;if(_({name:"git-state",cmd:"git diff --name-only --diff-filter=U",code:ee?0:1,ok:ee,ms:Date.now()-R,outputTail:ee?void 0:`in-progress: ${F.join(", ")}; unmerged: ${le.slice(0,10).join(", ")}`}),!ee)return k("git-state","a merge/rebase/cherry-pick is in progress or files are unmerged");R=Date.now();let I=(await E(["rev-parse","--abbrev-ref","HEAD"])).stdout.trim(),J=!(i&&(I==="HEAD"||I===""));if(_({name:"git-branch",cmd:"git rev-parse --abbrev-ref HEAD",code:J?0:1,ok:J,ms:Date.now()-R,outputTail:J?void 0:"HEAD is detached \u2014 nothing to push"}),!J)return k("git-branch","cannot push from a detached HEAD");try{m=na(C,s.bump??"patch")}catch(L){return k("bump-version",L.message)}if(R=Date.now(),n)_({name:"bump-version",code:0,ok:!0,ms:0,skipped:!0,outputTail:`dry-run: would write ${C} \u2192 ${m}`});else{let q=ne.readFileSync(l,"utf-8").replace(/("version"\s*:\s*")([^"]*)(")/,`$1${m}$3`);ne.writeFileSync(l,q,"utf-8");let y=/"version"\s*:\s*"([^"]+)"/.exec(q)?.[1],g=y===m;if(_({name:"bump-version",code:g?0:1,ok:g,ms:Date.now()-R,outputTail:g?`${C} \u2192 ${m}`:`wrote "${y}"`}),!g)return k("bump-version","package.json version was not updated")}if(n)_({name:"verification",code:0,ok:!0,ms:0,skipped:!0,outputTail:`dry-run: would run ${o.map(L=>`npm run ${L}`).join(", ")}`});else{for(let q of o){R=Date.now();let y=await t("npm",["run",q],{cwd:e,timeoutMs:a}),g=y.code===0;if(_({name:`npm run ${q}`,cmd:`npm run ${q}`,code:y.code,ok:g,ms:Date.now()-R,outputTail:g?void 0:Je(y.stdout+`
-`+y.stderr)}),!g)return tn(l,u),p.push(`package.json version restored to ${u} (no commit was made).`),k(`npm run ${q}`,`${q} failed (exit ${y.code}); aborting before commit`)}if(s.installCommand){R=Date.now();let q=await t(s.installCommand,[],{cwd:e,timeoutMs:a,shell:!0}),y=q.code===0;if(_({name:"install",cmd:s.installCommand,code:q.code,ok:y,ms:Date.now()-R,outputTail:y?void 0:Je(q.stdout+`
-`+q.stderr)}),!y)return tn(l,u),p.push(`package.json version restored to ${u} (no commit was made).`),k("install",`install command failed (exit ${q.code})`)}let L=ke.join(e,"build","agent-cli.js");if(ne.existsSync(L)){R=Date.now();let q=await t(process.execPath,[L,"--version"],{cwd:e,timeoutMs:6e4}),y=(q.stdout+q.stderr).trim(),g=q.code===0&&y.includes(m);if(_({name:"smoke built CLI",cmd:"node build/agent-cli.js --version",code:g?0:1,ok:g,ms:Date.now()-R,outputTail:g?y.split(`
-`)[0]:`expected version ${m}, got "${y.slice(0,120)}"`}),!g)return tn(l,u),p.push(`package.json version restored to ${u} (no commit was made).`),k("smoke built CLI",`build/agent-cli.js does not report ${m}`)}else _({name:"smoke built CLI",code:0,ok:!0,ms:0,skipped:!0,outputTail:"no build/agent-cli.js (pack step not in release_scripts)"})}if(n)return _({name:"git add -A",code:0,ok:!0,ms:0,skipped:!0,outputTail:"dry-run: would stage all changes"}),_({name:"git commit",code:0,ok:!0,ms:0,skipped:!0,outputTail:"dry-run: would commit"}),_({name:"git push",code:0,ok:!0,ms:0,skipped:!0,outputTail:i?`dry-run: would push to ${r}`:"push not requested (allow_push is off)"}),v(!0);let W=s.trailer===!1?s.commitMessage:`${s.commitMessage.trimEnd()}
+// src/vs/workbench/contrib/agent/common/tools/selfImproveTools.ts
+var SelfScanTool = class extends AgentTool {
+  constructor(_config) {
+    super();
+    this._config = _config;
+  }
+  name = "agent_self_scan";
+  description = "Read your own run history and return FACTS about how recent tasks went: tool call/failure histograms, failures grouped by normalized error (so a defect that happened 40 times is one line, not 40), run signals (user /btw corrections, model fallbacks, context overflows, reasoning loops, step-limit hits, unknown tools), and the slowest / most expensive tasks. Use it before proposing any change to your own code: it says what is true, not what is wrong. Session transcripts are never read.";
+  parameters = {
+    type: "object",
+    properties: {
+      days: {
+        type: "number",
+        description: "Look-back window in days (default from `self_update.evidence_days`)."
+      },
+      max_tasks: {
+        type: "number",
+        description: "Hard cap on task logs scanned, newest first (default from config)."
+      }
+    },
+    required: []
+  };
+  async execute(args) {
+    const toolCallId = String(args._toolCallId ?? "");
+    try {
+      const evidence = collectRunEvidence({
+        days: Number(args.days) > 0 ? Number(args.days) : void 0,
+        maxTasks: Number(args.max_tasks) > 0 ? Number(args.max_tasks) : void 0
+      });
+      return this.success(toolCallId, formatEvidenceReport(evidence));
+    } catch (err) {
+      return this.failure(toolCallId, `Could not collect run evidence: ${err.message}`);
+    }
+  }
+};
+var AgentReleaseTool = class extends AgentTool {
+  constructor(_config) {
+    super();
+    this._config = _config;
+  }
+  name = "agent_release";
+  description = "Release a change to your own code through a checked gate: version bump \u2192 `npm run` scripts (typecheck, tests, pack) \u2192 smoke the built CLI \u2192 git commit \u2192 optional push. It ABORTS at the first failure and leaves nothing half-published: no commit on red tests, no --force, no --amend, no --no-verify, and package.json is restored if it aborts before committing. Use `dry_run` first when unsure. Pass a conventional commit message; the pipeline appends a machine-verified trailer listing every step it actually ran.";
+  parameters = {
+    type: "object",
+    properties: {
+      message: {
+        type: "string",
+        description: 'Commit message (conventional style, e.g. "fix: ..."; a body is welcome).'
+      },
+      bump: {
+        type: "string",
+        enum: ["patch", "minor", "major", "none"],
+        description: "Semver field to increment. Default: patch."
+      },
+      push: {
+        type: "boolean",
+        description: "Push after committing. Only honoured when `self_update.allow_push` is true."
+      },
+      dry_run: {
+        type: "boolean",
+        description: "Preflight only: validate the tree, run nothing that writes, commit nothing."
+      },
+      repo_dir: {
+        type: "string",
+        description: "Repository to release. Default: the process working directory."
+      }
+    },
+    required: ["message"]
+  };
+  async execute(args, signal) {
+    const toolCallId = String(args._toolCallId ?? "");
+    if (signal?.aborted) {
+      return this.failure(toolCallId, "Release cancelled");
+    }
+    const message = String(args.message ?? "").trim();
+    if (!message) {
+      return this.failure(toolCallId, "A commit message is required.");
+    }
+    const requestedPush = args.push === true;
+    const allowPush = requestedPush && this._config.allowPush;
+    const report = await runReleasePipeline({
+      repoDir: typeof args.repo_dir === "string" && args.repo_dir ? args.repo_dir : void 0,
+      bump: ["patch", "minor", "major", "none"].includes(args.bump) ? args.bump : "patch",
+      commitMessage: message,
+      push: allowPush,
+      remote: this._config.remote,
+      dryRun: args.dry_run === true,
+      scripts: this._config.releaseScripts,
+      installCommand: this._config.installCommand || void 0
+    });
+    const text = formatReleaseReport(report) + (requestedPush && !allowPush ? "\n  note: push was requested but `self_update.allow_push` is false \u2014 committed locally only." : "");
+    return report.ok ? this.success(toolCallId, text) : this.failure(toolCallId, text);
+  }
+};
 
-Verified-by: code-agent self-update ${u} -> ${m}
-`+d.filter(L=>!L.skipped&&L.cmd).map(L=>`  ${L.name} (${(L.ms/1e3).toFixed(1)}s)`).join(`
-`);R=Date.now();let V=await E(["add","-A"]);if(_({name:"git add -A",cmd:"git add -A",code:V.code,ok:V.code===0,ms:Date.now()-R,outputTail:V.code===0?void 0:Je(V.stderr)}),V.code!==0)return tn(l,u),k("git add -A","staging failed");if((await E(["diff","--cached","--name-only"])).stdout.trim()==="")return _({name:"git commit",code:0,ok:!0,ms:0,skipped:!0,outputTail:"nothing staged \u2014 skipped"}),p.push("Nothing was staged, so no commit was created."),v(!0);R=Date.now();let ce=await t("git",["commit","-F","-"],{cwd:e,timeoutMs:12e4,stdin:W});if(_({name:"git commit",cmd:"git commit -F -",code:ce.code,ok:ce.code===0,ms:Date.now()-R,outputTail:ce.code===0?void 0:Je(ce.stderr||ce.stdout)}),ce.code!==0)return p.push(`Commit failed; package.json still holds ${m} \u2014 the change is staged, fix and re-run.`),k("git commit","commit failed");if(h=!0,f=(await E(["rev-parse","HEAD"])).stdout.trim()||void 0,!i)return _({name:"git push",code:0,ok:!0,ms:0,skipped:!0,outputTail:"push not requested (allow_push is off)"}),v(!0);R=Date.now();let be=await E(["push",r,"HEAD"]),De=be.code===0;return _({name:"git push",cmd:`git push ${r} HEAD`,code:be.code,ok:De,ms:Date.now()-R,outputTail:De?void 0:Je(be.stderr||be.stdout)}),De?(w=!0,v(!0)):(p.push("The commit exists locally; only the push failed. Re-run to push (no force push is ever attempted)."),k("git push",`push to ${r} failed`))}function tn(s,e){try{let t=ne.readFileSync(s,"utf-8");ne.writeFileSync(s,t.replace(/("version"\s*:\s*")([^"]*)(")/,`$1${e}$3`),"utf-8")}catch{}}function Ur(s){let e=[];e.push(`${s.ok?"RELEASE OK":"RELEASE ABORTED"}${s.dryRun?" (dry run)":""} \u2014 ${s.repoDir}`),e.push(`  version: ${s.versionFrom} \u2192 ${s.versionTo}`);for(let t of s.steps){let n=t.skipped?"\u2013":t.ok?"\u2713":"\u2717";e.push(`  ${n} ${t.name} (${(t.ms/1e3).toFixed(1)}s)${t.outputTail?` \u2014 ${t.outputTail.replace(/\s+/g," ").slice(0,200)}`:""}`)}e.push(`  committed: ${s.committed}${s.commitHash?` (${s.commitHash.slice(0,10)})`:""} | pushed: ${s.pushed}`),s.abortedAt&&e.push(`  aborted at: ${s.abortedAt} \u2014 ${s.abortReason}`);for(let t of s.notes)e.push(`  note: ${t}`);return e.join(`
-`)}var rn=class extends O{constructor(t){super();this._config=t}name="agent_self_scan";description="Read your own run history and return FACTS about how recent tasks went: tool call/failure histograms, failures grouped by normalized error (so a defect that happened 40 times is one line, not 40), run signals (user /btw corrections, model fallbacks, context overflows, reasoning loops, step-limit hits, unknown tools), and the slowest / most expensive tasks. Use it before proposing any change to your own code: it says what is true, not what is wrong. Session transcripts are never read.";parameters={type:"object",properties:{days:{type:"number",description:"Look-back window in days (default from `self_update.evidence_days`)."},max_tasks:{type:"number",description:"Hard cap on task logs scanned, newest first (default from config)."}},required:[]};async execute(t){let n=String(t._toolCallId??"");try{let r=nn({days:Number(t.days)>0?Number(t.days):void 0,maxTasks:Number(t.max_tasks)>0?Number(t.max_tasks):void 0});return this.success(n,sn(r))}catch(r){return this.failure(n,`Could not collect run evidence: ${r.message}`)}}},on=class extends O{constructor(t){super();this._config=t}name="agent_release";description="Release a change to your own code through a checked gate: version bump \u2192 `npm run` scripts (typecheck, tests, pack) \u2192 smoke the built CLI \u2192 git commit \u2192 optional push. It ABORTS at the first failure and leaves nothing half-published: no commit on red tests, no --force, no --amend, no --no-verify, and package.json is restored if it aborts before committing. Use `dry_run` first when unsure. Pass a conventional commit message; the pipeline appends a machine-verified trailer listing every step it actually ran.";parameters={type:"object",properties:{message:{type:"string",description:'Commit message (conventional style, e.g. "fix: ..."; a body is welcome).'},bump:{type:"string",enum:["patch","minor","major","none"],description:"Semver field to increment. Default: patch."},push:{type:"boolean",description:"Push after committing. Only honoured when `self_update.allow_push` is true."},dry_run:{type:"boolean",description:"Preflight only: validate the tree, run nothing that writes, commit nothing."},repo_dir:{type:"string",description:"Repository to release. Default: the process working directory."}},required:["message"]};async execute(t,n){let r=String(t._toolCallId??"");if(n?.aborted)return this.failure(r,"Release cancelled");let o=String(t.message??"").trim();if(!o)return this.failure(r,"A commit message is required.");let i=t.push===!0,a=i&&this._config.allowPush,l=await Fr({repoDir:typeof t.repo_dir=="string"&&t.repo_dir?t.repo_dir:void 0,bump:["patch","minor","major","none"].includes(t.bump)?t.bump:"patch",commitMessage:o,push:a,remote:this._config.remote,dryRun:t.dry_run===!0,scripts:this._config.releaseScripts,installCommand:this._config.installCommand||void 0}),d=Ur(l)+(i&&!a?"\n  note: push was requested but `self_update.allow_push` is false \u2014 committed locally only.":"");return l.ok?this.success(r,d):this.failure(r,d)}};var G=A(require("node:fs")),ie=A(require("node:path"));var cn=A(require("node:fs")),jr=A(require("node:os")),ue=A(require("node:path"));var sa="AGENT_STATE_DIR",ra="AGENT_SESSIONS_DIR",oa="AGENT_TASKS_DIR",ia="AGENT_SAVE_SESSIONS";function ts(s){let e=jr.homedir(),t=s.trim();return t&&(t==="~"?t=e:t.startsWith("~/")&&(t=ue.join(e,t.slice(2))),t=t.replace(/^\$\{HOME\}/,e),ue.resolve(t))}function ss(s){if(s===void 0)return;let e=s.trim().toLowerCase();if(e){if(["1","true","yes","on"].includes(e))return!0;if(["0","false","no","off"].includes(e))return!1}}function aa(s){let e={},t=!1;for(let n of s.split(`
-`)){let r=n.replace(/\s+$/,"");if(!r.trim()||r.trimStart().startsWith("#"))continue;let o=r.length-r.trimStart().length,i=r.trim();if(o===0){t=i==="storage:";continue}if(!t)continue;let a=i.indexOf(":");if(a<0)continue;let l=i.slice(0,a).trim(),d=$n(i.slice(a+1)).trim().replace(/^["']|["']$/g,"");d&&(l==="state_dir"?e.stateDir=d:l==="sessions_dir"?e.sessionsDir=d:l==="tasks_dir"?e.tasksDir=d:l==="save_sessions"&&(e.saveSessions=ss(d)))}return e}function la(s,e){try{let n=JSON.parse(e)?.storage;return!n||typeof n!="object"?{}:{stateDir:n.state_dir,sessionsDir:n.sessions_dir,tasksDir:n.tasks_dir,saveSessions:ss(n.save_sessions)}}catch{return{}}}function ca(s){let e=s?.cwd??process.cwd(),t=[ue.join(e,"config.yaml"),ue.join(e,"config.json"),...s?.home?[ue.join(s.home,"config.yaml"),ue.join(s.home,"config.json")]:z("config.yaml").concat(z("config.json"))];for(let n of t)try{if(!cn.existsSync(n))continue;let r=cn.readFileSync(n,"utf-8"),o=n.endsWith(".json")?la(n,r):aa(r);if(o.stateDir||o.sessionsDir||o.tasksDir||o.saveSessions!==void 0)return o}catch{}return{}}function an(...s){for(let e=0;e<s.length;e++)if(s[e]!==void 0)return{value:s[e],index:e};return{value:void 0,index:-1}}var ln=["cli flag","env var","config.yaml","default"];function Br(s={},e=process.env,t=ca(),n=ge()){let r=an(s.stateDir,e[sa],t.stateDir),o=r.value?ts(r.value):n,i=an(s.sessionsDir,e[ra],t.sessionsDir),a=an(s.tasksDir,e[oa],t.tasksDir),l=an(s.saveSessions,ss(e[ia]),t.saveSessions);return{stateDir:o,sessionsDir:i.value?ts(i.value):ue.join(o,"sessions"),tasksDir:a.value?ts(a.value):ue.join(o,"tasks"),saveSessions:l.value!==!1,source:l.index===0||r.index===0||i.index===0||a.index===0?ln[0]:r.index===1||i.index===1||a.index===1||l.index===1?ln[1]:r.index===2||i.index===2||a.index===2||l.index===2?ln[2]:ln[3]}}var ns;function Wr(s={}){return ns=Br(s),ns}function ct(){return ns??=Br()}function Hr(){return ct().sessionsDir}function Kr(){return ct().tasksDir}function Gr(s=ct(),e=ge()){let t=ue.join(e,"sessions"),n=ue.join(e,"tasks"),r=[];if(s.sessionsDir!==t&&r.push(`sessions \u2192 ${s.sessionsDir}`),s.tasksDir!==n&&r.push(`tasks \u2192 ${s.tasksDir}`),s.saveSessions||r.push("session saving OFF"),r.length!==0)return`${r.join(" | ")} (${s.source})`}var dn="_index.json",un="_cwd_index.json",qr=1;function Vr(s,e,t){let n=s.indexOf(e);if(n<0)return null;let r=n+e.length;for(;r<s.length;){let i=s[r];if(i===58||i===32||i===9||i===10||i===13)r++;else break}if(t){if(s[r]!==34)return null;let i=++r;for(;r<s.length&&s[r]!==34;)r+=s[r]===92?2:1;if(r>=s.length)return null;let a=s.slice(i,r).toString("utf8");return a.includes("\\")?null:a}let o=r;for(;r<s.length&&s[r]>=48&&s[r]<=57;)r++;return r===o?null:Number(s.slice(o,r).toString())}var da=Buffer.from('"workingDirectory"'),ua=Buffer.from('"updatedAt"');function pa(s){let e;try{e=G.readFileSync(s)}catch{return}let t=Vr(e,da,!0),n=Vr(e,ua,!1);if(typeof n=="number")return{dir:typeof t=="string"&&t.length>0?dt._normDir(t):"",updatedAt:n}}var dt=class s{constructor(e=process.cwd(),t){this._workingDirectory=e;this._dirOverride=t}_index={};_indexLoaded=!1;_cwdEntries;get _dir(){return this._dirOverride??Hr()}_ensureDir(){G.existsSync(this._dir)||G.mkdirSync(this._dir,{recursive:!0})}_loadIndex(){if(this._indexLoaded)return;this._ensureDir();let e=ie.join(this._dir,dn);if(G.existsSync(e))try{this._index=JSON.parse(G.readFileSync(e,"utf-8"))}catch{this._index={}}this._indexLoaded=!0}_saveIndex(){this._ensureDir();let e=ie.join(this._dir,dn);G.writeFileSync(e,JSON.stringify(this._index,null,2),"utf-8")}saveSession(e,t,n,r,o,i,a){this._loadIndex();let l=Date.now(),d={id:e,name:t,mode:n,messages:r,systemPrompt:o,extraSystemPrompt:i,workingDirectory:this._workingDirectory,plan:a,createdAt:this._index[e]?.createdAt||l,updatedAt:l,messageCount:r.length,summary:this._extractSummary(r)};this._ensureDir();let p=ie.join(this._dir,`${e}.json`);return G.writeFileSync(p,JSON.stringify(d,null,2),"utf-8"),this._index[e]={name:d.name,mode:d.mode,createdAt:d.createdAt,updatedAt:d.updatedAt,messageCount:d.messageCount,summary:d.summary},this._saveIndex(),this._touchCwdIndex(e,d.workingDirectory,d.updatedAt),d}loadSession(e){this._loadIndex();let t=ie.join(this._dir,`${e}.json`);if(G.existsSync(t))try{return JSON.parse(G.readFileSync(t,"utf-8"))}catch{return}}getLatestSession(){this._loadIndex();let e,t=-1;for(let[n,r]of Object.entries(this._cwdIndex()))r.updatedAt>t&&(t=r.updatedAt,e=n);if(e===void 0){let n=Object.keys(this._index);if(n.length===0)return;let r=n[0],o=this._index[r]?.updatedAt||0;for(let i of n){let a=this._index[i]?.updatedAt||0;a>o&&(o=a,r=i)}e=r}return this.loadSession(e)}_cwdIndex(){if(this._cwdEntries)return this._cwdEntries;this._loadIndex();let e=ie.join(this._dir,un),t;if(G.existsSync(e))try{let n=JSON.parse(G.readFileSync(e,"utf-8"));n.version===qr&&n.entries&&typeof n.entries=="object"&&(t=n.entries)}catch{}return(t===void 0||this._cwdIndexIsStale(t))&&(t=this._rebuildCwdIndex()),this._cwdEntries=t,t}_cwdIndexIsStale(e){let t;try{t=G.readdirSync(this._dir)}catch{return!1}for(let n of t)if(!(!n.endsWith(".json")||n===dn||n===un)&&!(n.slice(0,-5)in e))return!0;return!1}_rebuildCwdIndex(){let e={},t;try{t=G.readdirSync(this._dir)}catch{return e}for(let n of t){if(!n.endsWith(".json")||n===dn||n===un)continue;let r=n.slice(0,-5),o=pa(ie.join(this._dir,n));o&&(e[r]={dir:o.dir,updatedAt:o.updatedAt})}return this._writeCwdIndex(e),e}_writeCwdIndex(e){try{this._ensureDir();let t={version:qr,entries:e};G.writeFileSync(ie.join(this._dir,un),JSON.stringify(t),"utf-8")}catch{}}_touchCwdIndex(e,t,n){let r=this._cwdIndex();r[e]={dir:this._normDirOf(t),updatedAt:n},this._writeCwdIndex(r)}_dropFromCwdIndex(e){let t=this._cwdIndex();e in t&&(delete t[e],this._writeCwdIndex(t))}_normDirOf(e){return typeof e!="string"||e.length===0?"":s._normDir(e)}static _normDir(e){let t=ie.resolve(e);for(;t.length>1&&(t.endsWith(ie.sep)||t.endsWith("/"));)t=t.slice(0,-1);return t}getLatestSessionForCwd(e=this._workingDirectory){let t=s._normDir(e),n=this._cwdIndex(),r,o=-1;for(let[i,a]of Object.entries(n))a.dir===t&&a.updatedAt>o&&(o=a.updatedAt,r=i);return r===void 0?void 0:this.loadSession(r)}_readSessionFile(e){try{return JSON.parse(G.readFileSync(e,"utf-8"))}catch{return}}listSessionsForCwd(e=this._workingDirectory){let t=s._normDir(e),n=this._cwdIndex();this._loadIndex();let o=Object.entries(n).filter(([,i])=>i.dir===t).map(([i,a])=>({id:i,entry:a})).map(({id:i,entry:a})=>{let l=this._index[i];if(l)return{id:i,name:l.name||i,mode:l.mode,createdAt:l.createdAt,updatedAt:l.updatedAt||a.updatedAt,messageCount:l.messageCount,summary:l.summary};let d=this._readSessionFile(ie.join(this._dir,`${i}.json`));return{id:i,name:d?.name||i,mode:d?.mode??"agent",createdAt:d?.createdAt||a.updatedAt,updatedAt:d?.updatedAt||a.updatedAt,messageCount:d?.messageCount??0,summary:d?.summary}});return o.sort((i,a)=>a.updatedAt-i.updatedAt),o}listSessions(){this._loadIndex();let e=Object.entries(this._index).map(([t,n])=>({id:t,name:n.name,mode:n.mode,createdAt:n.createdAt,updatedAt:n.updatedAt,messageCount:n.messageCount,summary:n.summary}));return e.sort((t,n)=>n.updatedAt-t.updatedAt),e}deleteSession(e){this._loadIndex();let t=ie.join(this._dir,`${e}.json`),n=!1;return G.existsSync(t)&&(G.unlinkSync(t),n=!0),delete this._index[e],this._saveIndex(),this._dropFromCwdIndex(e),n}generateId(){let e=Date.now(),t=Math.random().toString(36).substring(2,8);return`session_${e}_${t}`}get count(){return this._loadIndex(),Object.keys(this._index).length}_extractSummary(e){let t=e.find(n=>n.role==="user");if(t&&t.content)return t.content.substring(0,200);for(let n=e.length-1;n>=0;n--){let r=e[n];if(r.role==="assistant"&&r.content&&!r.toolCalls?.length)return r.content.substring(0,200)}return"(empty session)"}};var re=A(require("node:fs")),Xe=A(require("node:path"));var Yr="_index.json",Qe=class{constructor(e){this._dirOverride=e}_index={};_indexLoaded=!1;get _dir(){return this._dirOverride??Kr()}_ensureDir(){re.existsSync(this._dir)||re.mkdirSync(this._dir,{recursive:!0})}_loadIndex(){if(this._indexLoaded)return;this._ensureDir();let e=Xe.join(this._dir,Yr);if(re.existsSync(e))try{this._index=JSON.parse(re.readFileSync(e,"utf-8"))}catch{this._index={}}this._indexLoaded=!0}_saveIndex(){this._ensureDir();let e=Xe.join(this._dir,Yr);re.writeFileSync(e,JSON.stringify(this._index,null,2),"utf-8")}saveTaskLog(e){this._loadIndex(),this._ensureDir();let t=Xe.join(this._dir,`${e.id}.json`);re.writeFileSync(t,JSON.stringify(e,null,2),"utf-8"),this._index[e.id]={id:e.id,task:e.task.substring(0,200),mode:e.mode,status:e.status,totalSteps:e.totalSteps,totalToolCalls:e.totalToolCalls,durationMs:e.durationMs,startedAt:e.startedAt,finishedAt:e.finishedAt,summary:this._buildSummary(e)},this._saveIndex()}loadTaskLog(e){this._loadIndex();let t=Xe.join(this._dir,`${e}.json`);if(re.existsSync(t))try{return JSON.parse(re.readFileSync(t,"utf-8"))}catch{return}}listTaskLogs(){this._loadIndex();let e=Object.values(this._index);return e.sort((t,n)=>n.startedAt-t.startedAt),e}deleteTaskLog(e){this._loadIndex();let t=Xe.join(this._dir,`${e}.json`),n=!1;return re.existsSync(t)&&(re.unlinkSync(t),n=!0),delete this._index[e],this._saveIndex(),n}generateId(){let e=Date.now(),t=Math.random().toString(36).substring(2,8);return`task_${e}_${t}`}getLatestTaskLog(){this._loadIndex();let e=this.listTaskLogs();if(e.length!==0)return this.loadTaskLog(e[0].id)}get count(){return this._loadIndex(),Object.keys(this._index).length}_buildSummary(e){let t=[];t.push(e.task.substring(0,120));for(let n of e.steps){let r=n.llmResponse.content;if(r&&r.length>0){t.push(r.substring(0,150));break}}return t.join(" | ").substring(0,300)}formatTaskLog(e){let t=[],n=e.status==="completed"?"\u2713":e.status==="failed"?"\u2717":"\u2298";if(t.push(`Task: ${e.task}`),t.push(`Status: ${n} ${e.status}`),t.push(`Mode: ${e.mode} | Model: ${e.config.provider}/${e.config.model}`),t.push(`Steps: ${e.totalSteps} | Tool calls: ${e.totalToolCalls}`),e.tokenUsage){let r=e.tokenUsage,o=r.cachedTokens?` | cache read: ${r.cachedTokens}${r.cacheCreationTokens?` + write: ${r.cacheCreationTokens}`:""}`:"";t.push(`Tokens: ${r.promptTokens} in / ${r.completionTokens} out / ${r.totalTokens} total${o}`)}t.push(`Duration: ${(e.durationMs/1e3).toFixed(1)}s`),t.push(`Started: ${new Date(e.startedAt).toLocaleString()}`),t.push(`Finished: ${new Date(e.finishedAt).toLocaleString()}`),e.error&&t.push(`Error: ${e.error}`),t.push("");for(let r of e.steps){if(t.push(`\u2500\u2500 Step ${r.stepIndex+1} (${r.durationMs}ms) \u2500\u2500`),r.llmResponse.reasoningContent&&t.push(`  [Reasoning] ${r.llmResponse.reasoningContent.substring(0,200)}`),r.llmResponse.content){let o=r.llmResponse.content.substring(0,300);t.push(`  [Response] ${o}`)}if(r.llmResponse.toolCalls&&r.llmResponse.toolCalls.length>0)for(let o of r.llmResponse.toolCalls){let i=JSON.stringify(o.arguments).substring(0,100);t.push(`  [Tool Call] ${o.name}(${i})`)}for(let o of r.toolExecutions){let i=o.success?"\u2713":"\u2717",a=o.result.length>200?o.result.substring(0,200)+`... (${o.result.length} chars)`:o.result;t.push(`  ${i} ${o.toolName} (${o.durationMs}ms): ${a}`),o.error&&t.push(`    Error: ${o.error}`)}t.push("")}return t.join(`
-`)}};var Pe=A(require("node:fs")),ls=A(require("node:os")),He=A(require("node:path"));var ut=["read_file","list_directory","search_text","search_files","search_content"],rs="{{WS}}",ma="{{HOME}}";function os(s,e){let t=s;for(let[n,r]of e)n&&(t=t.split(n).join(r));return t}function fa(s){let e=ls.homedir(),t=[];return s&&t.push([He.resolve(s),rs]),e&&t.push([e,ma]),t.sort((n,r)=>r[0].length-n[0].length)}function is(s,e){if(typeof s=="string")return os(s,e);if(Array.isArray(s))return s.map(t=>is(t,e));if(s&&typeof s=="object"){let t=s,n={};for(let r of Object.keys(t).sort())n[r]=is(t[r],e);return n}return s}function ga(s){if(!s)return ut;let e=s.trim();if(!e)return ut;if(e==="all"||e==="*")return;if(e==="read"||e==="read-only"||e==="readonly")return ut;let t=e.split(",").map(n=>n.trim()).filter(Boolean);return t.length>0?t:ut}function ha(s){let e=(s||"").trim().toLowerCase();return!e||e==="off"||e==="0"||e==="false"||e==="no"?"off":e==="record"||e==="rec"||e==="on"||e==="1"?"record":e==="replay"||e==="play"?"replay":"off"}function zr(s={},e=process.env,t=process.cwd()){let n=ha(s.mode??e.AGENT_TOOL_MOCK);if(n==="off")return{mode:"off",file:"",tools:ut,strict:!1,workspace:process.cwd()};let r=s.file||e.AGENT_TOOL_MOCK_FILE||"",o=r?He.resolve(r.replace(/^~(?=\/|$)/,ls.homedir())):He.join(t,"tool-mocks","default.json"),i=s.strict!==void 0?s.strict:["1","true","yes","on"].includes((e.AGENT_TOOL_MOCK_STRICT||"").trim().toLowerCase());return{mode:n,file:o,tools:ga(s.tools??e.AGENT_TOOL_MOCK_TOOLS),strict:i,workspace:process.cwd()}}var pn=class{constructor(e){this.options=e;this._tokens=fa(e.workspace||process.cwd()),this._fixture=this._load()}_fixture;_counters=new Map;_tokens;get file(){return this.options.file}get mode(){return this.options.mode}get entryCount(){return Object.values(this._fixture.entries).reduce((e,t)=>e+t.length,0)}_load(){let e={version:1,createdAt:new Date().toISOString(),workspace:rs,entries:{}};if(!this.options.file||!Pe.existsSync(this.options.file))return e;try{let t=JSON.parse(Pe.readFileSync(this.options.file,"utf-8"));return!t||typeof t!="object"||typeof t.entries!="object"||t.entries===null?e:{version:t.version??1,createdAt:t.createdAt??new Date().toISOString(),workspace:t.workspace??rs,entries:t.entries}}catch{return e}}_save(){if(this.options.file)try{Pe.mkdirSync(He.dirname(this.options.file),{recursive:!0}),Pe.writeFileSync(this.options.file,JSON.stringify(this._fixture,null,2),"utf-8")}catch{}}keyFor(e,t){let n={};for(let r of Object.keys(t).sort())r.startsWith("_")||(n[r]=is(t[r],this._tokens));return`${e}\0${JSON.stringify(n)}`}_nextIndex(e){let t=this._counters.get(e)??0;return this._counters.set(e,t+1),t}detokenize(e){return os(e,this._tokens.map(([t,n])=>[n,t]))}_tokenize(e){return os(e,this._tokens)}async invoke(e,t,n){let r=t._toolCallId||"";if(this.options.mode==="off")return e.execute(t,n);let o=this.keyFor(e.name,t),i=this._nextIndex(o);if(this.options.mode==="replay"){let l=this._fixture.entries[o]?.[i];if(l)return{toolCallId:r,success:l.success,output:this.detokenize(l.output??""),error:l.error===void 0?void 0:this.detokenize(l.error)};if(this.options.strict)return{toolCallId:r,success:!1,output:"",error:`tool mock: no recorded result for ${e.name} (call #${i+1}) in ${this.options.file}`};let d=await e.execute(t,n);return this._record(o,i,d),d}let a=await e.execute(t,n);return this._record(o,i,a),a}_record(e,t,n){let r=this._fixture.entries[e]??(this._fixture.entries[e]=[]);r[t]={success:n.success,output:this._tokenize(n.output??""),error:n.error===void 0?void 0:this._tokenize(n.error),recordedAt:new Date().toISOString()},this._fixture.createdAt=this._fixture.createdAt||new Date().toISOString(),this._save()}},as=class extends O{constructor(t,n){super();this._inner=t;this._store=n}get name(){return this._inner.name}get description(){return this._inner.description}get parameters(){return this._inner.parameters}timeoutFor(t,n){return this._inner.timeoutFor(t,n)}execute(t,n){return this._store.invoke(this._inner,t,n)}};function Jr(s,e,t){if(e.mode==="off")return 0;let n=e.options.tools,r=0;return s.decorate(o=>n&&!n.includes(o.name)?o:(r++,new as(o,e))),t?.(`${e.mode} \u2192 ${e.file} | ${r} tool(s)${n?`: ${n.filter(o=>s.has(o)).join(", ")}`:" (all)"}`),r}var Xr=new Map([["/mode","applies to subsequent tasks; the running task keeps the tool set it started with"],["/stream","takes effect on the next step"],["/auto-save","takes effect for the next auto-save"],["/tasks","lists saved task logs"],["/task","shows one saved task log"],["/delete-task","deletes one saved task log"],["/sessions","lists saved sessions"],["/delete-session","deletes one saved session"],["/skills","lists loaded skills"],["/profiles","lists configured profiles"],["/help","prints the command list"],["/save","snapshots the conversation so far"],["/btw","injects a hint or cancels the current tool"],["/cancel","cancels the current tool (alias for /btw cancel)"]]),ya="resumes a run that stopped at the step limit",cs=new Map([["/profile","switching the provider mid-run would leave the running loop on a disposed provider \u2014 finish the task or /btw cancel first"],["/resume","restoring a session replaces the message history the running task is still writing to"],["/new","starting a new session replaces the message history the running task is still writing to"],["/parallel","parallel mode starts additional agents \u2014 run it when idle"],["/skill","activating a skill rewrites the system prompt of the running task"],["/use-skill","activating a skill rewrites the system prompt of the running task"],["/continue","the agent is already running; /continue resumes a run that stopped at the step limit"]]),_a=new Set(["exit","quit","q","/exit","/quit"]);function ka(s){let e=s.trim();if(!e.startsWith("/"))return{rest:e};let t=e.indexOf(" ");return t<0?{command:e.toLowerCase(),rest:""}:{command:e.slice(0,t).toLowerCase(),rest:e.slice(t+1).trim()}}function ds(s,e={}){let t=s.trim();if(!t)return{route:"buffer",reason:"blank line ignored"};if(_a.has(t.toLowerCase()))return{route:"immediate",command:t.toLowerCase(),reason:"exits the REPL (cancels the running task)"};let{command:n,rest:r}=ka(t);return n==="/btw"?{route:"btw",command:n,reason:r?`hint: ${r}`:"usage error"}:n==="/continue"?e.agentRunning===!1?{route:"immediate",command:n,reason:ya}:{route:"refuse",command:n,reason:cs.get(n)}:n&&cs.has(n)?{route:"refuse",command:n,reason:cs.get(n)}:n&&Xr.has(n)?{route:"immediate",command:n,reason:Xr.get(n)}:n?{route:"refuse",command:n,reason:`unknown command "${n}" \u2014 type /help for the list`}:{route:"buffer",reason:"queued as the next task"}}function us(s,e=!0){let t=s.command??"that",n=s.reason??"not allowed";return e?`${t} is unavailable while a task is running: ${n}. Use /btw cancel to stop the current tool, or /btw <hint> to steer it.`:`${t}: ${n}.`}var se=A(require("node:fs")),Ke=A(require("node:path"));var mn=class{_serviceBrand;async readFile(e){let t=se.readFileSync(e.fsPath,"utf-8");return{resource:e,value:fe.fromString(t)}}async writeFile(e,t){let n=Ke.dirname(e.fsPath);return se.existsSync(n)||se.mkdirSync(n,{recursive:!0}),se.writeFileSync(e.fsPath,t.toString(),"utf-8"),this._stat(e)}async resolve(e,t){let n=this._stat(e);if(n.isDirectory){let r=se.readdirSync(e.fsPath,{withFileTypes:!0});n.children=r.map(o=>({resource:H.file(Ke.join(e.fsPath,o.name)),name:o.name,isFile:o.isFile(),isDirectory:o.isDirectory(),isSymbolicLink:o.isSymbolicLink()}))}return n}async exists(e){return se.existsSync(e.fsPath)}async del(e){se.rmSync(e.fsPath,{recursive:!0,force:!0})}async createFolder(e){return se.mkdirSync(e.fsPath,{recursive:!0}),this._stat(e)}_stat(e){try{let t=se.statSync(e.fsPath);return{resource:e,name:Ke.basename(e.fsPath),isFile:t.isFile(),isDirectory:t.isDirectory(),isSymbolicLink:t.isSymbolicLink(),size:t.size,mtime:t.mtimeMs}}catch{return{resource:e,name:Ke.basename(e.fsPath),isFile:!1,isDirectory:!1,isSymbolicLink:!1}}}};var ps=require("node:child_process");var fn=class{_serviceBrand;async textSearch(e){let t=e.folderQueries[0]?.folder.fsPath||".",n=e.contentPattern.pattern,r=e.maxResults||50;try{let o=`rg --no-heading -n "${n.replace(/"/g,'\\"')}" "${t}" --max-count ${r}`;if(e.includePattern)for(let d of Object.keys(e.includePattern))o+=` --glob "${d}"`;let i=(0,ps.execSync)(o,{encoding:"utf-8",timeout:15e3}).trim(),a=[],l=new Map;for(let d of i.split(`
-`)){if(!d)continue;let p=d.match(/^(.+?):(\d+):(.*)$/);if(!p)continue;let[,u,m,h]=p;l.has(u)||l.set(u,{resource:H.file(u),results:[]}),l.get(u).results.push({range:{startLineNumber:parseInt(m,10)},preview:{text:h.trim()}})}return{results:[...l.values()]}}catch{return{results:[]}}}async fileSearch(e){let t=e.folderQueries[0]?.folder.fsPath||".",n=e.filePattern||"*",r=e.maxResults||100;try{let o=`find "${t}" -name "${n}" -type f 2>/dev/null | head -${r}`;return{results:(0,ps.execSync)(o,{encoding:"utf-8",timeout:1e4}).trim().split(`
-`).filter(Boolean).map(l=>({resource:H.file(l)}))}}catch{return{results:[]}}}};var Qr=require("node:child_process");var gn=class{_serviceBrand;_defaultCwd;constructor(e){this._defaultCwd=e}createTerminal(e){let t=e?.config?.cwd||this._defaultCwd,n=new K,r=new K,o=null;return{onData:n.event,onExit:r.event,sendText(i,a){o=(0,Qr.spawn)("sh",["-c",i],{cwd:t,stdio:["pipe","pipe","pipe"]}),o.stdout?.on("data",d=>{n.fire(d.toString())}),o.stderr?.on("data",d=>{n.fire(d.toString())}),o.on("exit",d=>{r.fire({code:d??void 0})}),o.on("error",d=>{n.fire(`Error: ${d.message}
-`),r.fire({code:1})})},dispose(){o?.kill(),n.dispose(),r.dispose()}}}};var c={reset:"\x1B[0m",bold:"\x1B[1m",dim:"\x1B[2m",red:"\x1B[31m",green:"\x1B[32m",yellow:"\x1B[33m",blue:"\x1B[34m",cyan:"\x1B[36m",gray:"\x1B[90m",magenta:"\x1B[35m"},ms=new Set(["exit","quit","q","/exit","/quit"]),wa=["/mode <agent|plan|ask>   Switch mode (applies to subsequent tasks)","/profile <name>          Switch config profile   (idle only)","/profiles                List configured profiles","/stream                  Toggle token streaming","/skill <name>            Activate a skill for this session   (idle only)","/skills                  List loaded skills","/save [name]             Save the current session","/sessions                List sessions for THIS directory","/sessions all            List sessions from every directory","/resume [id]             Resume a session (no id: latest here)  (idle only)","/new                     Start a new session   (idle only)","/delete-session <id>     Delete a saved session","/auto-save               Toggle session auto-save","/tasks                   List saved task logs","/task <id>               Show one task log","/delete-task <id>        Delete a task log","/continue                Resume a run that hit the step limit","/btw <hint>              Steer the running task (or start one when idle)","/btw cancel | /cancel    Abort the currently running tool",'/parallel "a" "b"        Run tasks concurrently   (idle only)',"/help                    Show this list","exit | quit | Ctrl+C     Save the session and leave"];function x(s,e,t){console.log(`${s}${c.bold}[${e}]${c.reset} ${t}`)}function hn(s){return s.startsWith("~/")?$e.join(no.homedir(),s.slice(2)):$e.resolve(s)}function ba(s){if(!s)return()=>{};let e=hn(s),t=Q.createWriteStream(e,{flags:"a"}),n=process.stdout.write.bind(process.stdout),r=process.stderr.write.bind(process.stderr);return process.stdout.write=(o,i,a)=>(t.write(typeof o=="string"?o:Buffer.from(o)),n(o,i,a)),process.stderr.write=(o,i,a)=>(t.write(typeof o=="string"?o:Buffer.from(o)),r(o,i,a)),()=>{process.stdout.write=n,process.stderr.write=r;try{t.end()}catch{}}}function Sa(s){let e=hn(s);try{Q.mkdirSync($e.dirname(e),{recursive:!0})}catch{}let t=()=>{try{let r=Q.openSync(e,"wx");return Q.writeSync(r,String(process.pid)),Q.closeSync(r),process.pid}catch(r){return r&&r.code==="EEXIST"?void 0:process.pid}};if(t())return()=>{try{Q.unlinkSync(e)}catch{}};let n=!1;try{let r=parseInt(Q.readFileSync(e,"utf-8").trim(),10);if(!r||r<=0)n=!0;else try{process.kill(r,0)}catch{n=!0}}catch{n=!0}if(n){try{Q.unlinkSync(e)}catch{}if(t())return()=>{try{Q.unlinkSync(e)}catch{}}}}function va(s,e){try{let t=hn(s);Q.mkdirSync($e.dirname(t),{recursive:!0}),Q.writeFileSync(t,JSON.stringify(e,null,2))}catch(t){console.error(`${c.yellow}[BATCH]${c.reset} failed to write result file ${s}: ${t.message}`)}}function Ta(s,e){let t=[...s],n=new Set(s.map(r=>r.name));for(let r of e)n.has(r.name)||(t.push(r),n.add(r.name));return t}function Ia(s,e){let t=(e.mcp||"").trim().toLowerCase(),n=(s.mcpServers||[]).map(i=>({name:i.name,type:i.type,url:i.url,headers:i.headers,command:i.command,args:i.args,env:i.env,tools:i.tools}));if(t==="off"||t==="false"||t==="none")return[];if(!t)return n;let r=Ta(n,fr());if(t==="on"||t==="true"||t==="all")return r;let o=new Set(t.split(",").map(i=>i.trim()).filter(Boolean));return r.filter(i=>o.has(i.name))}function xa(s){let e=(s.mcpTools||"").trim();if(e)return e.split(",").map(t=>t.trim()).filter(Boolean)}function $a(s,e,t){let n=["/resume","/mode","/profile","/skill","/use-skill","/save","/sessions","/new","/auto-save","/btw","/stream","/profiles","/skills","/parallel","/continue","/delete-session","/help","/cancel","/tasks","/task","/delete-task"];return r=>{if(!r.startsWith("/"))return[[],r];let o=r.trim(),i=o.match(/^\/resume(\s+(\S*))?$/);if(i){let S=(i[2]||"").toLowerCase(),k=s.listSessions().filter(C=>C.id.toLowerCase().startsWith(S)||C.name.toLowerCase().includes(S));if(k.length>0)return[k.map(E=>`/resume ${E.id}`),r];let v=s.getLatestSessionForCwd(process.cwd());return v&&!S?[[`/resume ${v.id}`],r]:[[],r]}let a=o.match(/^\/session(\s+(\S*))?$/);if(a){let S=(a[2]||"").toLowerCase(),k=s.listSessions().filter(v=>v.id.toLowerCase().startsWith(S)||v.name.toLowerCase().includes(S));return k.length>0?[k.map(v=>`/session ${v.id}`),r]:[[],r]}let l=o.match(/^\/delete-session(\s+(\S*))?$/);if(l){let S=(l[2]||"").toLowerCase(),k=s.listSessions().filter(v=>v.id.toLowerCase().startsWith(S)||v.name.toLowerCase().includes(S));return k.length>0?[k.map(v=>`/delete-session ${v.id}`),r]:[[],r]}let d=o.match(/^\/task(\s+(\S*))?$/);if(d&&t){let S=(d[2]||"").toLowerCase(),k=t.listTaskLogs().filter(v=>v.id.toLowerCase().startsWith(S));return k.length>0?[k.map(v=>`/task ${v.id}`),r]:[[],r]}let p=o.match(/^\/delete-task(\s+(\S*))?$/);if(p&&t){let S=(p[2]||"").toLowerCase(),k=t.listTaskLogs().filter(v=>v.id.toLowerCase().startsWith(S));return k.length>0?[k.map(v=>`/delete-task ${v.id}`),r]:[[],r]}let u=o.match(/^\/mode(\s+(\S*))?$/);if(u){let S=(u[2]||"").toLowerCase(),_=["agent","plan","ask"],k=_.filter(v=>v.startsWith(S));return k.length>0?[k.map(v=>`/mode ${v}`),r]:[_.map(v=>`/mode ${v}`),r]}let m=o.match(/^\/profile(\s+(\S*))?$/);if(m){let S=(m[2]||"").toLowerCase();try{let _=At(),k=_.filter(v=>v.name.toLowerCase().startsWith(S));if(k.length>0)return[k.map(v=>`/profile ${v.name}`),r];if(_.length>0&&!S)return[_.map(v=>`/profile ${v.name}`),r]}catch{}return[[],r]}let h=o.match(/^\/skill(\s+(\S*))?$/);if(h){let S=(h[2]||"").toLowerCase(),_=e.skills,k=_.filter(v=>v.name.toLowerCase().startsWith(S));return k.length>0?[k.map(v=>`/skill ${v.name}`),r]:_.length>0&&!S?[_.map(v=>`/skill ${v.name}`),r]:[[],r]}let f=o.match(/^\/use-skill(\s+(\S*))?$/);if(f){let S=(f[2]||"").toLowerCase(),_=e.skills,k=_.filter(v=>v.name.toLowerCase().startsWith(S));return k.length>0?[k.map(v=>`/use-skill ${v.name}`),r]:_.length>0&&!S?[_.map(v=>`/use-skill ${v.name}`),r]:[[],r]}let w=o.split(/\s+/,1)[0],b=n.filter(S=>S.startsWith(w)&&S!==w);return b.length>0?[b,r]:[[],r]}}function Ca(){let s=process.argv.slice(2),e={mode:"agent",streaming:!1,parallel:!1,tasks:[],showProfiles:!1,showSkills:!1,resumeLatest:!1,listSessions:!1,listTaskLogs:!1},t=0;for(;t<s.length;){switch(s[t]){case"--mode":t++,s[t]==="plan"?e.mode="plan":s[t]==="ask"?e.mode="ask":e.mode="agent";break;case"--stream":e.streaming=!0;break;case"--parallel":e.parallel=!0;break;case"--profile":t++,e.profile=s[t];break;case"--temperature":t++,e.temperature=parseFloat(s[t]);break;case"--top-k":t++,e.topK=parseInt(s[t],10);break;case"--memory":t++,e.memory=s[t]==="on"?"on":"off";break;case"--tracing":t++,e.tracing=s[t]==="on"?"on":"off";break;case"--self-scan":{let n=s[t+1];n!==void 0&&/^\d+$/.test(n)?(e.selfScan=parseInt(n,10),t++):e.selfScan=0;break}case"--profiles":e.showProfiles=!0;break;case"--skills":e.showSkills=!0;break;case"--use-skill":t++,e.useSkill=s[t];break;case"--session":t++,e.sessionId=s[t];break;case"--resume":e.resumeLatest=!0;break;case"--sessions":e.listSessions=!0;break;case"--delete-session":t++,e.deleteSessionId=s[t];break;case"--tasks":e.listTaskLogs=!0;break;case"--task":t++,e.taskLogId=s[t];break;case"--delete-task":t++,e.deleteTaskLogId=s[t];break;case"--batch":e.batch=!0;break;case"--batch-log":t++,e.batchLog=s[t];break;case"--batch-result":t++,e.batchResult=s[t];break;case"--batch-timeout":t++,e.batchTimeout=parseInt(s[t],10)||0;break;case"--lock":t++,e.lockFile=s[t];break;case"--cwd":t++,e.cwd=s[t];break;case"--state-dir":t++,e.stateDir=s[t];break;case"--sessions-dir":t++,e.sessionsDir=s[t];break;case"--tasks-dir":t++,e.tasksDir=s[t];break;case"--no-session-save":e.noSessionSave=!0;break;case"--tool-mock":t++,e.toolMock=s[t]||"record";break;case"--tool-mock-file":t++,e.toolMockFile=s[t];break;case"--tool-mock-tools":t++,e.toolMockTools=s[t];break;case"--tool-mock-strict":e.toolMockStrict=!0;break;case"--step-timeout":t++,e.stepTimeout=parseInt(s[t],10)||0;break;case"--mcp":t++,e.mcp=s[t]||"on";break;case"--mcp-tools":t++,e.mcpTools=s[t];break;case"--help":Ra(),process.exit(0);case"--version":case"-v":Aa(),process.exit(0);default:e.tasks.push(s[t])}t++}return e}var fs="0.3.56";function Aa(){console.log(`code-agent v${fs}`),console.log(`path: ${__filename}`),console.log(`node: ${process.version} (${process.platform}-${process.arch})`)}function Ra(){console.log(`
-${c.bold}CodeAgent - VS Code Agent Mode CLI${c.reset}
+// src/vs/workbench/contrib/agent/common/agentSessions.ts
+var fs10 = __toESM(require("node:fs"));
+var path12 = __toESM(require("node:path"));
+
+// src/vs/workbench/contrib/agent/common/agentStorage.ts
+var fs9 = __toESM(require("node:fs"));
+var os6 = __toESM(require("node:os"));
+var path11 = __toESM(require("node:path"));
+var ENV_STATE_DIR = "AGENT_STATE_DIR";
+var ENV_SESSIONS_DIR = "AGENT_SESSIONS_DIR";
+var ENV_TASKS_DIR = "AGENT_TASKS_DIR";
+var ENV_SAVE_SESSIONS = "AGENT_SAVE_SESSIONS";
+function expandStoragePath(input) {
+  const home = os6.homedir();
+  let out = input.trim();
+  if (!out) return out;
+  if (out === "~") out = home;
+  else if (out.startsWith("~/")) out = path11.join(home, out.slice(2));
+  out = out.replace(/^\$\{HOME\}/, home);
+  return path11.resolve(out);
+}
+function truthy(raw) {
+  if (raw === void 0) return void 0;
+  const value = raw.trim().toLowerCase();
+  if (!value) return void 0;
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  return void 0;
+}
+function parseStorageYaml(text) {
+  const out = {};
+  let inSection = false;
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.replace(/\s+$/, "");
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+    const trimmed = line.trim();
+    if (indent === 0) {
+      inSection = trimmed === "storage:";
+      continue;
+    }
+    if (!inSection) continue;
+    const sep5 = trimmed.indexOf(":");
+    if (sep5 < 0) continue;
+    const key = trimmed.slice(0, sep5).trim();
+    const value = stripYamlComment(trimmed.slice(sep5 + 1)).trim().replace(/^["']|["']$/g, "");
+    if (!value) continue;
+    if (key === "state_dir") out.stateDir = value;
+    else if (key === "sessions_dir") out.sessionsDir = value;
+    else if (key === "tasks_dir") out.tasksDir = value;
+    else if (key === "save_sessions") out.saveSessions = truthy(value);
+  }
+  return out;
+}
+function storageFromJson(file, text) {
+  try {
+    const parsed = JSON.parse(text);
+    const raw = parsed?.storage;
+    if (!raw || typeof raw !== "object") return {};
+    const section = { stateDir: raw.state_dir, sessionsDir: raw.sessions_dir, tasksDir: raw.tasks_dir, saveSessions: truthy(raw.save_sessions) };
+    return section;
+  } catch {
+    return {};
+  }
+}
+function loadStorageYamlSection(dirs) {
+  const cwd = dirs?.cwd ?? process.cwd();
+  const files = [
+    path11.join(cwd, "config.yaml"),
+    path11.join(cwd, "config.json"),
+    ...dirs?.home ? [path11.join(dirs.home, "config.yaml"), path11.join(dirs.home, "config.json")] : agentHomeFileCandidates("config.yaml").concat(agentHomeFileCandidates("config.json"))
+  ];
+  for (const file of files) {
+    try {
+      if (!fs9.existsSync(file)) continue;
+      const text = fs9.readFileSync(file, "utf-8");
+      const section = file.endsWith(".json") ? storageFromJson(file, text) : parseStorageYaml(text);
+      if (section.stateDir || section.sessionsDir || section.tasksDir || section.saveSessions !== void 0) {
+        return section;
+      }
+    } catch {
+    }
+  }
+  return {};
+}
+function firstDefined(...values) {
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] !== void 0) return { value: values[i], index: i };
+  }
+  return { value: void 0, index: -1 };
+}
+var SOURCE_LABELS = ["cli flag", "env var", "config.yaml", "default"];
+function resolveStorageSettings(overrides = {}, env2 = process.env, yaml = loadStorageYamlSection(), home = agentHomeDir()) {
+  const stateRaw = firstDefined(overrides.stateDir, env2[ENV_STATE_DIR], yaml.stateDir);
+  const baseDir = stateRaw.value ? expandStoragePath(stateRaw.value) : home;
+  const sessionsRaw = firstDefined(overrides.sessionsDir, env2[ENV_SESSIONS_DIR], yaml.sessionsDir);
+  const tasksRaw = firstDefined(overrides.tasksDir, env2[ENV_TASKS_DIR], yaml.tasksDir);
+  const saveRaw = firstDefined(
+    overrides.saveSessions,
+    truthy(env2[ENV_SAVE_SESSIONS]),
+    yaml.saveSessions
+  );
+  return {
+    stateDir: baseDir,
+    sessionsDir: sessionsRaw.value ? expandStoragePath(sessionsRaw.value) : path11.join(baseDir, "sessions"),
+    tasksDir: tasksRaw.value ? expandStoragePath(tasksRaw.value) : path11.join(baseDir, "tasks"),
+    saveSessions: saveRaw.value !== false,
+    source: saveRaw.index === 0 || stateRaw.index === 0 || sessionsRaw.index === 0 || tasksRaw.index === 0 ? SOURCE_LABELS[0] : stateRaw.index === 1 || sessionsRaw.index === 1 || tasksRaw.index === 1 || saveRaw.index === 1 ? SOURCE_LABELS[1] : stateRaw.index === 2 || sessionsRaw.index === 2 || tasksRaw.index === 2 || saveRaw.index === 2 ? SOURCE_LABELS[2] : SOURCE_LABELS[3]
+  };
+}
+var _active;
+function configureStorage(overrides = {}) {
+  _active = resolveStorageSettings(overrides);
+  return _active;
+}
+function storageSettings() {
+  return _active ??= resolveStorageSettings();
+}
+function sessionsDir() {
+  return storageSettings().sessionsDir;
+}
+function tasksDir() {
+  return storageSettings().tasksDir;
+}
+function storageNotice(settings = storageSettings(), home = agentHomeDir()) {
+  const defaultSessions = path11.join(home, "sessions");
+  const defaultTasks = path11.join(home, "tasks");
+  const parts = [];
+  if (settings.sessionsDir !== defaultSessions) parts.push(`sessions \u2192 ${settings.sessionsDir}`);
+  if (settings.tasksDir !== defaultTasks) parts.push(`tasks \u2192 ${settings.tasksDir}`);
+  if (!settings.saveSessions) parts.push("session saving OFF");
+  if (parts.length === 0) return void 0;
+  return `${parts.join(" | ")} (${settings.source})`;
+}
+
+// src/vs/workbench/contrib/agent/common/agentSessions.ts
+var INDEX_FILE = "_index.json";
+var CWD_INDEX_FILE = "_cwd_index.json";
+var CWD_INDEX_VERSION = 1;
+function scanJsonField(buffer, key, wantString) {
+  const at = buffer.indexOf(key);
+  if (at < 0) return null;
+  let p = at + key.length;
+  while (p < buffer.length) {
+    const c = buffer[p];
+    if (c === 58 || c === 32 || c === 9 || c === 10 || c === 13) p++;
+    else break;
+  }
+  if (wantString) {
+    if (buffer[p] !== 34) return null;
+    const start2 = ++p;
+    while (p < buffer.length && buffer[p] !== 34) {
+      p += buffer[p] === 92 ? 2 : 1;
+    }
+    if (p >= buffer.length) return null;
+    const raw = buffer.slice(start2, p).toString("utf8");
+    return raw.includes("\\") ? null : raw;
+  }
+  const start = p;
+  while (p < buffer.length && buffer[p] >= 48 && buffer[p] <= 57) p++;
+  if (p === start) return null;
+  return Number(buffer.slice(start, p).toString());
+}
+var WORKING_DIR_KEY = Buffer.from('"workingDirectory"');
+var UPDATED_AT_KEY = Buffer.from('"updatedAt"');
+function scanSessionFile(file) {
+  let buffer;
+  try {
+    buffer = fs10.readFileSync(file);
+  } catch {
+    return void 0;
+  }
+  const dir = scanJsonField(buffer, WORKING_DIR_KEY, true);
+  const updatedAt = scanJsonField(buffer, UPDATED_AT_KEY, false);
+  if (typeof updatedAt !== "number") return void 0;
+  return {
+    dir: typeof dir === "string" && dir.length > 0 ? AgentSessionManager._normDir(dir) : "",
+    updatedAt
+  };
+}
+var AgentSessionManager = class _AgentSessionManager {
+  constructor(_workingDirectory = process.cwd(), _dirOverride) {
+    this._workingDirectory = _workingDirectory;
+    this._dirOverride = _dirOverride;
+  }
+  _index = {};
+  _indexLoaded = false;
+  /**
+   * In-memory copy of the cwd sidecar. Without it every tab completion and every
+   * `/sessions` read the sidecar from disk; with it, repeated queries during one
+   * session are free.
+   */
+  _cwdEntries;
+  /**
+   * Directory this manager reads/writes.
+   *
+   * Resolved per call (not at import time) so `--sessions-dir` / `--state-dir`
+   * / `AGENT_SESSIONS_DIR` redirect the store without the CLI having to thread a
+   * path through every caller.
+   */
+  get _dir() {
+    return this._dirOverride ?? sessionsDir();
+  }
+  /**
+   * Ensure sessions directory exists and load index.
+   */
+  _ensureDir() {
+    if (!fs10.existsSync(this._dir)) {
+      fs10.mkdirSync(this._dir, { recursive: true });
+    }
+  }
+  _loadIndex() {
+    if (this._indexLoaded) return;
+    this._ensureDir();
+    const indexPath = path12.join(this._dir, INDEX_FILE);
+    if (fs10.existsSync(indexPath)) {
+      try {
+        this._index = JSON.parse(fs10.readFileSync(indexPath, "utf-8"));
+      } catch {
+        this._index = {};
+      }
+    }
+    this._indexLoaded = true;
+  }
+  _saveIndex() {
+    this._ensureDir();
+    const indexPath = path12.join(this._dir, INDEX_FILE);
+    fs10.writeFileSync(indexPath, JSON.stringify(this._index, null, 2), "utf-8");
+  }
+  /**
+   * Save the current agent state as a session.
+   */
+  saveSession(id, name, mode, messages, systemPrompt, extraSystemPrompt, plan) {
+    this._loadIndex();
+    const now = Date.now();
+    const session = {
+      id,
+      name,
+      mode,
+      messages,
+      systemPrompt,
+      extraSystemPrompt,
+      workingDirectory: this._workingDirectory,
+      plan,
+      createdAt: this._index[id]?.createdAt || now,
+      updatedAt: now,
+      messageCount: messages.length,
+      summary: this._extractSummary(messages)
+    };
+    this._ensureDir();
+    const sessionPath = path12.join(this._dir, `${id}.json`);
+    fs10.writeFileSync(sessionPath, JSON.stringify(session, null, 2), "utf-8");
+    this._index[id] = {
+      name: session.name,
+      mode: session.mode,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      messageCount: session.messageCount,
+      summary: session.summary
+    };
+    this._saveIndex();
+    this._touchCwdIndex(id, session.workingDirectory, session.updatedAt);
+    return session;
+  }
+  /**
+   * Load a session by ID.
+   */
+  loadSession(id) {
+    this._loadIndex();
+    const sessionPath = path12.join(this._dir, `${id}.json`);
+    if (!fs10.existsSync(sessionPath)) {
+      return void 0;
+    }
+    try {
+      const data = JSON.parse(fs10.readFileSync(sessionPath, "utf-8"));
+      return data;
+    } catch {
+      return void 0;
+    }
+  }
+  /**
+   * Get the most recent session (by updatedAt) across the WHOLE store.
+   *
+   * This is directory-blind: it is right for `/sessions` (which lists everything)
+   * and for an explicit `--session <id>` lookup, but it is the WRONG default for a
+   * bare `--resume`. On the author's machine the store held 2163 sessions across
+   * 1550 distinct working directories, so "the most recent session" was usually a
+   * different project. Use {@link getLatestSessionForCwd} for `--resume`.
+   */
+  getLatestSession() {
+    this._loadIndex();
+    let latestId;
+    let latestTime = -1;
+    for (const [id, entry] of Object.entries(this._cwdIndex())) {
+      if (entry.updatedAt > latestTime) {
+        latestTime = entry.updatedAt;
+        latestId = id;
+      }
+    }
+    if (latestId === void 0) {
+      const ids = Object.keys(this._index);
+      if (ids.length === 0) return void 0;
+      let fallbackId = ids[0];
+      let fallbackTime = this._index[fallbackId]?.updatedAt || 0;
+      for (const id of ids) {
+        const t = this._index[id]?.updatedAt || 0;
+        if (t > fallbackTime) {
+          fallbackTime = t;
+          fallbackId = id;
+        }
+      }
+      latestId = fallbackId;
+    }
+    return this.loadSession(latestId);
+  }
+  /**
+   * Every session on disk as `{ id, dir, updatedAt }`, served from the sidecar.
+   *
+   * The sidecar is the difference between "usable" and "unusable" here: a raw file
+   * scan parses every session JSON (~110 KB each) to learn one string per session,
+   * which cost 570 ms per lookup and 2.9 s per directory listing on a 2163-session
+   * store. After the one-time build, every query below is an in-memory filter.
+   */
+  _cwdIndex() {
+    if (this._cwdEntries) return this._cwdEntries;
+    this._loadIndex();
+    const indexPath = path12.join(this._dir, CWD_INDEX_FILE);
+    let entries;
+    if (fs10.existsSync(indexPath)) {
+      try {
+        const parsed = JSON.parse(fs10.readFileSync(indexPath, "utf-8"));
+        if (parsed.version === CWD_INDEX_VERSION && parsed.entries && typeof parsed.entries === "object") {
+          entries = parsed.entries;
+        }
+      } catch {
+      }
+    }
+    if (entries === void 0 || this._cwdIndexIsStale(entries)) {
+      entries = this._rebuildCwdIndex();
+    }
+    this._cwdEntries = entries;
+    return entries;
+  }
+  /**
+   * Cheap staleness check: does any session file exist without a sidecar row?
+   *
+   * Uses `readdirSync` only (no file reads). An interrupted run leaves a session
+   * file behind with no row, which is exactly what this catches — so the very next
+   * `--resume` sees the session it wrote.
+   */
+  _cwdIndexIsStale(entries) {
+    let names;
+    try {
+      names = fs10.readdirSync(this._dir);
+    } catch {
+      return false;
+    }
+    for (const name of names) {
+      if (!name.endsWith(".json") || name === INDEX_FILE || name === CWD_INDEX_FILE) continue;
+      if (!(name.slice(0, -".json".length) in entries)) return true;
+    }
+    return false;
+  }
+  /**
+   * Build the sidecar from every session file. Runs at most once on a store that
+   * predates the sidecar (or after an interrupted run), then stays current via
+   * `saveSession` / `deleteSession`.
+   *
+   * Uses the targeted byte scan rather than `JSON.parse` — see `scanJsonField` for
+   * the measurement that motivated it (532 ms vs 2820 ms on a 592 MB store).
+   */
+  _rebuildCwdIndex() {
+    const entries = {};
+    let names;
+    try {
+      names = fs10.readdirSync(this._dir);
+    } catch {
+      return entries;
+    }
+    for (const name of names) {
+      if (!name.endsWith(".json") || name === INDEX_FILE || name === CWD_INDEX_FILE) continue;
+      const id = name.slice(0, -".json".length);
+      const scanned = scanSessionFile(path12.join(this._dir, name));
+      if (!scanned) continue;
+      entries[id] = { dir: scanned.dir, updatedAt: scanned.updatedAt };
+    }
+    this._writeCwdIndex(entries);
+    return entries;
+  }
+  /** Persist the sidecar (best effort: a failure only costs a later rebuild). */
+  _writeCwdIndex(entries) {
+    try {
+      this._ensureDir();
+      const payload = { version: CWD_INDEX_VERSION, entries };
+      fs10.writeFileSync(path12.join(this._dir, CWD_INDEX_FILE), JSON.stringify(payload), "utf-8");
+    } catch {
+    }
+  }
+  /** Record / refresh one session's sidecar row (called on save). */
+  _touchCwdIndex(id, workingDirectory, updatedAt) {
+    const entries = this._cwdIndex();
+    entries[id] = { dir: this._normDirOf(workingDirectory), updatedAt };
+    this._writeCwdIndex(entries);
+  }
+  /** Drop one session's sidecar row (called on delete). */
+  _dropFromCwdIndex(id) {
+    const entries = this._cwdIndex();
+    if (!(id in entries)) return;
+    delete entries[id];
+    this._writeCwdIndex(entries);
+  }
+  /** Resolve + normalize one working directory, or `''` when it is unusable. */
+  _normDirOf(workingDirectory) {
+    if (typeof workingDirectory !== "string" || workingDirectory.length === 0) return "";
+    return _AgentSessionManager._normDir(workingDirectory);
+  }
+  /**
+   * Normalized form used to compare working directories.
+   *
+   * `path.resolve` collapses `..`, relative spellings and duplicate separators;
+   * the trailing-separator trim makes `/repo/` and `/repo` the same place.
+   */
+  static _normDir(dir) {
+    let out = path12.resolve(dir);
+    while (out.length > 1 && (out.endsWith(path12.sep) || out.endsWith("/"))) {
+      out = out.slice(0, -1);
+    }
+    return out;
+  }
+  /**
+   * The most recent session whose recorded working directory is `workingDirectory`.
+   *
+   * The correct default for a bare `--resume`: a session belongs to the project it
+   * was created in, so resuming stays inside the current directory instead of
+   * jumping into whichever project the user touched last.
+   *
+   * O(n) over a small in-memory map, so it is cheap enough for the tab completer.
+   *
+   * @param workingDirectory - directory to match (defaults to the manager's).
+   * @returns the session, or undefined when this directory has none — NEVER a
+   *   session from another directory.
+   */
+  getLatestSessionForCwd(workingDirectory = this._workingDirectory) {
+    const want = _AgentSessionManager._normDir(workingDirectory);
+    const entries = this._cwdIndex();
+    let latestId;
+    let latestUpdated = -1;
+    for (const [id, entry] of Object.entries(entries)) {
+      if (entry.dir !== want) continue;
+      if (entry.updatedAt > latestUpdated) {
+        latestUpdated = entry.updatedAt;
+        latestId = id;
+      }
+    }
+    return latestId === void 0 ? void 0 : this.loadSession(latestId);
+  }
+  /** Parse one session file defensively (a corrupt file is skipped, never fatal). */
+  _readSessionFile(file) {
+    try {
+      return JSON.parse(fs10.readFileSync(file, "utf-8"));
+    } catch {
+      return void 0;
+    }
+  }
+  /**
+   * Like {@link listSessions} but scoped to one working directory.
+   *
+   * Used by `/sessions` and the tab completer so the default listing answers "what
+   * did I do in THIS project" instead of mixing every project together.
+   */
+  listSessionsForCwd(workingDirectory = this._workingDirectory) {
+    const want = _AgentSessionManager._normDir(workingDirectory);
+    const entries = this._cwdIndex();
+    this._loadIndex();
+    const forCwd = Object.entries(entries).filter(([, entry]) => entry.dir === want).map(([id, entry]) => ({ id, entry }));
+    const sessions = forCwd.map(({ id, entry }) => {
+      const meta = this._index[id];
+      if (meta) {
+        return {
+          id,
+          name: meta.name || id,
+          mode: meta.mode,
+          createdAt: meta.createdAt,
+          updatedAt: meta.updatedAt || entry.updatedAt,
+          messageCount: meta.messageCount,
+          summary: meta.summary
+        };
+      }
+      const session = this._readSessionFile(path12.join(this._dir, `${id}.json`));
+      return {
+        id,
+        name: session?.name || id,
+        mode: session?.mode ?? "agent",
+        createdAt: session?.createdAt || entry.updatedAt,
+        updatedAt: session?.updatedAt || entry.updatedAt,
+        messageCount: session?.messageCount ?? 0,
+        summary: session?.summary
+      };
+    });
+    sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+    return sessions;
+  }
+  /**
+   * List all sessions with metadata (sorted by updatedAt descending).
+   */
+  listSessions() {
+    this._loadIndex();
+    const entries = Object.entries(this._index).map(([id, info]) => ({
+      id,
+      name: info.name,
+      mode: info.mode,
+      createdAt: info.createdAt,
+      updatedAt: info.updatedAt,
+      messageCount: info.messageCount,
+      summary: info.summary
+    }));
+    entries.sort((a, b) => b.updatedAt - a.updatedAt);
+    return entries;
+  }
+  /**
+   * Delete a session by ID.
+   */
+  deleteSession(id) {
+    this._loadIndex();
+    const sessionPath = path12.join(this._dir, `${id}.json`);
+    let deleted = false;
+    if (fs10.existsSync(sessionPath)) {
+      fs10.unlinkSync(sessionPath);
+      deleted = true;
+    }
+    delete this._index[id];
+    this._saveIndex();
+    this._dropFromCwdIndex(id);
+    return deleted;
+  }
+  /**
+   * Generate a new unique session ID.
+   */
+  generateId() {
+    const ts = Date.now();
+    const rand = Math.random().toString(36).substring(2, 8);
+    return `session_${ts}_${rand}`;
+  }
+  /**
+   * Get the total count of stored sessions.
+   */
+  get count() {
+    this._loadIndex();
+    return Object.keys(this._index).length;
+  }
+  /**
+   * Extract a short summary from conversation messages.
+   */
+  _extractSummary(messages) {
+    const firstUser = messages.find((m) => m.role === "user" /* User */);
+    if (firstUser && firstUser.content) {
+      return firstUser.content.substring(0, 200);
+    }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "assistant" /* Assistant */ && m.content && !m.toolCalls?.length) {
+        return m.content.substring(0, 200);
+      }
+    }
+    return "(empty session)";
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentTaskLog.ts
+var fs11 = __toESM(require("node:fs"));
+var path13 = __toESM(require("node:path"));
+var TASK_INDEX_FILE = "_index.json";
+var TaskLogManager = class {
+  constructor(_dirOverride) {
+    this._dirOverride = _dirOverride;
+  }
+  _index = {};
+  _indexLoaded = false;
+  /**
+   * Directory this manager reads/writes.
+   *
+   * Resolved per call (not at import time) so `--tasks-dir` / `--state-dir` /
+   * `AGENT_TASKS_DIR` redirect the store without threading a path everywhere.
+   */
+  get _dir() {
+    return this._dirOverride ?? tasksDir();
+  }
+  _ensureDir() {
+    if (!fs11.existsSync(this._dir)) {
+      fs11.mkdirSync(this._dir, { recursive: true });
+    }
+  }
+  _loadIndex() {
+    if (this._indexLoaded) return;
+    this._ensureDir();
+    const indexPath = path13.join(this._dir, TASK_INDEX_FILE);
+    if (fs11.existsSync(indexPath)) {
+      try {
+        this._index = JSON.parse(fs11.readFileSync(indexPath, "utf-8"));
+      } catch {
+        this._index = {};
+      }
+    }
+    this._indexLoaded = true;
+  }
+  _saveIndex() {
+    this._ensureDir();
+    const indexPath = path13.join(this._dir, TASK_INDEX_FILE);
+    fs11.writeFileSync(indexPath, JSON.stringify(this._index, null, 2), "utf-8");
+  }
+  /**
+   * Save a task execution log to disk.
+   */
+  saveTaskLog(log2) {
+    this._loadIndex();
+    this._ensureDir();
+    const logPath = path13.join(this._dir, `${log2.id}.json`);
+    fs11.writeFileSync(logPath, JSON.stringify(log2, null, 2), "utf-8");
+    this._index[log2.id] = {
+      id: log2.id,
+      task: log2.task.substring(0, 200),
+      mode: log2.mode,
+      status: log2.status,
+      totalSteps: log2.totalSteps,
+      totalToolCalls: log2.totalToolCalls,
+      durationMs: log2.durationMs,
+      startedAt: log2.startedAt,
+      finishedAt: log2.finishedAt,
+      summary: this._buildSummary(log2)
+    };
+    this._saveIndex();
+  }
+  /**
+   * Load a task log by ID.
+   */
+  loadTaskLog(id) {
+    this._loadIndex();
+    const logPath = path13.join(this._dir, `${id}.json`);
+    if (!fs11.existsSync(logPath)) {
+      return void 0;
+    }
+    try {
+      return JSON.parse(fs11.readFileSync(logPath, "utf-8"));
+    } catch {
+      return void 0;
+    }
+  }
+  /**
+   * List all task logs (sorted by startedAt descending — newest first).
+   */
+  listTaskLogs() {
+    this._loadIndex();
+    const entries = Object.values(this._index);
+    entries.sort((a, b) => b.startedAt - a.startedAt);
+    return entries;
+  }
+  /**
+   * Delete a task log by ID.
+   */
+  deleteTaskLog(id) {
+    this._loadIndex();
+    const logPath = path13.join(this._dir, `${id}.json`);
+    let deleted = false;
+    if (fs11.existsSync(logPath)) {
+      fs11.unlinkSync(logPath);
+      deleted = true;
+    }
+    delete this._index[id];
+    this._saveIndex();
+    return deleted;
+  }
+  /**
+   * Generate a unique task log ID.
+   */
+  generateId() {
+    const ts = Date.now();
+    const rand = Math.random().toString(36).substring(2, 8);
+    return `task_${ts}_${rand}`;
+  }
+  /**
+   * Get the most recent task log.
+   */
+  getLatestTaskLog() {
+    this._loadIndex();
+    const entries = this.listTaskLogs();
+    if (entries.length === 0) return void 0;
+    return this.loadTaskLog(entries[0].id);
+  }
+  /**
+   * Get total task log count.
+   */
+  get count() {
+    this._loadIndex();
+    return Object.keys(this._index).length;
+  }
+  /**
+   * Build a human-readable summary from the task log.
+   */
+  _buildSummary(log2) {
+    const parts = [];
+    parts.push(log2.task.substring(0, 120));
+    for (const step of log2.steps) {
+      const content = step.llmResponse.content;
+      if (content && content.length > 0) {
+        parts.push(content.substring(0, 150));
+        break;
+      }
+    }
+    return parts.join(" | ").substring(0, 300);
+  }
+  /**
+   * Format a task log for human-readable console output.
+   */
+  formatTaskLog(log2) {
+    const lines = [];
+    const statusIcon = log2.status === "completed" ? "\u2713" : log2.status === "failed" ? "\u2717" : "\u2298";
+    lines.push(`Task: ${log2.task}`);
+    lines.push(`Status: ${statusIcon} ${log2.status}`);
+    lines.push(`Mode: ${log2.mode} | Model: ${log2.config.provider}/${log2.config.model}`);
+    lines.push(`Steps: ${log2.totalSteps} | Tool calls: ${log2.totalToolCalls}`);
+    if (log2.tokenUsage) {
+      const u = log2.tokenUsage;
+      const cached = u.cachedTokens ? ` | cache read: ${u.cachedTokens}${u.cacheCreationTokens ? ` + write: ${u.cacheCreationTokens}` : ""}` : "";
+      lines.push(`Tokens: ${u.promptTokens} in / ${u.completionTokens} out / ${u.totalTokens} total${cached}`);
+    }
+    lines.push(`Duration: ${(log2.durationMs / 1e3).toFixed(1)}s`);
+    lines.push(`Started: ${new Date(log2.startedAt).toLocaleString()}`);
+    lines.push(`Finished: ${new Date(log2.finishedAt).toLocaleString()}`);
+    if (log2.error) {
+      lines.push(`Error: ${log2.error}`);
+    }
+    lines.push("");
+    for (const step of log2.steps) {
+      lines.push(`\u2500\u2500 Step ${step.stepIndex + 1} (${step.durationMs}ms) \u2500\u2500`);
+      if (step.llmResponse.reasoningContent) {
+        lines.push(`  [Reasoning] ${step.llmResponse.reasoningContent.substring(0, 200)}`);
+      }
+      if (step.llmResponse.content) {
+        const content = step.llmResponse.content.substring(0, 300);
+        lines.push(`  [Response] ${content}`);
+      }
+      if (step.llmResponse.toolCalls && step.llmResponse.toolCalls.length > 0) {
+        for (const tc of step.llmResponse.toolCalls) {
+          const argsStr = JSON.stringify(tc.arguments).substring(0, 100);
+          lines.push(`  [Tool Call] ${tc.name}(${argsStr})`);
+        }
+      }
+      for (const exec of step.toolExecutions) {
+        const icon = exec.success ? "\u2713" : "\u2717";
+        const output = exec.result.length > 200 ? exec.result.substring(0, 200) + `... (${exec.result.length} chars)` : exec.result;
+        lines.push(`  ${icon} ${exec.toolName} (${exec.durationMs}ms): ${output}`);
+        if (exec.error) {
+          lines.push(`    Error: ${exec.error}`);
+        }
+      }
+      lines.push("");
+    }
+    return lines.join("\n");
+  }
+};
+
+// src/vs/workbench/contrib/agent/common/agentToolMock.ts
+var fs12 = __toESM(require("node:fs"));
+var os7 = __toESM(require("node:os"));
+var path14 = __toESM(require("node:path"));
+var READ_ONLY_MOCK_TOOLS = [
+  "read_file",
+  "list_directory",
+  "search_text",
+  "search_files",
+  "search_content"
+];
+var WS_TOKEN = "{{WS}}";
+var HOME_TOKEN = "{{HOME}}";
+function substitute(text, pairs) {
+  let out = text;
+  for (const [from, to] of pairs) {
+    if (!from) continue;
+    out = out.split(from).join(to);
+  }
+  return out;
+}
+function tokenPairs(workspace) {
+  const home = os7.homedir();
+  const pairs = [];
+  if (workspace) pairs.push([path14.resolve(workspace), WS_TOKEN]);
+  if (home) pairs.push([home, HOME_TOKEN]);
+  return pairs.sort((a, b) => b[0].length - a[0].length);
+}
+function normalizeValue(value, pairs) {
+  if (typeof value === "string") return substitute(value, pairs);
+  if (Array.isArray(value)) return value.map((v) => normalizeValue(v, pairs));
+  if (value && typeof value === "object") {
+    const source = value;
+    const out = {};
+    for (const key of Object.keys(source).sort()) out[key] = normalizeValue(source[key], pairs);
+    return out;
+  }
+  return value;
+}
+function parseToolMockTools(spec) {
+  if (!spec) return READ_ONLY_MOCK_TOOLS;
+  const value = spec.trim();
+  if (!value) return READ_ONLY_MOCK_TOOLS;
+  if (value === "all" || value === "*") return void 0;
+  if (value === "read" || value === "read-only" || value === "readonly") return READ_ONLY_MOCK_TOOLS;
+  const names = value.split(",").map((s) => s.trim()).filter(Boolean);
+  return names.length > 0 ? names : READ_ONLY_MOCK_TOOLS;
+}
+function normalizeMode(raw) {
+  const value = (raw || "").trim().toLowerCase();
+  if (!value || value === "off" || value === "0" || value === "false" || value === "no") return "off";
+  if (value === "record" || value === "rec" || value === "on" || value === "1") return "record";
+  if (value === "replay" || value === "play") return "replay";
+  return "off";
+}
+function resolveToolMockOptions(cli = {}, env2 = process.env, defaultDir = process.cwd()) {
+  const mode = normalizeMode(cli.mode ?? env2.AGENT_TOOL_MOCK);
+  if (mode === "off") {
+    return { mode: "off", file: "", tools: READ_ONLY_MOCK_TOOLS, strict: false, workspace: process.cwd() };
+  }
+  const fileRaw = cli.file || env2.AGENT_TOOL_MOCK_FILE || "";
+  const file = fileRaw ? path14.resolve(fileRaw.replace(/^~(?=\/|$)/, os7.homedir())) : path14.join(defaultDir, "tool-mocks", "default.json");
+  const strict = cli.strict !== void 0 ? cli.strict : ["1", "true", "yes", "on"].includes((env2.AGENT_TOOL_MOCK_STRICT || "").trim().toLowerCase());
+  return {
+    mode,
+    file,
+    tools: parseToolMockTools(cli.tools ?? env2.AGENT_TOOL_MOCK_TOOLS),
+    strict,
+    workspace: process.cwd()
+  };
+}
+var ToolMockStore = class {
+  constructor(options) {
+    this.options = options;
+    this._tokens = tokenPairs(options.workspace || process.cwd());
+    this._fixture = this._load();
+  }
+  _fixture;
+  _counters = /* @__PURE__ */ new Map();
+  _tokens;
+  get file() {
+    return this.options.file;
+  }
+  get mode() {
+    return this.options.mode;
+  }
+  get entryCount() {
+    return Object.values(this._fixture.entries).reduce((sum, list) => sum + list.length, 0);
+  }
+  _load() {
+    const empty = {
+      version: 1,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      workspace: WS_TOKEN,
+      entries: {}
+    };
+    if (!this.options.file || !fs12.existsSync(this.options.file)) return empty;
+    try {
+      const parsed = JSON.parse(fs12.readFileSync(this.options.file, "utf-8"));
+      if (!parsed || typeof parsed !== "object" || typeof parsed.entries !== "object" || parsed.entries === null) {
+        return empty;
+      }
+      return {
+        version: parsed.version ?? 1,
+        createdAt: parsed.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+        workspace: parsed.workspace ?? WS_TOKEN,
+        entries: parsed.entries
+      };
+    } catch {
+      return empty;
+    }
+  }
+  _save() {
+    if (!this.options.file) return;
+    try {
+      fs12.mkdirSync(path14.dirname(this.options.file), { recursive: true });
+      fs12.writeFileSync(this.options.file, JSON.stringify(this._fixture, null, 2), "utf-8");
+    } catch {
+    }
+  }
+  /** Deterministic key for a call: tool name + tokenized, sorted arguments. */
+  keyFor(toolName, args) {
+    const clean = {};
+    for (const key of Object.keys(args).sort()) {
+      if (key.startsWith("_")) continue;
+      clean[key] = normalizeValue(args[key], this._tokens);
+    }
+    return `${toolName}\0${JSON.stringify(clean)}`;
+  }
+  /** Next occurrence index for a key (0-based, shared across the process). */
+  _nextIndex(key) {
+    const index = this._counters.get(key) ?? 0;
+    this._counters.set(key, index + 1);
+    return index;
+  }
+  /** Tokenize/de-tokenize helpers used for stored outputs. */
+  detokenize(text) {
+    return substitute(text, this._tokens.map(([real, token]) => [token, real]));
+  }
+  _tokenize(text) {
+    return substitute(text, this._tokens);
+  }
+  /**
+   * Execute (record) or look up (replay) one tool call.
+   *
+   * `toolCallId` always comes from the CURRENT call so the agent's tool-call
+   * pairing stays intact regardless of what was recorded.
+   */
+  async invoke(tool, args, signal) {
+    const toolCallId = args._toolCallId || "";
+    if (this.options.mode === "off") return tool.execute(args, signal);
+    const key = this.keyFor(tool.name, args);
+    const index = this._nextIndex(key);
+    if (this.options.mode === "replay") {
+      const entry = this._fixture.entries[key]?.[index];
+      if (entry) {
+        return {
+          toolCallId,
+          success: entry.success,
+          output: this.detokenize(entry.output ?? ""),
+          error: entry.error === void 0 ? void 0 : this.detokenize(entry.error)
+        };
+      }
+      if (this.options.strict) {
+        return {
+          toolCallId,
+          success: false,
+          output: "",
+          error: `tool mock: no recorded result for ${tool.name} (call #${index + 1}) in ${this.options.file}`
+        };
+      }
+      const live2 = await tool.execute(args, signal);
+      this._record(key, index, live2);
+      return live2;
+    }
+    const live = await tool.execute(args, signal);
+    this._record(key, index, live);
+    return live;
+  }
+  _record(key, index, result) {
+    const list = this._fixture.entries[key] ?? (this._fixture.entries[key] = []);
+    list[index] = {
+      success: result.success,
+      output: this._tokenize(result.output ?? ""),
+      error: result.error === void 0 ? void 0 : this._tokenize(result.error),
+      recordedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    this._fixture.createdAt = this._fixture.createdAt || (/* @__PURE__ */ new Date()).toISOString();
+    this._save();
+  }
+};
+var MockedAgentTool = class extends AgentTool {
+  constructor(_inner, _store) {
+    super();
+    this._inner = _inner;
+    this._store = _store;
+  }
+  get name() {
+    return this._inner.name;
+  }
+  get description() {
+    return this._inner.description;
+  }
+  get parameters() {
+    return this._inner.parameters;
+  }
+  timeoutFor(args, config) {
+    return this._inner.timeoutFor(args, config);
+  }
+  execute(args, signal) {
+    return this._store.invoke(this._inner, args, signal);
+  }
+};
+function installToolMock(registry, store, log2) {
+  if (store.mode === "off") return 0;
+  const wanted = store.options.tools;
+  let wrapped = 0;
+  registry.decorate((tool) => {
+    if (wanted && !wanted.includes(tool.name)) return tool;
+    wrapped++;
+    return new MockedAgentTool(tool, store);
+  });
+  log2?.(`${store.mode} \u2192 ${store.file} | ${wrapped} tool(s)${wanted ? `: ${wanted.filter((n) => registry.has(n)).join(", ")}` : " (all)"}`);
+  return wrapped;
+}
+
+// src/vs/workbench/contrib/agent/common/agentReplInput.ts
+var IMMEDIATE_COMMANDS = /* @__PURE__ */ new Map([
+  ["/mode", "applies to subsequent tasks; the running task keeps the tool set it started with"],
+  ["/stream", "takes effect on the next step"],
+  ["/auto-save", "takes effect for the next auto-save"],
+  ["/tasks", "lists saved task logs"],
+  ["/task", "shows one saved task log"],
+  ["/delete-task", "deletes one saved task log"],
+  ["/sessions", "lists saved sessions"],
+  ["/delete-session", "deletes one saved session"],
+  ["/skills", "lists loaded skills"],
+  ["/profiles", "lists configured profiles"],
+  ["/help", "prints the command list"],
+  ["/save", "snapshots the conversation so far"],
+  ["/btw", "injects a hint or cancels the current tool"],
+  ["/cancel", "cancels the current tool (alias for /btw cancel)"]
+]);
+var CONTINUE_IDLE_REASON = "resumes a run that stopped at the step limit";
+var REFUSED_COMMANDS = /* @__PURE__ */ new Map([
+  ["/profile", "switching the provider mid-run would leave the running loop on a disposed provider \u2014 finish the task or /btw cancel first"],
+  ["/resume", "restoring a session replaces the message history the running task is still writing to"],
+  ["/new", "starting a new session replaces the message history the running task is still writing to"],
+  ["/parallel", "parallel mode starts additional agents \u2014 run it when idle"],
+  ["/skill", "activating a skill rewrites the system prompt of the running task"],
+  ["/use-skill", "activating a skill rewrites the system prompt of the running task"],
+  ["/continue", "the agent is already running; /continue resumes a run that stopped at the step limit"]
+]);
+var EXIT_COMMANDS = /* @__PURE__ */ new Set(["exit", "quit", "q", "/exit", "/quit"]);
+function splitCommand(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("/")) return { rest: trimmed };
+  const space = trimmed.indexOf(" ");
+  if (space < 0) return { command: trimmed.toLowerCase(), rest: "" };
+  return { command: trimmed.slice(0, space).toLowerCase(), rest: trimmed.slice(space + 1).trim() };
+}
+function decideRunningLine(line, options = {}) {
+  const trimmed = line.trim();
+  if (!trimmed) return { route: "buffer", reason: "blank line ignored" };
+  if (EXIT_COMMANDS.has(trimmed.toLowerCase())) {
+    return { route: "immediate", command: trimmed.toLowerCase(), reason: "exits the REPL (cancels the running task)" };
+  }
+  const { command, rest } = splitCommand(trimmed);
+  if (command === "/btw") {
+    return { route: "btw", command, reason: rest ? `hint: ${rest}` : "usage error" };
+  }
+  if (command === "/continue") {
+    return options.agentRunning === false ? { route: "immediate", command, reason: CONTINUE_IDLE_REASON } : { route: "refuse", command, reason: REFUSED_COMMANDS.get(command) };
+  }
+  if (command && REFUSED_COMMANDS.has(command)) {
+    return { route: "refuse", command, reason: REFUSED_COMMANDS.get(command) };
+  }
+  if (command && IMMEDIATE_COMMANDS.has(command)) {
+    return { route: "immediate", command, reason: IMMEDIATE_COMMANDS.get(command) };
+  }
+  if (command) {
+    return { route: "refuse", command, reason: `unknown command "${command}" \u2014 type /help for the list` };
+  }
+  return { route: "buffer", reason: "queued as the next task" };
+}
+function refusalMessage(decision, whileRunning = true) {
+  const name = decision.command ?? "that";
+  const reason = decision.reason ?? "not allowed";
+  if (!whileRunning) return `${name}: ${reason}.`;
+  return `${name} is unavailable while a task is running: ${reason}. Use /btw cancel to stop the current tool, or /btw <hint> to steer it.`;
+}
+
+// vs-core/node-runtime/nodeFileService.ts
+var fs13 = __toESM(require("node:fs"));
+var nodePath = __toESM(require("node:path"));
+var NodeFileService = class {
+  _serviceBrand;
+  async readFile(resource) {
+    const content = fs13.readFileSync(resource.fsPath, "utf-8");
+    return { resource, value: VSBuffer.fromString(content) };
+  }
+  async writeFile(resource, content) {
+    const dir = nodePath.dirname(resource.fsPath);
+    if (!fs13.existsSync(dir)) {
+      fs13.mkdirSync(dir, { recursive: true });
+    }
+    fs13.writeFileSync(resource.fsPath, content.toString(), "utf-8");
+    return this._stat(resource);
+  }
+  async resolve(resource, options) {
+    const stat = this._stat(resource);
+    if (stat.isDirectory) {
+      const entries = fs13.readdirSync(resource.fsPath, { withFileTypes: true });
+      stat.children = entries.map((e) => {
+        const childUri = URI.file(nodePath.join(resource.fsPath, e.name));
+        return {
+          resource: childUri,
+          name: e.name,
+          isFile: e.isFile(),
+          isDirectory: e.isDirectory(),
+          isSymbolicLink: e.isSymbolicLink()
+        };
+      });
+    }
+    return stat;
+  }
+  async exists(resource) {
+    return fs13.existsSync(resource.fsPath);
+  }
+  async del(resource) {
+    fs13.rmSync(resource.fsPath, { recursive: true, force: true });
+  }
+  async createFolder(resource) {
+    fs13.mkdirSync(resource.fsPath, { recursive: true });
+    return this._stat(resource);
+  }
+  _stat(resource) {
+    try {
+      const s = fs13.statSync(resource.fsPath);
+      return {
+        resource,
+        name: nodePath.basename(resource.fsPath),
+        isFile: s.isFile(),
+        isDirectory: s.isDirectory(),
+        isSymbolicLink: s.isSymbolicLink(),
+        size: s.size,
+        mtime: s.mtimeMs
+      };
+    } catch {
+      return {
+        resource,
+        name: nodePath.basename(resource.fsPath),
+        isFile: false,
+        isDirectory: false,
+        isSymbolicLink: false
+      };
+    }
+  }
+};
+
+// vs-core/node-runtime/nodeSearchService.ts
+var import_node_child_process3 = require("node:child_process");
+var NodeSearchService = class {
+  _serviceBrand;
+  async textSearch(query) {
+    const folder = query.folderQueries[0]?.folder.fsPath || ".";
+    const pattern = query.contentPattern.pattern;
+    const maxResults = query.maxResults || 50;
+    try {
+      let cmd = `rg --no-heading -n "${pattern.replace(/"/g, '\\"')}" "${folder}" --max-count ${maxResults}`;
+      if (query.includePattern) {
+        for (const glob of Object.keys(query.includePattern)) {
+          cmd += ` --glob "${glob}"`;
+        }
+      }
+      const output = (0, import_node_child_process3.execSync)(cmd, { encoding: "utf-8", timeout: 15e3 }).trim();
+      const results = [];
+      const fileMap = /* @__PURE__ */ new Map();
+      for (const line of output.split("\n")) {
+        if (!line) continue;
+        const match = line.match(/^(.+?):(\d+):(.*)$/);
+        if (!match) continue;
+        const [, filePath, lineNum, text] = match;
+        if (!fileMap.has(filePath)) {
+          fileMap.set(filePath, { resource: URI.file(filePath), results: [] });
+        }
+        fileMap.get(filePath).results.push({
+          range: { startLineNumber: parseInt(lineNum, 10) },
+          preview: { text: text.trim() }
+        });
+      }
+      return { results: [...fileMap.values()] };
+    } catch {
+      return { results: [] };
+    }
+  }
+  async fileSearch(query) {
+    const folder = query.folderQueries[0]?.folder.fsPath || ".";
+    const pattern = query.filePattern || "*";
+    const maxResults = query.maxResults || 100;
+    try {
+      const cmd = `find "${folder}" -name "${pattern}" -type f 2>/dev/null | head -${maxResults}`;
+      const output = (0, import_node_child_process3.execSync)(cmd, { encoding: "utf-8", timeout: 1e4 }).trim();
+      const results = output.split("\n").filter(Boolean).map((p) => ({ resource: URI.file(p) }));
+      return { results };
+    } catch {
+      return { results: [] };
+    }
+  }
+};
+
+// vs-core/node-runtime/nodeTerminalService.ts
+var import_node_child_process4 = require("node:child_process");
+var NodeTerminalService = class {
+  _serviceBrand;
+  _defaultCwd;
+  constructor(cwd) {
+    this._defaultCwd = cwd;
+  }
+  createTerminal(options) {
+    const cwd = options?.config?.cwd || this._defaultCwd;
+    const onDataEmitter = new Emitter();
+    const onExitEmitter = new Emitter();
+    let proc = null;
+    return {
+      onData: onDataEmitter.event,
+      onExit: onExitEmitter.event,
+      sendText(text, addNewLine) {
+        const cmd = addNewLine !== false ? text : text;
+        proc = (0, import_node_child_process4.spawn)("sh", ["-c", cmd], {
+          cwd,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        proc.stdout?.on("data", (data) => {
+          onDataEmitter.fire(data.toString());
+        });
+        proc.stderr?.on("data", (data) => {
+          onDataEmitter.fire(data.toString());
+        });
+        proc.on("exit", (code) => {
+          onExitEmitter.fire({ code: code ?? void 0 });
+        });
+        proc.on("error", (err) => {
+          onDataEmitter.fire(`Error: ${err.message}
+`);
+          onExitEmitter.fire({ code: 1 });
+        });
+      },
+      dispose() {
+        proc?.kill();
+        onDataEmitter.dispose();
+        onExitEmitter.dispose();
+      }
+    };
+  }
+};
+
+// vs-core/node-runtime/main.ts
+var C = {
+  reset: "\x1B[0m",
+  bold: "\x1B[1m",
+  dim: "\x1B[2m",
+  red: "\x1B[31m",
+  green: "\x1B[32m",
+  yellow: "\x1B[33m",
+  blue: "\x1B[34m",
+  cyan: "\x1B[36m",
+  gray: "\x1B[90m",
+  magenta: "\x1B[35m"
+};
+var EXIT_WORDS = /* @__PURE__ */ new Set(["exit", "quit", "q", "/exit", "/quit"]);
+var REPL_COMMAND_HELP = [
+  "/mode <agent|plan|ask>   Switch mode (applies to subsequent tasks)",
+  "/profile <name>          Switch config profile   (idle only)",
+  "/profiles                List configured profiles",
+  "/stream                  Toggle token streaming",
+  "/skill <name>            Activate a skill for this session   (idle only)",
+  "/skills                  List loaded skills",
+  "/save [name]             Save the current session",
+  "/sessions                List sessions for THIS directory",
+  "/sessions all            List sessions from every directory",
+  "/resume [id]             Resume a session (no id: latest here)  (idle only)",
+  "/new                     Start a new session   (idle only)",
+  "/delete-session <id>     Delete a saved session",
+  "/auto-save               Toggle session auto-save",
+  "/tasks                   List saved task logs",
+  "/task <id>               Show one task log",
+  "/delete-task <id>        Delete a task log",
+  "/continue                Resume a run that hit the step limit",
+  "/btw <hint>              Steer the running task (or start one when idle)",
+  "/btw cancel | /cancel    Abort the currently running tool",
+  '/parallel "a" "b"        Run tasks concurrently   (idle only)',
+  "/help                    Show this list",
+  "exit | quit | Ctrl+C     Save the session and leave"
+];
+function log(color, prefix, msg) {
+  console.log(`${color}${C.bold}[${prefix}]${C.reset} ${msg}`);
+}
+function expandHomePath(p) {
+  if (p.startsWith("~/")) return nodePath2.join(nodeOs.homedir(), p.slice(2));
+  return nodePath2.resolve(p);
+}
+function installBatchLog(file) {
+  if (!file) return () => {
+  };
+  const outPath = expandHomePath(file);
+  const stream = fs14.createWriteStream(outPath, { flags: "a" });
+  const origOut = process.stdout.write.bind(process.stdout);
+  const origErr = process.stderr.write.bind(process.stderr);
+  process.stdout.write = (chunk, enc, cb) => {
+    stream.write(typeof chunk === "string" ? chunk : Buffer.from(chunk));
+    return origOut(chunk, enc, cb);
+  };
+  process.stderr.write = (chunk, enc, cb) => {
+    stream.write(typeof chunk === "string" ? chunk : Buffer.from(chunk));
+    return origErr(chunk, enc, cb);
+  };
+  return () => {
+    process.stdout.write = origOut;
+    process.stderr.write = origErr;
+    try {
+      stream.end();
+    } catch {
+    }
+  };
+}
+function acquireLock(file) {
+  const lockPath = expandHomePath(file);
+  try {
+    fs14.mkdirSync(nodePath2.dirname(lockPath), { recursive: true });
+  } catch {
+  }
+  const tryCreate = () => {
+    try {
+      const fd = fs14.openSync(lockPath, "wx");
+      fs14.writeSync(fd, String(process.pid));
+      fs14.closeSync(fd);
+      return process.pid;
+    } catch (e) {
+      if (e && e.code === "EEXIST") return void 0;
+      return process.pid;
+    }
+  };
+  if (tryCreate()) {
+    return () => {
+      try {
+        fs14.unlinkSync(lockPath);
+      } catch {
+      }
+    };
+  }
+  let stale = false;
+  try {
+    const pid = parseInt(fs14.readFileSync(lockPath, "utf-8").trim(), 10);
+    if (!pid || pid <= 0) {
+      stale = true;
+    } else {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        stale = true;
+      }
+    }
+  } catch {
+    stale = true;
+  }
+  if (stale) {
+    try {
+      fs14.unlinkSync(lockPath);
+    } catch {
+    }
+    if (tryCreate()) {
+      return () => {
+        try {
+          fs14.unlinkSync(lockPath);
+        } catch {
+        }
+      };
+    }
+  }
+  return void 0;
+}
+function writeJsonFile(file, data) {
+  try {
+    const p = expandHomePath(file);
+    fs14.mkdirSync(nodePath2.dirname(p), { recursive: true });
+    fs14.writeFileSync(p, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error(`${C.yellow}[BATCH]${C.reset} failed to write result file ${file}: ${e.message}`);
+  }
+}
+function mergeMcpSpecs(primary, secondary) {
+  const out = [...primary];
+  const seen = new Set(primary.map((s) => s.name));
+  for (const s of secondary) {
+    if (!seen.has(s.name)) {
+      out.push(s);
+      seen.add(s.name);
+    }
+  }
+  return out;
+}
+function resolveMcpSpecs(resolved, opts) {
+  const mode = (opts.mcp || "").trim().toLowerCase();
+  const fromConfig = (resolved.mcpServers || []).map((s) => ({
+    name: s.name,
+    type: s.type,
+    url: s.url,
+    headers: s.headers,
+    command: s.command,
+    args: s.args,
+    env: s.env,
+    tools: s.tools
+  }));
+  if (mode === "off" || mode === "false" || mode === "none") return [];
+  if (!mode) return fromConfig;
+  const merged = mergeMcpSpecs(fromConfig, loadMcpServersFromJsonFile());
+  if (mode === "on" || mode === "true" || mode === "all") return merged;
+  const want = new Set(mode.split(",").map((x) => x.trim()).filter(Boolean));
+  return merged.filter((s) => want.has(s.name));
+}
+function mcpAllowTools(opts) {
+  const raw = (opts.mcpTools || "").trim();
+  if (!raw) return void 0;
+  return raw.split(",").map((x) => x.trim()).filter(Boolean);
+}
+function createCompleter(sessionManager, _skillsLoader, taskLogManager) {
+  const knownCommands = [
+    "/resume",
+    "/mode",
+    "/profile",
+    "/skill",
+    "/use-skill",
+    "/save",
+    "/sessions",
+    "/new",
+    "/auto-save",
+    "/btw",
+    "/stream",
+    "/profiles",
+    "/skills",
+    "/parallel",
+    "/continue",
+    "/delete-session",
+    "/help",
+    "/cancel",
+    "/tasks",
+    "/task",
+    "/delete-task"
+  ];
+  return (line) => {
+    if (!line.startsWith("/")) {
+      return [[], line];
+    }
+    const trimmed = line.trim();
+    const resumeMatch = trimmed.match(/^\/resume(\s+(\S*))?$/);
+    if (resumeMatch) {
+      const partial = (resumeMatch[2] || "").toLowerCase();
+      const sessions = sessionManager.listSessions();
+      const matches = sessions.filter(
+        (s) => s.id.toLowerCase().startsWith(partial) || s.name.toLowerCase().includes(partial)
+      );
+      if (matches.length > 0) {
+        const completions = matches.map((s) => `/resume ${s.id}`);
+        return [completions, line];
+      }
+      const latest = sessionManager.getLatestSessionForCwd(process.cwd());
+      if (latest && !partial) {
+        return [[`/resume ${latest.id}`], line];
+      }
+      return [[], line];
+    }
+    const sessionMatch = trimmed.match(/^\/session(\s+(\S*))?$/);
+    if (sessionMatch) {
+      const partial = (sessionMatch[2] || "").toLowerCase();
+      const sessions = sessionManager.listSessions();
+      const matches = sessions.filter(
+        (s) => s.id.toLowerCase().startsWith(partial) || s.name.toLowerCase().includes(partial)
+      );
+      if (matches.length > 0) {
+        return [matches.map((s) => `/session ${s.id}`), line];
+      }
+      return [[], line];
+    }
+    const deleteMatch = trimmed.match(/^\/delete-session(\s+(\S*))?$/);
+    if (deleteMatch) {
+      const partial = (deleteMatch[2] || "").toLowerCase();
+      const sessions = sessionManager.listSessions();
+      const matches = sessions.filter(
+        (s) => s.id.toLowerCase().startsWith(partial) || s.name.toLowerCase().includes(partial)
+      );
+      if (matches.length > 0) {
+        return [matches.map((s) => `/delete-session ${s.id}`), line];
+      }
+      return [[], line];
+    }
+    const taskMatch = trimmed.match(/^\/task(\s+(\S*))?$/);
+    if (taskMatch && taskLogManager) {
+      const partial = (taskMatch[2] || "").toLowerCase();
+      const logs = taskLogManager.listTaskLogs();
+      const matches = logs.filter((t) => t.id.toLowerCase().startsWith(partial));
+      if (matches.length > 0) {
+        return [matches.map((t) => `/task ${t.id}`), line];
+      }
+      return [[], line];
+    }
+    const deleteTaskMatch = trimmed.match(/^\/delete-task(\s+(\S*))?$/);
+    if (deleteTaskMatch && taskLogManager) {
+      const partial = (deleteTaskMatch[2] || "").toLowerCase();
+      const logs = taskLogManager.listTaskLogs();
+      const matches = logs.filter((t) => t.id.toLowerCase().startsWith(partial));
+      if (matches.length > 0) {
+        return [matches.map((t) => `/delete-task ${t.id}`), line];
+      }
+      return [[], line];
+    }
+    const modeMatch = trimmed.match(/^\/mode(\s+(\S*))?$/);
+    if (modeMatch) {
+      const partial = (modeMatch[2] || "").toLowerCase();
+      const modes = ["agent", "plan", "ask"];
+      const matches = modes.filter((m) => m.startsWith(partial));
+      if (matches.length > 0) {
+        return [matches.map((m) => `/mode ${m}`), line];
+      }
+      return [modes.map((m) => `/mode ${m}`), line];
+    }
+    const profileMatch = trimmed.match(/^\/profile(\s+(\S*))?$/);
+    if (profileMatch) {
+      const partial = (profileMatch[2] || "").toLowerCase();
+      try {
+        const profiles = listProfiles();
+        const matches = profiles.filter(
+          (p) => p.name.toLowerCase().startsWith(partial)
+        );
+        if (matches.length > 0) {
+          return [matches.map((p) => `/profile ${p.name}`), line];
+        }
+        if (profiles.length > 0 && !partial) {
+          return [profiles.map((p) => `/profile ${p.name}`), line];
+        }
+      } catch {
+      }
+      return [[], line];
+    }
+    const skillMatch = trimmed.match(/^\/skill(\s+(\S*))?$/);
+    if (skillMatch) {
+      const partial = (skillMatch[2] || "").toLowerCase();
+      const skills = _skillsLoader.skills;
+      const matches = skills.filter(
+        (s) => s.name.toLowerCase().startsWith(partial)
+      );
+      if (matches.length > 0) {
+        return [matches.map((s) => `/skill ${s.name}`), line];
+      }
+      if (skills.length > 0 && !partial) {
+        return [skills.map((s) => `/skill ${s.name}`), line];
+      }
+      return [[], line];
+    }
+    const useSkillMatch = trimmed.match(/^\/use-skill(\s+(\S*))?$/);
+    if (useSkillMatch) {
+      const partial = (useSkillMatch[2] || "").toLowerCase();
+      const skills = _skillsLoader.skills;
+      const matches = skills.filter(
+        (s) => s.name.toLowerCase().startsWith(partial)
+      );
+      if (matches.length > 0) {
+        return [matches.map((s) => `/use-skill ${s.name}`), line];
+      }
+      if (skills.length > 0 && !partial) {
+        return [skills.map((s) => `/use-skill ${s.name}`), line];
+      }
+      return [[], line];
+    }
+    const partialCmd = trimmed.split(/\s+/, 1)[0];
+    const cmdMatches = knownCommands.filter(
+      (cmd) => cmd.startsWith(partialCmd) && cmd !== partialCmd
+    );
+    if (cmdMatches.length > 0) {
+      return [cmdMatches, line];
+    }
+    return [[], line];
+  };
+}
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const opts = {
+    mode: "agent" /* Agent */,
+    streaming: false,
+    parallel: false,
+    tasks: [],
+    showProfiles: false,
+    showSkills: false,
+    resumeLatest: false,
+    listSessions: false,
+    listTaskLogs: false
+  };
+  let i = 0;
+  while (i < args.length) {
+    switch (args[i]) {
+      case "--mode":
+        i++;
+        if (args[i] === "plan") opts.mode = "plan" /* Plan */;
+        else if (args[i] === "ask") opts.mode = "ask" /* Ask */;
+        else opts.mode = "agent" /* Agent */;
+        break;
+      case "--stream":
+        opts.streaming = true;
+        break;
+      case "--parallel":
+        opts.parallel = true;
+        break;
+      case "--profile":
+        i++;
+        opts.profile = args[i];
+        break;
+      case "--temperature":
+        i++;
+        opts.temperature = parseFloat(args[i]);
+        break;
+      case "--top-k":
+        i++;
+        opts.topK = parseInt(args[i], 10);
+        break;
+      case "--memory":
+        i++;
+        opts.memory = args[i] === "on" ? "on" : "off";
+        break;
+      case "--tracing":
+        i++;
+        opts.tracing = args[i] === "on" ? "on" : "off";
+        break;
+      case "--self-scan": {
+        const next = args[i + 1];
+        if (next !== void 0 && /^\d+$/.test(next)) {
+          opts.selfScan = parseInt(next, 10);
+          i++;
+        } else opts.selfScan = 0;
+        break;
+      }
+      case "--profiles":
+        opts.showProfiles = true;
+        break;
+      case "--skills":
+        opts.showSkills = true;
+        break;
+      case "--use-skill":
+        i++;
+        opts.useSkill = args[i];
+        break;
+      case "--session":
+        i++;
+        opts.sessionId = args[i];
+        break;
+      case "--resume":
+        opts.resumeLatest = true;
+        break;
+      case "--sessions":
+        opts.listSessions = true;
+        break;
+      case "--delete-session":
+        i++;
+        opts.deleteSessionId = args[i];
+        break;
+      case "--tasks":
+        opts.listTaskLogs = true;
+        break;
+      case "--task":
+        i++;
+        opts.taskLogId = args[i];
+        break;
+      case "--delete-task":
+        i++;
+        opts.deleteTaskLogId = args[i];
+        break;
+      case "--batch":
+        opts.batch = true;
+        break;
+      case "--batch-log":
+        i++;
+        opts.batchLog = args[i];
+        break;
+      case "--batch-result":
+        i++;
+        opts.batchResult = args[i];
+        break;
+      case "--batch-timeout":
+        i++;
+        opts.batchTimeout = parseInt(args[i], 10) || 0;
+        break;
+      case "--lock":
+        i++;
+        opts.lockFile = args[i];
+        break;
+      case "--cwd":
+        i++;
+        opts.cwd = args[i];
+        break;
+      case "--state-dir":
+        i++;
+        opts.stateDir = args[i];
+        break;
+      case "--sessions-dir":
+        i++;
+        opts.sessionsDir = args[i];
+        break;
+      case "--tasks-dir":
+        i++;
+        opts.tasksDir = args[i];
+        break;
+      case "--no-session-save":
+        opts.noSessionSave = true;
+        break;
+      case "--tool-mock":
+        i++;
+        opts.toolMock = args[i] || "record";
+        break;
+      case "--tool-mock-file":
+        i++;
+        opts.toolMockFile = args[i];
+        break;
+      case "--tool-mock-tools":
+        i++;
+        opts.toolMockTools = args[i];
+        break;
+      case "--tool-mock-strict":
+        opts.toolMockStrict = true;
+        break;
+      case "--step-timeout":
+        i++;
+        opts.stepTimeout = parseInt(args[i], 10) || 0;
+        break;
+      case "--mcp":
+        i++;
+        opts.mcp = args[i] || "on";
+        break;
+      case "--mcp-tools":
+        i++;
+        opts.mcpTools = args[i];
+        break;
+      case "--help":
+        printHelp();
+        process.exit(0);
+      case "--version":
+      case "-v":
+        printVersion();
+        process.exit(0);
+      default:
+        opts.tasks.push(args[i]);
+    }
+    i++;
+  }
+  return opts;
+}
+var AGENT_VERSION = "0.3.56";
+function printVersion() {
+  console.log(`code-agent v${AGENT_VERSION}`);
+  console.log(`path: ${__filename}`);
+  console.log(`node: ${process.version} (${process.platform}-${process.arch})`);
+}
+function printHelp() {
+  console.log(`
+${C.bold}CodeAgent - VS Code Agent Mode CLI${C.reset}
 
 Usage:
   agent-cli [options] "task description"
@@ -474,52 +10662,1131 @@ Config (searched in order):
   1. CLI flags / env vars (OPENAI_API_KEY, LLM_MODEL, etc.)
   2. ./config.yaml
   3. ~/.agents/config.yaml
-`)}var we=je,gs,Ea;function ys(){return Ea??=Or()}async function pt(){let s=gs;gs=void 0,s&&await s()}async function Ma(s,e){if(we=Ys(e,s),!we.enabled){e!=="off"&&console.log(`${c.dim}[TRACING] off \u2014 ${we.reason}${c.reset}`);return}if(!await we.init()){console.log(`${c.yellow}[TRACING]${c.reset} Langfuse SDK failed to load \u2014 tracing disabled for this run`),we=je;return}console.log(`${c.green}[TRACING]${c.reset} Langfuse tracing enabled: ${we.describe?.()??""}`),gs=()=>we.shutdown(),process.once("beforeExit",()=>{pt()}),process.once("SIGINT",()=>{pt().finally(()=>process.exit(130))}),process.once("SIGTERM",()=>{pt().finally(()=>process.exit(143))})}async function _s(s,e,t){let n=s.agentConfig;n.apiKey||(console.error(`${c.red}No API key found. Set OPENAI_API_KEY, or configure apiKey in ~/.agents/models.json or config.yaml.${c.reset}`),process.exit(1));let r=te.create(n),o=new mn,i=new fn,a=new gn(process.cwd()),l=new yt,d=H.file(process.cwd());l.register(new Dt(o)),l.register(new Ot(o)),l.register(new Nt(o)),l.register(new Ft(o)),l.register(new Ut(i,d)),l.register(new jt(i,d)),l.registerAlias("search_content","search_text"),l.register(new Bt(a,process.cwd())),l.register(new Wt(a,process.cwd()));let p=s.skillsDirs&&s.skillsDirs.length>0?s.skillsDirs:[Gt()];l.register(new qt(p)),l.register(new Vt(p)),l.register(new Yt(p));let u=ys();if(u.enabled){l.register(new rn(u));let S=u.allowRelease?`release ON${u.allowPush?" + push":" (no push)"}`:"release OFF (self_update.allow_release)";console.log(`${c.green}[SELF]${c.reset} self-evolution: evidence scan ON, ${S}`),u.allowRelease&&l.register(new on(u))}let m=e==="off"?void 0:Rr(),h;if(m){h=new Jt(m,{workspaceDir:process.cwd()}),l.register(new Xt(h)),l.register(new Qt(h)),l.register(new Zt(h)),l.register(new en(h));let S=m.username||m.userId;console.log(`${c.green}[MEMORY]${c.reset} Shared memory enabled (tdai_agent_mem): user=${S||"?"} endpoint=${m.endpoint} service=${m.serviceId}`),console.log(`${c.dim}  Tools: tdai_memory_search / tdai_conversation_search / tdai_read_file / tdai_memory_write${c.reset}`),console.log(`${c.dim}  L1 workspace scope: ${h.workspaceScope} @ ${h.workspaceDir||"(unknown)"}${c.reset}`),m.recall&&console.log(`${c.dim}  Auto-recall: on | Auto-capture L0: ${m.capture?"on":"off"}${c.reset}`)}let f=new kt(o),w=[];if(t){let S=Ia(s,t);if(S.length>0)try{let{count:_,transports:k}=await gr(l,S,v=>console.log(`${c.cyan}${v}${c.reset}`),{allowTools:xa(t),skipServers:["tdai_agent_mem"]});w=k,console.log(`${c.green}[MCP]${c.reset} ${_} tool(s) registered from ${S.length} server(s)`)}catch(_){console.log(`${c.yellow}[MCP]${c.reset} failed to load MCP servers: ${_.message}`)}}let b=zr({mode:t?.toolMock,file:t?.toolMockFile,tools:t?.toolMockTools,strict:t?.toolMockStrict},process.env,ct().stateDir);if(b.mode!=="off")try{let S=new pn(b);if(Jr(l,S,k=>console.log(`${c.magenta}[MOCK]${c.reset} ${k}`))===0)console.log(`${c.yellow}[MOCK]${c.reset} no tool matched "${b.tools?.join(",")??"all"}" \u2014 mock inactive`);else if(b.mode==="replay"){let k=S.entryCount===0?" (fixture is EMPTY \u2014 every call will execute live and be recorded; run once with --tool-mock record first)":` (${S.entryCount} recorded result(s))`;console.log(`${c.dim}[MOCK] replay${b.strict?" strict":""}${k}${c.reset}`)}}catch(S){console.log(`${c.yellow}[MOCK]${c.reset} failed to initialise the tool mock: ${S.message}`)}return{config:n,llmProvider:r,toolRegistry:l,checkpointManager:f,memoryClient:h,mcpTransports:w}}function so(s,e){e.streaming&&s.onDidStreamToken(n=>{process.stdout.write(n)}),s.onDidReceiveMessage(n=>{if(n.role==="assistant"){if(n.reasoningContent&&x(c.dim,"THINKING",rr(n.reasoningContent)),n.toolCalls&&n.toolCalls.length>0)for(let r of n.toolCalls){let o=JSON.stringify(r.arguments).substring(0,120);x(c.cyan,"TOOL",`${r.name}(${o}...)`)}n.content&&!e.streaming&&x(c.green,"AGENT",n.content)}else if(n.role==="tool"){let r=n.content.length>500?n.content.substring(0,500)+`
-... (${n.content.length} chars)`:n.content;x(c.yellow,"RESULT",r)}else n.role==="user"&&x(c.blue,"USER",n.content)}),s.setModelSwitchLogger(n=>{let r=n.reason==="primary-recovered"?c.green:n.toFallback?c.yellow:c.magenta;console.log(`${r}${c.bold}${rt(n)}${c.reset}`)}),s.onDidError(n=>x(c.red,"ERROR",n.message));let t=Nn();s.onDidUpdateTodos(n=>{if(n.length===0){process.stdout.write(`
-${c.dim}Plan cleared.${c.reset}
-`);return}let r=As(n,{color:t});r&&process.stdout.write(`
-${r}
-`)}),s.onDidReceiveToolDiff(n=>{let r=ar(n.path,process.cwd(),$e.sep),o=t?lr(n,{color:!0,displayPath:r}):cr(n,r);o&&process.stdout.write(`
-${o}
-`)}),s.onDidComplete(()=>console.log(`
-${c.dim}--- Task completed ---${c.reset}
-`))}async function Zr(s,e,t,n){let{config:r,llmProvider:o,toolRegistry:i,checkpointManager:a,memoryClient:l}=await _s(e,t,n);console.log(`
-${c.bold}${c.magenta}=== Parallel Agent Mode ===${c.reset}`),console.log(`${c.dim}Running ${s.length} tasks concurrently (max 4)${c.reset}
-`);let d=new We(e.modelRouting,e.profiles,r),p=new Qe,u=new Pt(r,o,i,process.cwd(),a,4,d,l,we);u.onDidTaskStart(h=>{x(c.cyan,`TASK ${h.id.slice(-6)}`,`Started: ${h.description.substring(0,80)}`)}),u.onDidTaskComplete(h=>{let f=h.success?`${c.green}OK`:`${c.red}FAIL`;x(f,`TASK ${h.taskId.slice(-6)}`,`${h.success?"Completed":"Failed"} in ${h.durationMs}ms`),h.error&&x(c.red,"ERROR",h.error)});let m=await u.runParallel(s);console.log(`
-${c.bold}=== Results ===${c.reset}`);for(let h of m){let f=u.getTask(h.taskId),w=h.success?`${c.green}OK${c.reset}`:`${c.red}FAIL${c.reset}`;console.log(`  ${w} [${h.durationMs}ms] ${f?.description.substring(0,60)||h.taskId}`);let b=h.messages.filter(S=>S.role==="assistant"&&S.content);if(b.length>0){let S=b[b.length-1];console.log(`    ${c.dim}${S.content.substring(0,100)}${c.reset}`)}h.taskLog&&(p.saveTaskLog(h.taskLog),console.log(`    ${c.dim}[Task log: ${h.taskLog.id}]${c.reset}`))}u.dispose()}function hs(s,e){e.probeIntervalMs&&s.setProbeSchedule(e.probeIntervalMs);let t=e.fallbackConfig();if(t)try{s.setFallback(t,te.create(t)),console.log(`${c.dim}Model fallback: ON | \u4FDD\u5E95\u6A21\u578B: ${t.model} (auto-switch on API access timeout or rate limit; background probe switches back on recovery)${c.reset}`)}catch(n){console.log(`${c.yellow}Model fallback: failed to init provider for "${t.model}": ${n.message}${c.reset}`)}}async function Pa(s,e,t){let n=ba(s.batchLog),r=s.lockFile?Sa(s.lockFile):void 0;s.lockFile&&!r&&(console.log(`${c.yellow}[BATCH]${c.reset} lock "${s.lockFile}" is held by another run \u2014 skipping (exit 0)`),n(),process.exit(0));let o=s.tasks.join(" ").trim();o||(console.error(`${c.red}[BATCH]${c.reset} no task provided; usage: code-agent --batch "task"`),r?.(),n(),process.exit(2));let i=s.mode==="plan"?"plan":s.mode==="ask"?"ask":"agent",a=Date.now();console.log(`${c.green}[BATCH]${c.reset} start pid=${process.pid} mode=${i} cwd=${process.cwd()}`),console.log(`${c.dim}${o.length>400?o.slice(0,400)+"\u2026":o}${c.reset}`);let{config:l,llmProvider:d,toolRegistry:p,checkpointManager:u,memoryClient:m}=await _s(e,s.memory,s);s.stepTimeout&&s.stepTimeout>0&&(l.stepTimeout=s.stepTimeout);let h=new Oe;h.switchMode(s.mode);let f=new Be(l,d,p,h,u,process.cwd(),m,we);f.registerTodoTool(),f.setExtraSystemPrompt(Ge(t,s.useSkill,o)),hs(f,new We(e.modelRouting,e.profiles,l)),so(f,s);let w=!1,b=s.batchTimeout&&s.batchTimeout>0?setTimeout(()=>{w=!0,console.log(`
-${c.red}[BATCH]${c.reset} batch-timeout of ${s.batchTimeout}s reached \u2014 cancelling task`),f.cancel()},s.batchTimeout*1e3):void 0,S=P=>{console.log(`
-${c.yellow}[BATCH]${c.reset} received ${P} \u2014 cancelling task`),f.cancel()};process.on("SIGINT",()=>S("SIGINT")),process.on("SIGTERM",()=>S("SIGTERM"));let _;try{await f.run(o)}catch(P){_=P.message||String(P)}b&&clearTimeout(b);let k=w?"cancelled":_||f.lastTaskError?"failed":"completed",v=k==="completed",C="";try{let P=f.exportTaskLog(k,_||f.lastTaskError);C=P.id,new Qe().saveTaskLog(P)}catch(P){console.log(`${c.yellow}[BATCH]${c.reset} failed to save task log: ${P.message}`)}let E=[...f.context.messages].reverse().find(P=>P.role==="assistant"&&P.content&&P.content.trim())?.content||"",R=Date.now()-a,j={status:k,task:o,mode:i,pid:process.pid,cwd:process.cwd(),startedAt:new Date(a).toISOString(),finishedAt:new Date().toISOString(),durationMs:R,durationSec:Math.round(R/1e3),taskLogId:C,error:_||f.lastTaskError||void 0,lastAssistant:E.slice(0,8e3)};s.batchResult&&va(s.batchResult,j);let F=v?`${c.green}SUCCESS`:`${c.red}${k.toUpperCase()}`;console.log(`
-${c.bold}[BATCH]${c.reset} ${F}${c.reset} in ${j.durationSec}s (task log: ${C||"n/a"})`),f.dispose(),r?.(),n(),await pt(),process.exit(v?0:w?124:1)}async function Da(){let s=Ca();if(s.cwd)try{process.chdir(hn(s.cwd))}catch(y){console.error(`${c.red}[BATCH]${c.reset} cannot chdir to ${s.cwd}: ${y.message}`),process.exit(2)}let e=Wr({stateDir:s.stateDir,sessionsDir:s.sessionsDir,tasksDir:s.tasksDir,saveSessions:s.noSessionSave?!1:void 0}),t=Gr(e);t&&console.log(`${c.dim}[STORAGE] ${t}${c.reset}`);let n=new dt(process.cwd()),r=new Qe;if(s.showProfiles){let y=At();if(y.length===0)console.log(`${c.dim}No models.json or config.yaml found. Create ~/.agents/models.json or ~/.agents/config.yaml${c.reset}`);else{console.log(`
-${c.bold}Available profiles:${c.reset}`);for(let g of y)console.log(`  ${c.cyan}${g.name}${c.reset}  ${c.dim}${g.provider}/${g.model}${c.reset}`)}return}if(s.listSessions){let y=n.listSessions();if(y.length===0)console.log(`${c.dim}No saved sessions.${c.reset}`);else{let g=n.listSessionsForCwd(process.cwd()).length;console.log(`
-${c.bold}Saved sessions (${y.length} total, ${g} in this directory):${c.reset}
-`);for(let T of y){let B=new Date(T.updatedAt).toLocaleString(),M=T.mode==="plan"?"Plan":T.mode==="ask"?"Ask":"Agent";console.log(`  ${c.cyan}${T.id}${c.reset}`),console.log(`    ${c.bold}Name:${c.reset} ${T.name||"(unnamed)"}  ${c.bold}Mode:${c.reset} ${M}  ${c.bold}Msgs:${c.reset} ${T.messageCount}`),console.log(`    ${c.bold}Updated:${c.reset} ${B}`),T.summary&&console.log(`    ${c.dim}${T.summary.substring(0,120)}${c.reset}`),console.log("")}console.log(`${c.dim}--resume picks the most recent session in the current directory; use --session <id> for any other.${c.reset}
-`)}return}if(s.deleteSessionId){let y=n.deleteSession(s.deleteSessionId);console.log(y?`${c.green}Session "${s.deleteSessionId}" deleted.${c.reset}`:`${c.yellow}Session "${s.deleteSessionId}" not found.${c.reset}`);return}if(s.listTaskLogs){let y=r.listTaskLogs();if(y.length===0)console.log(`${c.dim}No saved task logs.${c.reset}`);else{console.log(`
-${c.bold}Task logs (${y.length}):${c.reset}
-`);for(let g of y){let T=new Date(g.startedAt).toLocaleString(),B=(g.durationMs/1e3).toFixed(1),M=g.status==="completed"?`${c.green}\u2713`:g.status==="failed"?`${c.red}\u2717`:`${c.yellow}\u2298`;console.log(`  ${c.cyan}${g.id}${c.reset} ${M}${c.reset}`),console.log(`    ${c.bold}Task:${c.reset} ${g.task.substring(0,120)}`),console.log(`    ${c.bold}Mode:${c.reset} ${g.mode}  ${c.bold}Steps:${c.reset} ${g.totalSteps}  ${c.bold}Tools:${c.reset} ${g.totalToolCalls}  ${c.bold}Duration:${c.reset} ${B}s`),console.log(`    ${c.bold}Started:${c.reset} ${T}`),console.log(`    ${c.dim}${g.summary.substring(0,150)}${c.reset}`),console.log("")}}return}if(s.taskLogId){let y=r.loadTaskLog(s.taskLogId);y?(console.log(`
-${c.bold}=== Task Log: ${y.id} ===${c.reset}
-`),console.log(r.formatTaskLog(y))):console.log(`${c.yellow}Task log "${s.taskLogId}" not found.${c.reset}`);return}if(s.deleteTaskLogId){let y=r.deleteTaskLog(s.deleteTaskLogId);console.log(y?`${c.green}Task log "${s.deleteTaskLogId}" deleted.${c.reset}`:`${c.yellow}Task log "${s.deleteTaskLogId}" not found.${c.reset}`);return}Ps(y=>console.log(`${c.dim}${y}${c.reset}`)),console.log(`${c.dim}Config home: ${ge()}${c.reset}`);let o=Cn(s.profile);s.temperature!==void 0&&(o.agentConfig.temperature=s.temperature),s.topK!==void 0&&(o.agentConfig.topK=s.topK);let i=new Kt;if(i.loadSkillsFromDirs(o.skillsDirs),i.loadRulesFromDirs(o.rulesDirs),i.loadAgentMdFiles(Ms(process.cwd())),eo(o.skillsDirs),s.showSkills){if(i.skills.length===0)console.log(`${c.dim}No skills found. Configure skills directories in config.yaml.${c.reset}`);else{console.log(`
-${c.bold}Loaded skills (${i.skills.length}):${c.reset}`);for(let y of i.skills)console.log(`  ${c.cyan}${y.name}${c.reset}  ${c.dim}${y.description.substring(0,80)}${c.reset}`),y.whenToUse&&console.log(`      whenToUse: ${c.dim}${y.whenToUse.substring(0,100)}${c.reset}`)}if(i.rules.length>0){console.log(`
-${c.bold}Loaded rules (${i.rules.length}):${c.reset}`);for(let y of i.rules){let g=y.alwaysApply?`${c.green}always`:`${c.yellow}manual`;console.log(`  ${g}${c.reset}  ${c.dim}${y.description}${c.reset}`)}}console.log(`
-${c.dim}Skill management tools (meta-skill): skill_catalog / create_skill / update_skill${c.reset}`);return}let a=s.mode==="plan"?"Plan":s.mode==="ask"?"Ask":"Agent";console.log(`
-${c.bold}${c.green}===========================================${c.reset}`),console.log(`${c.bold}  CodeAgent v${fs} - ${a} Mode${c.reset}`),console.log(`${c.bold}${c.green}===========================================${c.reset}`);let l=o.agentConfig;if(console.log(`${c.dim}Profile: ${o.profileName} | Provider: ${l.provider} | Model: ${l.model}${c.reset}`),o.modelRouting.enabled){let y=o.modelRouting.defaultModel||l.model,g=Object.entries(o.modelRouting.scenarios||{}).map(([T,B])=>`${T}\u2192${B}`).join(", ");console.log(`${c.dim}Model routing: ON | startup: ${l.model} | default: ${y}${g?` | ${g}`:""}${c.reset}`),o.modelRouting.fallbackModel&&console.log(`${c.dim}Model fallback: ${o.modelRouting.fallbackModel} (\u4FDD\u5E95\u6A21\u578B, auto-switch on API access timeout or rate limit)${c.reset}`)}else o.profileExplicit&&console.log(`${c.dim}Model routing: OFF (profile "${o.profileName}" pinned via --profile \u2014 no runtime model switching)${c.reset}`);console.log(`${c.dim}API Base: ${l.apiBase||"default"} | Mode: ${a}${s.streaming?" | Streaming":""}${c.reset}`),console.log(`${c.dim}Sampling: temperature=${l.temperature} top_k=${l.topK||"(provider default)"} | Memory: ${s.memory??"auto"}${c.reset}`),console.log(`${c.dim}Config: ${o.configFilePath||"none (using defaults)"} | CWD: ${process.cwd()}${c.reset}`);let d=i.skills.length,p=i.rules.length,u=o.mcpServers.length,m=[];if(d>0&&m.push(`Skills: ${d}`),p>0&&m.push(`Rules: ${p}`),u>0&&m.push(`MCP Servers: ${u}`),m.length>0&&console.log(`${c.dim}${m.join(" | ")}${c.reset}`),console.log(""),s.selfScan!==void 0){let y=ys(),g=nn({days:s.selfScan>0?s.selfScan:y.evidenceDays});console.log(sn(g));return}if(await Ma(fs,s.tracing),s.parallel&&s.tasks.length>1){await Zr(s.tasks,o,s.memory,s);return}if(s.batch){await Pa(s,o,i);return}let{config:h,llmProvider:f,toolRegistry:w,checkpointManager:b,memoryClient:S}=await _s(o,s.memory,s),_=new Oe;_.switchMode(s.mode);let k=new Be(h,f,w,_,b,process.cwd(),S,we);k.registerTodoTool(),s.streaming&&k.setStreaming(!0);let v=new We(o.modelRouting,o.profiles,h),C=h.model;hs(k,v);let E=y=>{if(!v.enabled)return;let g=v.selectConfig(y);if(g.model===k.activeModel)return;let T=k.activeModel;try{let B=te.create(g);k.swapProvider(g,B,"routing"),C=g.model,x(c.dim,"ROUTE",`scenario ${v.detectScenario(y)} \u2192 ${g.model}`)}catch(B){x(c.red,"ROUTE",`Failed to switch model from ${T} to ${g.model}: ${B.message}`)}},R=s.tasks.length>0?s.tasks.join(" "):void 0,j=Ge(i,s.useSkill,R);j&&k.setExtraSystemPrompt(j),so(k,s);let F,P="",le=e.saveSessions,ee=s.sessionId?n.loadSession(s.sessionId):s.resumeLatest?n.getLatestSessionForCwd(process.cwd()):void 0;if(ee){let y=ee.mode;_.switchMode(y);let g=Ge(i,s.useSkill,void 0);k.restoreFromSession(ee.messages,ee.systemPrompt||"",g||""),F=ee.id,P=ee.name;let T=new Date(ee.updatedAt).toLocaleString();console.log(`${c.magenta}[SESSION]${c.reset} Resumed session "${P||F}" (${ee.messageCount} msgs, last updated ${T})`),console.log(`${c.dim}  Summary: ${ee.summary||"(no summary)"}${c.reset}
-`)}else if(s.sessionId)console.error(`${c.yellow}[SESSION]${c.reset} Session "${s.sessionId}" not found in ${e.sessionsDir}`),process.exit(1);else if(s.resumeLatest){let y=n.listSessionsForCwd(process.cwd()).length,g=n.count;console.error(`${c.yellow}[SESSION]${c.reset} No saved session for this directory: ${process.cwd()}`),g>0?(console.error(`${c.dim}  ${g} session(s) exist for other directories (this one has ${y}).${c.reset}`),console.error(`${c.dim}  Use --sessions to list them, or --session <id> to resume one explicitly.${c.reset}`)):console.error(`${c.dim}  No sessions have been saved yet.${c.reset}`),process.exit(1)}else if(n.count>0){let y=n.getLatestSessionForCwd(process.cwd());if(y){let g=new Date(y.updatedAt).toLocaleString();console.log(`${c.dim}Tip: Resume this directory's last session with --resume (${y.name||y.id}, ${y.messageCount} msgs, ${g})${c.reset}
-`)}}let ae=y=>{if(!le)return;let g=k.exportSessionState();if(g.messages.length===0)return;let T=F||n.generateId(),B=y||P||`Session ${new Date().toLocaleString()}`,M=n.saveSession(T,B,_.currentMode,g.messages,g.systemPrompt,g.extraSystemPrompt,k.planner.currentPlan);F=M.id,P=M.name},I=to.createInterface({input:process.stdin,output:process.stdout,completer:$a(n,i,r)});console.log(`${c.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, /help, exit${c.reset}`),console.log(`${c.dim}Session:  /save, /sessions [/all], /resume [id], /new, /auto-save, /delete-session${c.reset}`),console.log(`${c.dim}Tasks:   /tasks, /task <id>, /delete-task <id>${c.reset}`),console.log(`${c.dim}Tip: /btw <hint> works any time (even while running). Conflicting instructions (e.g. "\u57FA\u4E8E\u6700\u65B0\u7248\u672C\u91CD\u65B0\u6267\u884C") auto-cancel the running tool/plan and pivot; /btw cancel aborts the current tool${c.reset}`),console.log(`${c.dim}Tip: control commands (/mode, /tasks, /sessions, /save, /help, exit) run IMMEDIATELY even while a task runs \u2014 no need to wait${c.reset}`),console.log(`${c.dim}Tip: press Tab to auto-complete commands like /resume, /mode, /profile, /skill${c.reset}
-`);let $=!1,J=[],W=!1,V=()=>{switch(_.currentMode){case"plan":return"Plan";case"ask":return"Ask";default:return"Agent"}},pe=()=>{$?process.stdout.write(`${c.bold}${c.yellow}[running - /btw to intervene]${c.reset} `):process.stdout.write(`${c.bold}${c.blue}${V()}> ${c.reset}`)},ce=async y=>{try{let g=Ge(i,void 0,y);k.setExtraSystemPrompt(g),E(y),await k.run(y),ae(y.substring(0,80));let T=k.lastTaskError?"failed":"completed",B=k.exportTaskLog(T,k.lastTaskError);r.saveTaskLog(B)}catch(g){x(c.red,"ERROR",g.message)}},Ce=async()=>{for(;J.length>0;){let y=J.shift(),g=ds(y,{agentRunning:$});if(g.route==="immediate"||g.route==="refuse"){if(ms.has(y.toLowerCase())){be();return}g.route==="refuse"?x(c.yellow,"REFUSED",us(g,!1)):await De(y)?$&&x(c.dim,"QUEUED",`${g.command} \u2014 ${g.reason??"executed from the queue"}`):x(c.yellow,"REPL",`no handler for ${g.command} \u2014 nothing was done`);continue}if(g.route==="btw"){let T=y.slice(4).trim();T&&T!=="cancel"&&T!=="abort"&&(x(c.magenta,"BTW",`Buffered hint as prompt: "${T.substring(0,80)}${T.length>80?"...":""}"`),await L(T));continue}console.log(`
-${c.dim}--- Processing queued: "${y.substring(0,80)}${y.length>80?"...":""}" ---${c.reset}`),await L(y)}},be=async()=>{try{$&&(k.cancel(),$=!1),ae(),F&&console.log(`
-${c.dim}Session saved: ${F}${c.reset}`),console.log(`${c.dim}Goodbye!${c.reset}`)}catch(y){console.error("Error during graceful exit:",y)}I.close(),k.dispose(),await pt(),setTimeout(()=>process.exit(0),100)},De=async y=>{if(y.startsWith("/save")){let g=y.slice(5).trim()||P||"";return ae(g),console.log(`${c.green}Session saved: ${F}${c.reset}${g?` (${g})`:""}`),!0}if(y==="/sessions"||y==="/sessions all"){let g=y.endsWith(" all"),T=g?n.listSessions():n.listSessionsForCwd(process.cwd()),B=g?"all directories":`this directory: ${process.cwd()}`;if(T.length===0){let M=n.count;console.log(`${c.dim}No saved sessions for ${B}.${c.reset}`),!g&&M>0&&console.log(`${c.dim}${M} session(s) exist for other directories \u2014 /sessions all to list them.${c.reset}`)}else{console.log(`
-${c.bold}Saved sessions (${T.length} \u2014 ${B}):${c.reset}
-`);for(let M of T){let Ze=new Date(M.updatedAt).toLocaleString(),mt=M.mode==="plan"?"Plan":M.mode==="ask"?"Ask":"Agent",oo=M.id===F?` ${c.green}(current)`:"";console.log(`  ${c.cyan}${M.id}${c.reset}${oo}`),console.log(`    ${c.bold}Name:${c.reset} ${M.name||"(unnamed)"}  ${c.bold}Mode:${c.reset} ${mt}  ${c.bold}Msgs:${c.reset} ${M.messageCount}`),console.log(`    ${c.bold}Updated:${c.reset} ${Ze}`),M.summary&&console.log(`    ${c.dim}${M.summary.substring(0,120)}${c.reset}`),console.log("")}}return!0}if(y.startsWith("/resume")){let g=y.slice(7).trim(),T=g?n.loadSession(g):n.getLatestSessionForCwd(process.cwd());if(!T)return g?x(c.yellow,"SESSION",`Session "${g}" not found`):x(c.yellow,"SESSION",`No saved session for this directory (${process.cwd()}). Use /sessions to list them all.`),!0;ae(),_.switchMode(T.mode);let B=Ge(i,void 0,void 0);k.restoreFromSession(T.messages,T.systemPrompt||"",B||""),F=T.id,P=T.name;let M=new Date(T.updatedAt).toLocaleString();return console.log(`${c.magenta}[SESSION]${c.reset} Resumed "${T.name||T.id}" (${T.messageCount} msgs, ${M})`),!0}if(y==="/new")return ae(),k.restoreFromSession([],"",j||""),F=void 0,P="",console.log(`${c.magenta}[SESSION]${c.reset} Started new session`),!0;if(y==="/auto-save")return le=!le,console.log(`${c.magenta}[SESSION]${c.reset} Auto-save ${le?"enabled":"disabled"}`),!0;if(y==="/tasks"){let g=r.listTaskLogs();if(g.length===0)console.log(`${c.dim}No saved task logs.${c.reset}`);else{console.log(`
-${c.bold}Task logs (${g.length}):${c.reset}
-`);for(let T of g){let B=new Date(T.startedAt).toLocaleString(),M=(T.durationMs/1e3).toFixed(1),Ze=T.status==="completed"?`${c.green}\u2713`:T.status==="failed"?`${c.red}\u2717`:`${c.yellow}\u2298`;console.log(`  ${c.cyan}${T.id}${c.reset} ${Ze}${c.reset}  ${c.dim}${M}s${c.reset}`),console.log(`    ${T.task.substring(0,100)}`),console.log(`    ${c.dim}${new Date(T.startedAt).toLocaleString()} | ${T.mode} | ${T.totalSteps} steps | ${T.totalToolCalls} tools${c.reset}`),console.log("")}}return!0}if(y.startsWith("/task ")||y==="/task"){let g=y.slice(6).trim();if(!g)return x(c.yellow,"TASK","Usage: /task <id>   (use /tasks to list ids)"),!0;let T=r.loadTaskLog(g);return T?(console.log(`
-${c.bold}=== Task Log: ${T.id} ===${c.reset}
-`),console.log(r.formatTaskLog(T))):console.log(`${c.yellow}Task log "${g}" not found${c.reset}`),!0}if(y.startsWith("/delete-task ")){let g=y.slice(13).trim();return r.deleteTaskLog(g)?console.log(`${c.green}Task log "${g}" deleted${c.reset}`):console.log(`${c.yellow}Task log "${g}" not found${c.reset}`),!0}if(y==="/delete-task")return x(c.yellow,"TASK","Usage: /delete-task <id>   (use /tasks to list ids)"),!0;if(y.startsWith("/delete-session")){let g=y.slice(15).trim();return g?(n.deleteSession(g)?(F===g&&(F=void 0,P=""),console.log(`${c.green}Session "${g}" deleted${c.reset}`)):console.log(`${c.yellow}Session "${g}" not found${c.reset}`),!0):(x(c.yellow,"SESSION","Usage: /delete-session <id>   (use /sessions to list ids)"),!0)}if(y==="/help"){console.log(`
-${c.bold}Commands${c.reset}`);for(let g of wa)console.log(`  ${g}`);return console.log(`
-${c.dim}Tip: /btw <hint> works even while a task runs; control commands like${c.reset}`),console.log(`${c.dim}/mode, /tasks, /sessions, /save and exit run immediately without waiting.${c.reset}
-`),!0}if(y.startsWith("/mode ")||y==="/mode"){let g=y.slice(6).trim();return g?(g==="plan"?_.switchMode("plan"):g==="ask"?_.switchMode("ask"):_.switchMode("agent"),x(c.magenta,"MODE",`Switched to ${g}`),!0):(x(c.magenta,"MODE",`Current mode: ${V()}. Usage: /mode <agent|plan|ask>`),!0)}if(y==="/stream")return k.setStreaming(!s.streaming),s.streaming=!s.streaming,x(c.magenta,"STREAM",`Streaming ${s.streaming?"enabled":"disabled"}`),!0;if(y==="/profiles"){let g=At();for(let T of g){let B=T.name===o.profileName?` ${c.green}(active)`:"";console.log(`  ${c.cyan}${T.name}${c.reset}  ${c.dim}${T.provider}/${T.model}${B}${c.reset}`)}return!0}if(y.startsWith("/profile ")){let g=y.slice(9).trim(),T=o.profileName,B=C;try{let M=Bs(g);if(!M.agentConfig.apiKey)return x(c.red,"ERROR",`Profile "${g}" has no API key configured`),!0;let Ze=te.create(M.agentConfig);k.swapProvider(M.agentConfig,Ze,"profile"),o=M,eo(M.skillsDirs),v=new We(M.modelRouting,M.profiles,M.agentConfig),C=M.agentConfig.model,hs(k,v);let mt=M.agentConfig;x(c.magenta,"PROFILE",`Switched ${T} (${B}) \u2192 ${g} (${mt.provider}/${mt.model})`)}catch(M){x(c.red,"ERROR",`Failed to switch profile: ${M.message}`)}return!0}if(y==="/skills"){if(i.skills.length===0)console.log(`${c.dim}No skills loaded. Configure skills directories in config.yaml.${c.reset}`);else{console.log(`
-${c.bold}Loaded skills (${i.skills.length}):${c.reset}`);for(let g of i.skills)console.log(`  ${c.cyan}${g.name}${c.reset}  ${c.dim}${g.description.substring(0,80)}${c.reset}`),g.whenToUse&&console.log(`      whenToUse: ${c.dim}${g.whenToUse.substring(0,100)}${c.reset}`)}return console.log(`${c.dim}Skill tools: skill_catalog / create_skill / update_skill (ask the agent to manage skills)${c.reset}`),!0}if(y.startsWith("/skill ")){let g=y.slice(7).trim(),T=Ge(i,g,void 0);return k.setExtraSystemPrompt(T),x(c.magenta,"SKILL",g?`Activated skill: ${g}`:"Cleared active skill"),!0}if(y.startsWith("/use-skill ")){let g=y.slice(11).trim(),T=Ge(i,g,void 0);k.setExtraSystemPrompt(T);let B=i.skills.some(M=>M.name===g);return x(c.magenta,"SKILL",B?`Activated skill: ${g}`:`Activated skill: ${g} ${c.yellow}(not in the loaded skill list \u2014 /skills to check)${c.reset}`),!0}if(y.startsWith("/parallel ")){let g=y.slice(10).match(/"[^"]+"/g)?.map(T=>T.replace(/"/g,""))||[];return g.length>=2?await Zr(g,o,s.memory):x(c.red,"ERROR",'Provide at least 2 tasks in quotes: /parallel "task1" "task2"'),!0}if(y==="/continue"||y==="continue"){try{$=!0;try{await k.continueSession()}finally{$=!1}ae();let g=k.lastTaskError?"failed":"completed",T=k.exportTaskLog(g,k.lastTaskError);r.saveTaskLog(T)}catch(g){x(c.red,"ERROR",g.message)}return!0}if(y.startsWith("/btw ")){let g=y.slice(5).trim();return g?g==="cancel"||g==="abort"?x(c.yellow,"BTW","No agent currently running. Use /btw cancel while agent is running to abort a tool."):(x(c.magenta,"BTW",`Direct prompt: "${g.substring(0,100)}${g.length>100?"...":""}"`),await L(g),await Ce()):x(c.yellow,"BTW","Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)"),!0}return y==="/cancel"?(x(c.yellow,"CANCEL","No task currently running."),!0):!1},L=async y=>{$=!0;try{await ce(y)}finally{$=!1}},q=async y=>{if(!y){x(c.yellow,"BTW","Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)");return}if(y==="cancel"||y==="abort"){if(k.cancelCurrentTool()){x(c.magenta,"BTW","Cancelling current tool execution...");return}let T=await k.injectBtwHint(y);x(c.yellow,"BTW",T.kind==="superseded"?"No tool running \u2014 asking the agent to stop the current task":"No tool currently running to cancel");return}let g=await k.injectBtwHint(y);g.kind==="superseded"?(x(c.magenta,"BTW",`Task superseded \u2014 ${g.toolCancelled?"aborted the running tool and ":""}pivoting to: "${y.substring(0,80)}${y.length>80?"...":""}"`),g.reason&&x(c.dim,"BTW",`reason: ${g.reason}`)):g.kind==="cancelled"?x(c.magenta,"BTW","Cancelling current tool execution..."):x(c.magenta,"BTW",`Hint injected: "${y.substring(0,100)}${y.length>100?"...":""}"`)};if(I.on("line",async y=>{let g=y.trim();if($){let T=ds(g,{agentRunning:!0});switch(T.route){case"btw":await q(g.slice(4).trim());break;case"immediate":if(ms.has(g.toLowerCase())){be();return}x(c.dim,"NOW",`${T.command} \u2014 ${T.reason??"running immediately"}`),await De(g)||x(c.yellow,"REPL",`no handler for ${T.command} \u2014 nothing was done`);break;case"refuse":x(c.yellow,"REFUSED",us(T));break;default:g&&(J.push(g),x(c.dim,"QUEUED",`"${g.substring(0,60)}${g.length>60?"...":""}" \u2014 will process after current task`));break}pe();return}if(W){J.push(g);return}if(!g){pe();return}if(ms.has(g.toLowerCase())){be();return}W=!0;try{if(await Ce(),$)return;if(await De(g)){await Ce();return}await L(g),await Ce()}finally{W=!1,pe()}}),I.on("SIGINT",()=>{be()}),pe(),s.tasks.length>0){let y=s.tasks.join(" ");I.write(y+`
-`)}}var La=["askquestion","durable-request","durable request"];function Ge(s,e,t){let n="";n+=s.buildPreloadRulesPromptSection(La);let r;t&&(r=s.getAutoMatchedSkills(t)),e&&(r||(r=new Set),r.add(e)),n+=s.buildSkillsPromptSection(r);let o=Oa();if(n+=s.buildMetaSkillPromptSection(o),n+=Nr(ys()),e){let i=s.getSkillContent(e);i&&r?.has(e)||i&&(n+=`
-## Active Skill: ${e}
+`);
+}
+var tracing = NOOP_TRACING;
+var tracingFlush;
+var _selfUpdateConfig;
+function selfUpdateConfig() {
+  return _selfUpdateConfig ??= loadSelfUpdateConfig();
+}
+async function flushTracing() {
+  const flush = tracingFlush;
+  tracingFlush = void 0;
+  if (flush) await flush();
+}
+async function setupTracing(release, cliOverride) {
+  tracing = initTracingFromConfig(cliOverride, release);
+  if (!tracing.enabled) {
+    if (cliOverride !== "off") {
+      console.log(`${C.dim}[TRACING] off \u2014 ${tracing.reason}${C.reset}`);
+    }
+    return;
+  }
+  const ok = await tracing.init();
+  if (!ok) {
+    console.log(`${C.yellow}[TRACING]${C.reset} Langfuse SDK failed to load \u2014 tracing disabled for this run`);
+    tracing = NOOP_TRACING;
+    return;
+  }
+  console.log(`${C.green}[TRACING]${C.reset} Langfuse tracing enabled: ${tracing.describe?.() ?? ""}`);
+  tracingFlush = () => tracing.shutdown();
+  process.once("beforeExit", () => {
+    void flushTracing();
+  });
+  process.once("SIGINT", () => {
+    void flushTracing().finally(() => process.exit(130));
+  });
+  process.once("SIGTERM", () => {
+    void flushTracing().finally(() => process.exit(143));
+  });
+}
+async function createServices(resolved, memoryOverride, opts) {
+  const config = resolved.agentConfig;
+  if (!config.apiKey) {
+    console.error(`${C.red}No API key found. Set OPENAI_API_KEY, or configure apiKey in ~/.agents/models.json or config.yaml.${C.reset}`);
+    process.exit(1);
+  }
+  const llmProvider = LLMProviderFactory.create(config);
+  const fileService = new NodeFileService();
+  const searchService = new NodeSearchService();
+  const terminalService = new NodeTerminalService(process.cwd());
+  const toolRegistry = new ToolRegistry();
+  const workspaceRoot = URI.file(process.cwd());
+  toolRegistry.register(new ReadFileTool(fileService));
+  toolRegistry.register(new WriteFileTool(fileService));
+  toolRegistry.register(new EditFileTool(fileService));
+  toolRegistry.register(new ListDirectoryTool(fileService));
+  toolRegistry.register(new SearchTextTool(searchService, workspaceRoot));
+  toolRegistry.register(new SearchFilesTool(searchService, workspaceRoot));
+  toolRegistry.registerAlias("search_content", "search_text");
+  toolRegistry.register(new RunTerminalTool(terminalService, process.cwd()));
+  toolRegistry.register(new PollTool(terminalService, process.cwd()));
+  const skillDirs = resolved.skillsDirs && resolved.skillsDirs.length > 0 ? resolved.skillsDirs : [defaultSkillsDir()];
+  toolRegistry.register(new SkillCatalogTool(skillDirs));
+  toolRegistry.register(new CreateSkillTool(skillDirs));
+  toolRegistry.register(new UpdateSkillTool(skillDirs));
+  const selfUpdate = selfUpdateConfig();
+  if (selfUpdate.enabled) {
+    toolRegistry.register(new SelfScanTool(selfUpdate));
+    const releaseNote = selfUpdate.allowRelease ? `release ON${selfUpdate.allowPush ? " + push" : " (no push)"}` : "release OFF (self_update.allow_release)";
+    console.log(`${C.green}[SELF]${C.reset} self-evolution: evidence scan ON, ${releaseNote}`);
+    if (selfUpdate.allowRelease) {
+      toolRegistry.register(new AgentReleaseTool(selfUpdate));
+    }
+  }
+  const memoryConfig = memoryOverride === "off" ? void 0 : loadMemoryConfig();
+  let memoryClient;
+  if (memoryConfig) {
+    memoryClient = new MemoryClient(memoryConfig, { workspaceDir: process.cwd() });
+    toolRegistry.register(new MemorySearchTool(memoryClient));
+    toolRegistry.register(new ConversationSearchTool(memoryClient));
+    toolRegistry.register(new MemoryReadTool(memoryClient));
+    toolRegistry.register(new MemoryWriteTool(memoryClient));
+    const who = memoryConfig.username || memoryConfig.userId;
+    console.log(`${C.green}[MEMORY]${C.reset} Shared memory enabled (tdai_agent_mem): user=${who || "?"} endpoint=${memoryConfig.endpoint} service=${memoryConfig.serviceId}`);
+    console.log(`${C.dim}  Tools: tdai_memory_search / tdai_conversation_search / tdai_read_file / tdai_memory_write${C.reset}`);
+    console.log(`${C.dim}  L1 workspace scope: ${memoryClient.workspaceScope} @ ${memoryClient.workspaceDir || "(unknown)"}${C.reset}`);
+    if (memoryConfig.recall) console.log(`${C.dim}  Auto-recall: on | Auto-capture L0: ${memoryConfig.capture ? "on" : "off"}${C.reset}`);
+  }
+  const checkpointManager = new AgentCheckpointManager(fileService);
+  let mcpTransports = [];
+  if (opts) {
+    const specs = resolveMcpSpecs(resolved, opts);
+    if (specs.length > 0) {
+      try {
+        const { count, transports } = await registerMcpTools(
+          toolRegistry,
+          specs,
+          (msg) => console.log(`${C.cyan}${msg}${C.reset}`),
+          { allowTools: mcpAllowTools(opts), skipServers: ["tdai_agent_mem"] }
+        );
+        mcpTransports = transports;
+        console.log(`${C.green}[MCP]${C.reset} ${count} tool(s) registered from ${specs.length} server(s)`);
+      } catch (e) {
+        console.log(`${C.yellow}[MCP]${C.reset} failed to load MCP servers: ${e.message}`);
+      }
+    }
+  }
+  const mockOptions = resolveToolMockOptions(
+    {
+      mode: opts?.toolMock,
+      file: opts?.toolMockFile,
+      tools: opts?.toolMockTools,
+      strict: opts?.toolMockStrict
+    },
+    process.env,
+    storageSettings().stateDir
+  );
+  if (mockOptions.mode !== "off") {
+    try {
+      const store = new ToolMockStore(mockOptions);
+      const wrapped = installToolMock(toolRegistry, store, (msg) => console.log(`${C.magenta}[MOCK]${C.reset} ${msg}`));
+      if (wrapped === 0) {
+        console.log(`${C.yellow}[MOCK]${C.reset} no tool matched "${mockOptions.tools?.join(",") ?? "all"}" \u2014 mock inactive`);
+      } else if (mockOptions.mode === "replay") {
+        const hint = store.entryCount === 0 ? " (fixture is EMPTY \u2014 every call will execute live and be recorded; run once with --tool-mock record first)" : ` (${store.entryCount} recorded result(s))`;
+        console.log(`${C.dim}[MOCK] replay${mockOptions.strict ? " strict" : ""}${hint}${C.reset}`);
+      }
+    } catch (e) {
+      console.log(`${C.yellow}[MOCK]${C.reset} failed to initialise the tool mock: ${e.message}`);
+    }
+  }
+  return { config, llmProvider, toolRegistry, checkpointManager, memoryClient, mcpTransports };
+}
+function attachAgentListeners(agentLoop, opts) {
+  if (opts.streaming) {
+    agentLoop.onDidStreamToken((token) => {
+      process.stdout.write(token);
+    });
+  }
+  agentLoop.onDidReceiveMessage((msg) => {
+    if (msg.role === "assistant" /* Assistant */) {
+      if (msg.reasoningContent) {
+        log(C.dim, "THINKING", formatReasoningForLog(msg.reasoningContent));
+      }
+      if (msg.toolCalls && msg.toolCalls.length > 0) {
+        for (const tc of msg.toolCalls) {
+          const argsStr = JSON.stringify(tc.arguments).substring(0, 120);
+          log(C.cyan, "TOOL", `${tc.name}(${argsStr}...)`);
+        }
+      }
+      if (msg.content && !opts.streaming) {
+        log(C.green, "AGENT", msg.content);
+      }
+    } else if (msg.role === "tool" /* Tool */) {
+      const truncated = msg.content.length > 500 ? msg.content.substring(0, 500) + `
+... (${msg.content.length} chars)` : msg.content;
+      log(C.yellow, "RESULT", truncated);
+    } else if (msg.role === "user" /* User */) {
+      log(C.blue, "USER", msg.content);
+    }
+  });
+  agentLoop.setModelSwitchLogger((e) => {
+    const color = e.reason === "primary-recovered" ? C.green : e.toFallback ? C.yellow : C.magenta;
+    console.log(`${color}${C.bold}${formatModelSwitch(e)}${C.reset}`);
+  });
+  agentLoop.onDidError((err) => log(C.red, "ERROR", err.message));
+  const colorDiff = ansiColorEnabled();
+  agentLoop.onDidUpdateTodos((todos) => {
+    if (todos.length === 0) {
+      process.stdout.write(`
+${C.dim}Plan cleared.${C.reset}
+`);
+      return;
+    }
+    const rendered = formatTodoList(todos, { color: colorDiff });
+    if (rendered) process.stdout.write(`
+${rendered}
+`);
+  });
+  agentLoop.onDidReceiveToolDiff((toolDiff) => {
+    const displayPath = displayPathFor(toolDiff.path, process.cwd(), nodePath2.sep);
+    const card = colorDiff ? renderFileDiffAnsi(toolDiff, { color: true, displayPath }) : renderFileDiffPlain(toolDiff, displayPath);
+    if (!card) return;
+    process.stdout.write(`
+${card}
+`);
+  });
+  agentLoop.onDidComplete(() => console.log(`
+${C.dim}--- Task completed ---${C.reset}
+`));
+}
+async function runParallelMode(tasks, resolved, memoryOverride, opts) {
+  const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = await createServices(resolved, memoryOverride, opts);
+  console.log(`
+${C.bold}${C.magenta}=== Parallel Agent Mode ===${C.reset}`);
+  console.log(`${C.dim}Running ${tasks.length} tasks concurrently (max 4)${C.reset}
+`);
+  const modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
+  const taskLogManager = new TaskLogManager();
+  const manager = new ParallelAgentManager(config, llmProvider, toolRegistry, process.cwd(), checkpointManager, 4, modelRouter, memoryClient, tracing);
+  manager.onDidTaskStart((task) => {
+    log(C.cyan, `TASK ${task.id.slice(-6)}`, `Started: ${task.description.substring(0, 80)}`);
+  });
+  manager.onDidTaskComplete((result) => {
+    const status = result.success ? `${C.green}OK` : `${C.red}FAIL`;
+    log(status, `TASK ${result.taskId.slice(-6)}`, `${result.success ? "Completed" : "Failed"} in ${result.durationMs}ms`);
+    if (result.error) {
+      log(C.red, "ERROR", result.error);
+    }
+  });
+  const results = await manager.runParallel(tasks);
+  console.log(`
+${C.bold}=== Results ===${C.reset}`);
+  for (const result of results) {
+    const task = manager.getTask(result.taskId);
+    const status = result.success ? `${C.green}OK${C.reset}` : `${C.red}FAIL${C.reset}`;
+    console.log(`  ${status} [${result.durationMs}ms] ${task?.description.substring(0, 60) || result.taskId}`);
+    const agentMessages = result.messages.filter((m) => m.role === "assistant" /* Assistant */ && m.content);
+    if (agentMessages.length > 0) {
+      const lastMsg = agentMessages[agentMessages.length - 1];
+      console.log(`    ${C.dim}${lastMsg.content.substring(0, 100)}${C.reset}`);
+    }
+    if (result.taskLog) {
+      taskLogManager.saveTaskLog(result.taskLog);
+      console.log(`    ${C.dim}[Task log: ${result.taskLog.id}]${C.reset}`);
+    }
+  }
+  manager.dispose();
+}
+function wireModelFallback(agentLoop, modelRouter) {
+  if (modelRouter.probeIntervalMs) {
+    agentLoop.setProbeSchedule(modelRouter.probeIntervalMs);
+  }
+  const fb = modelRouter.fallbackConfig();
+  if (!fb) return;
+  try {
+    agentLoop.setFallback(fb, LLMProviderFactory.create(fb));
+    console.log(`${C.dim}Model fallback: ON | \u4FDD\u5E95\u6A21\u578B: ${fb.model} (auto-switch on API access timeout or rate limit; background probe switches back on recovery)${C.reset}`);
+  } catch (err) {
+    console.log(`${C.yellow}Model fallback: failed to init provider for "${fb.model}": ${err.message}${C.reset}`);
+  }
+}
+async function runBatchMode(opts, resolved, skillsLoader) {
+  const teardownLog = installBatchLog(opts.batchLog);
+  const releaseLock = opts.lockFile ? acquireLock(opts.lockFile) : void 0;
+  if (opts.lockFile && !releaseLock) {
+    console.log(`${C.yellow}[BATCH]${C.reset} lock "${opts.lockFile}" is held by another run \u2014 skipping (exit 0)`);
+    teardownLog();
+    process.exit(0);
+  }
+  const task = opts.tasks.join(" ").trim();
+  if (!task) {
+    console.error(`${C.red}[BATCH]${C.reset} no task provided; usage: code-agent --batch "task"`);
+    releaseLock?.();
+    teardownLog();
+    process.exit(2);
+  }
+  const modeLabel = opts.mode === "plan" /* Plan */ ? "plan" : opts.mode === "ask" /* Ask */ ? "ask" : "agent";
+  const startedAt = Date.now();
+  console.log(`${C.green}[BATCH]${C.reset} start pid=${process.pid} mode=${modeLabel} cwd=${process.cwd()}`);
+  console.log(`${C.dim}${task.length > 400 ? task.slice(0, 400) + "\u2026" : task}${C.reset}`);
+  const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = await createServices(resolved, opts.memory, opts);
+  if (opts.stepTimeout && opts.stepTimeout > 0) config.stepTimeout = opts.stepTimeout;
+  const modeManager = new AgentModeManager();
+  modeManager.switchMode(opts.mode);
+  const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient, tracing);
+  agentLoop.registerTodoTool();
+  agentLoop.setExtraSystemPrompt(buildSkillsContext(skillsLoader, opts.useSkill, task));
+  wireModelFallback(agentLoop, new ModelRouter(resolved.modelRouting, resolved.profiles, config));
+  attachAgentListeners(agentLoop, opts);
+  let timedOut = false;
+  const timer = opts.batchTimeout && opts.batchTimeout > 0 ? setTimeout(() => {
+    timedOut = true;
+    console.log(`
+${C.red}[BATCH]${C.reset} batch-timeout of ${opts.batchTimeout}s reached \u2014 cancelling task`);
+    agentLoop.cancel();
+  }, opts.batchTimeout * 1e3) : void 0;
+  const onSignal = (sig) => {
+    console.log(`
+${C.yellow}[BATCH]${C.reset} received ${sig} \u2014 cancelling task`);
+    agentLoop.cancel();
+  };
+  process.on("SIGINT", () => onSignal("SIGINT"));
+  process.on("SIGTERM", () => onSignal("SIGTERM"));
+  let thrown;
+  try {
+    await agentLoop.run(task);
+  } catch (e) {
+    thrown = e.message || String(e);
+  }
+  if (timer) clearTimeout(timer);
+  const status = timedOut ? "cancelled" : thrown || agentLoop.lastTaskError ? "failed" : "completed";
+  const success = status === "completed";
+  let taskLogId = "";
+  try {
+    const taskLog = agentLoop.exportTaskLog(status, thrown || agentLoop.lastTaskError);
+    taskLogId = taskLog.id;
+    new TaskLogManager().saveTaskLog(taskLog);
+  } catch (e) {
+    console.log(`${C.yellow}[BATCH]${C.reset} failed to save task log: ${e.message}`);
+  }
+  const lastAssistant = [...agentLoop.context.messages].reverse().find((m) => m.role === "assistant" /* Assistant */ && m.content && m.content.trim())?.content || "";
+  const durationMs = Date.now() - startedAt;
+  const result = {
+    status,
+    task,
+    mode: modeLabel,
+    pid: process.pid,
+    cwd: process.cwd(),
+    startedAt: new Date(startedAt).toISOString(),
+    finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    durationMs,
+    durationSec: Math.round(durationMs / 1e3),
+    taskLogId,
+    error: thrown || agentLoop.lastTaskError || void 0,
+    lastAssistant: lastAssistant.slice(0, 8e3)
+  };
+  if (opts.batchResult) writeJsonFile(opts.batchResult, result);
+  const tag = success ? `${C.green}SUCCESS` : `${C.red}${status.toUpperCase()}`;
+  console.log(`
+${C.bold}[BATCH]${C.reset} ${tag}${C.reset} in ${result.durationSec}s (task log: ${taskLogId || "n/a"})`);
+  agentLoop.dispose();
+  releaseLock?.();
+  teardownLog();
+  await flushTracing();
+  process.exit(success ? 0 : timedOut ? 124 : 1);
+}
+async function main() {
+  const opts = parseArgs();
+  if (opts.cwd) {
+    try {
+      process.chdir(expandHomePath(opts.cwd));
+    } catch (e) {
+      console.error(`${C.red}[BATCH]${C.reset} cannot chdir to ${opts.cwd}: ${e.message}`);
+      process.exit(2);
+    }
+  }
+  const storage = configureStorage({
+    stateDir: opts.stateDir,
+    sessionsDir: opts.sessionsDir,
+    tasksDir: opts.tasksDir,
+    saveSessions: opts.noSessionSave ? false : void 0
+  });
+  const storageInfo = storageNotice(storage);
+  if (storageInfo) {
+    console.log(`${C.dim}[STORAGE] ${storageInfo}${C.reset}`);
+  }
+  const sessionManager = new AgentSessionManager(process.cwd());
+  const taskLogManager = new TaskLogManager();
+  if (opts.showProfiles) {
+    const profiles = listProfiles();
+    if (profiles.length === 0) {
+      console.log(`${C.dim}No models.json or config.yaml found. Create ~/.agents/models.json or ~/.agents/config.yaml${C.reset}`);
+    } else {
+      console.log(`
+${C.bold}Available profiles:${C.reset}`);
+      for (const p of profiles) {
+        console.log(`  ${C.cyan}${p.name}${C.reset}  ${C.dim}${p.provider}/${p.model}${C.reset}`);
+      }
+    }
+    return;
+  }
+  if (opts.listSessions) {
+    const sessions = sessionManager.listSessions();
+    if (sessions.length === 0) {
+      console.log(`${C.dim}No saved sessions.${C.reset}`);
+    } else {
+      const here = sessionManager.listSessionsForCwd(process.cwd()).length;
+      console.log(`
+${C.bold}Saved sessions (${sessions.length} total, ${here} in this directory):${C.reset}
+`);
+      for (const s of sessions) {
+        const date = new Date(s.updatedAt).toLocaleString();
+        const modeLabel2 = s.mode === "plan" /* Plan */ ? "Plan" : s.mode === "ask" /* Ask */ ? "Ask" : "Agent";
+        console.log(`  ${C.cyan}${s.id}${C.reset}`);
+        console.log(`    ${C.bold}Name:${C.reset} ${s.name || "(unnamed)"}  ${C.bold}Mode:${C.reset} ${modeLabel2}  ${C.bold}Msgs:${C.reset} ${s.messageCount}`);
+        console.log(`    ${C.bold}Updated:${C.reset} ${date}`);
+        if (s.summary) {
+          console.log(`    ${C.dim}${s.summary.substring(0, 120)}${C.reset}`);
+        }
+        console.log("");
+      }
+      console.log(`${C.dim}--resume picks the most recent session in the current directory; use --session <id> for any other.${C.reset}
+`);
+    }
+    return;
+  }
+  if (opts.deleteSessionId) {
+    const deleted = sessionManager.deleteSession(opts.deleteSessionId);
+    if (deleted) {
+      console.log(`${C.green}Session "${opts.deleteSessionId}" deleted.${C.reset}`);
+    } else {
+      console.log(`${C.yellow}Session "${opts.deleteSessionId}" not found.${C.reset}`);
+    }
+    return;
+  }
+  if (opts.listTaskLogs) {
+    const taskLogs = taskLogManager.listTaskLogs();
+    if (taskLogs.length === 0) {
+      console.log(`${C.dim}No saved task logs.${C.reset}`);
+    } else {
+      console.log(`
+${C.bold}Task logs (${taskLogs.length}):${C.reset}
+`);
+      for (const t of taskLogs) {
+        const date = new Date(t.startedAt).toLocaleString();
+        const dur = (t.durationMs / 1e3).toFixed(1);
+        const statusIcon = t.status === "completed" ? `${C.green}\u2713` : t.status === "failed" ? `${C.red}\u2717` : `${C.yellow}\u2298`;
+        console.log(`  ${C.cyan}${t.id}${C.reset} ${statusIcon}${C.reset}`);
+        console.log(`    ${C.bold}Task:${C.reset} ${t.task.substring(0, 120)}`);
+        console.log(`    ${C.bold}Mode:${C.reset} ${t.mode}  ${C.bold}Steps:${C.reset} ${t.totalSteps}  ${C.bold}Tools:${C.reset} ${t.totalToolCalls}  ${C.bold}Duration:${C.reset} ${dur}s`);
+        console.log(`    ${C.bold}Started:${C.reset} ${date}`);
+        console.log(`    ${C.dim}${t.summary.substring(0, 150)}${C.reset}`);
+        console.log("");
+      }
+    }
+    return;
+  }
+  if (opts.taskLogId) {
+    const log2 = taskLogManager.loadTaskLog(opts.taskLogId);
+    if (!log2) {
+      console.log(`${C.yellow}Task log "${opts.taskLogId}" not found.${C.reset}`);
+    } else {
+      console.log(`
+${C.bold}=== Task Log: ${log2.id} ===${C.reset}
+`);
+      console.log(taskLogManager.formatTaskLog(log2));
+    }
+    return;
+  }
+  if (opts.deleteTaskLogId) {
+    const deleted = taskLogManager.deleteTaskLog(opts.deleteTaskLogId);
+    if (deleted) {
+      console.log(`${C.green}Task log "${opts.deleteTaskLogId}" deleted.${C.reset}`);
+    } else {
+      console.log(`${C.yellow}Task log "${opts.deleteTaskLogId}" not found.${C.reset}`);
+    }
+    return;
+  }
+  migrateLegacyAgentHome((message) => console.log(`${C.dim}${message}${C.reset}`));
+  console.log(`${C.dim}Config home: ${agentHomeDir()}${C.reset}`);
+  let resolved = loadConfig(opts.profile);
+  if (opts.temperature !== void 0) resolved.agentConfig.temperature = opts.temperature;
+  if (opts.topK !== void 0) resolved.agentConfig.topK = opts.topK;
+  const skillsLoader = new SkillsLoader();
+  skillsLoader.loadSkillsFromDirs(resolved.skillsDirs);
+  skillsLoader.loadRulesFromDirs(resolved.rulesDirs);
+  skillsLoader.loadAgentMdFiles(agentInstructionFiles(process.cwd()));
+  setResolvedSkillDirs(resolved.skillsDirs);
+  if (opts.showSkills) {
+    if (skillsLoader.skills.length === 0) {
+      console.log(`${C.dim}No skills found. Configure skills directories in config.yaml.${C.reset}`);
+    } else {
+      console.log(`
+${C.bold}Loaded skills (${skillsLoader.skills.length}):${C.reset}`);
+      for (const s of skillsLoader.skills) {
+        console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
+        if (s.whenToUse) {
+          console.log(`      whenToUse: ${C.dim}${s.whenToUse.substring(0, 100)}${C.reset}`);
+        }
+      }
+    }
+    if (skillsLoader.rules.length > 0) {
+      console.log(`
+${C.bold}Loaded rules (${skillsLoader.rules.length}):${C.reset}`);
+      for (const r of skillsLoader.rules) {
+        const tag = r.alwaysApply ? `${C.green}always` : `${C.yellow}manual`;
+        console.log(`  ${tag}${C.reset}  ${C.dim}${r.description}${C.reset}`);
+      }
+    }
+    console.log(`
+${C.dim}Skill management tools (meta-skill): skill_catalog / create_skill / update_skill${C.reset}`);
+    return;
+  }
+  const modeLabel = opts.mode === "plan" /* Plan */ ? "Plan" : opts.mode === "ask" /* Ask */ ? "Ask" : "Agent";
+  console.log(`
+${C.bold}${C.green}===========================================${C.reset}`);
+  console.log(`${C.bold}  CodeAgent v${AGENT_VERSION} - ${modeLabel} Mode${C.reset}`);
+  console.log(`${C.bold}${C.green}===========================================${C.reset}`);
+  const cfg = resolved.agentConfig;
+  console.log(`${C.dim}Profile: ${resolved.profileName} | Provider: ${cfg.provider} | Model: ${cfg.model}${C.reset}`);
+  if (resolved.modelRouting.enabled) {
+    const routingDefault = resolved.modelRouting.defaultModel || cfg.model;
+    const scenarioEntries = Object.entries(resolved.modelRouting.scenarios || {}).map(([s, m]) => `${s}\u2192${m}`).join(", ");
+    console.log(`${C.dim}Model routing: ON | startup: ${cfg.model} | default: ${routingDefault}${scenarioEntries ? ` | ${scenarioEntries}` : ""}${C.reset}`);
+    if (resolved.modelRouting.fallbackModel) {
+      console.log(`${C.dim}Model fallback: ${resolved.modelRouting.fallbackModel} (\u4FDD\u5E95\u6A21\u578B, auto-switch on API access timeout or rate limit)${C.reset}`);
+    }
+  } else if (resolved.profileExplicit) {
+    console.log(`${C.dim}Model routing: OFF (profile "${resolved.profileName}" pinned via --profile \u2014 no runtime model switching)${C.reset}`);
+  }
+  console.log(`${C.dim}API Base: ${cfg.apiBase || "default"} | Mode: ${modeLabel}${opts.streaming ? " | Streaming" : ""}${C.reset}`);
+  console.log(`${C.dim}Sampling: temperature=${cfg.temperature} top_k=${cfg.topK || "(provider default)"} | Memory: ${opts.memory ?? "auto"}${C.reset}`);
+  console.log(`${C.dim}Config: ${resolved.configFilePath || "none (using defaults)"} | CWD: ${process.cwd()}${C.reset}`);
+  const skillCount = skillsLoader.skills.length;
+  const ruleCount = skillsLoader.rules.length;
+  const mcpCount = resolved.mcpServers.length;
+  const parts = [];
+  if (skillCount > 0) parts.push(`Skills: ${skillCount}`);
+  if (ruleCount > 0) parts.push(`Rules: ${ruleCount}`);
+  if (mcpCount > 0) parts.push(`MCP Servers: ${mcpCount}`);
+  if (parts.length > 0) {
+    console.log(`${C.dim}${parts.join(" | ")}${C.reset}`);
+  }
+  console.log("");
+  if (opts.selfScan !== void 0) {
+    const cfg2 = selfUpdateConfig();
+    const evidence = collectRunEvidence({ days: opts.selfScan > 0 ? opts.selfScan : cfg2.evidenceDays });
+    console.log(formatEvidenceReport(evidence));
+    return;
+  }
+  await setupTracing(AGENT_VERSION, opts.tracing);
+  if (opts.parallel && opts.tasks.length > 1) {
+    await runParallelMode(opts.tasks, resolved, opts.memory, opts);
+    return;
+  }
+  if (opts.batch) {
+    await runBatchMode(opts, resolved, skillsLoader);
+    return;
+  }
+  const { config, llmProvider, toolRegistry, checkpointManager, memoryClient } = await createServices(resolved, opts.memory, opts);
+  const modeManager = new AgentModeManager();
+  modeManager.switchMode(opts.mode);
+  const agentLoop = new AgentLoop(config, llmProvider, toolRegistry, modeManager, checkpointManager, process.cwd(), memoryClient, tracing);
+  agentLoop.registerTodoTool();
+  if (opts.streaming) {
+    agentLoop.setStreaming(true);
+  }
+  let modelRouter = new ModelRouter(resolved.modelRouting, resolved.profiles, config);
+  let currentModel = config.model;
+  wireModelFallback(agentLoop, modelRouter);
+  const applyModelRouting = (task) => {
+    if (!modelRouter.enabled) return;
+    const selected = modelRouter.selectConfig(task);
+    if (selected.model === agentLoop.activeModel) return;
+    const previousModel = agentLoop.activeModel;
+    try {
+      const newProvider = LLMProviderFactory.create(selected);
+      agentLoop.swapProvider(selected, newProvider, "routing");
+      currentModel = selected.model;
+      log(C.dim, "ROUTE", `scenario ${modelRouter.detectScenario(task)} \u2192 ${selected.model}`);
+    } catch (err) {
+      log(C.red, "ROUTE", `Failed to switch model from ${previousModel} to ${selected.model}: ${err.message}`);
+    }
+  };
+  const taskDescription = opts.tasks.length > 0 ? opts.tasks.join(" ") : void 0;
+  const extraPrompt = buildSkillsContext(skillsLoader, opts.useSkill, taskDescription);
+  if (extraPrompt) {
+    agentLoop.setExtraSystemPrompt(extraPrompt);
+  }
+  attachAgentListeners(agentLoop, opts);
+  let currentSessionId;
+  let currentSessionName = "";
+  let autoSaveEnabled = storage.saveSessions;
+  const sessionToResume = opts.sessionId ? sessionManager.loadSession(opts.sessionId) : opts.resumeLatest ? sessionManager.getLatestSessionForCwd(process.cwd()) : void 0;
+  if (sessionToResume) {
+    const restoreMode = sessionToResume.mode;
+    modeManager.switchMode(restoreMode);
+    const rebuiltExtra = buildSkillsContext(skillsLoader, opts.useSkill, void 0);
+    agentLoop.restoreFromSession(
+      sessionToResume.messages,
+      sessionToResume.systemPrompt || "",
+      rebuiltExtra || ""
+    );
+    currentSessionId = sessionToResume.id;
+    currentSessionName = sessionToResume.name;
+    const date = new Date(sessionToResume.updatedAt).toLocaleString();
+    console.log(`${C.magenta}[SESSION]${C.reset} Resumed session "${currentSessionName || currentSessionId}" (${sessionToResume.messageCount} msgs, last updated ${date})`);
+    console.log(`${C.dim}  Summary: ${sessionToResume.summary || "(no summary)"}${C.reset}
+`);
+  } else if (opts.sessionId) {
+    console.error(`${C.yellow}[SESSION]${C.reset} Session "${opts.sessionId}" not found in ${storage.sessionsDir}`);
+    process.exit(1);
+  } else if (opts.resumeLatest) {
+    const forCwd = sessionManager.listSessionsForCwd(process.cwd()).length;
+    const total = sessionManager.count;
+    console.error(`${C.yellow}[SESSION]${C.reset} No saved session for this directory: ${process.cwd()}`);
+    if (total > 0) {
+      console.error(`${C.dim}  ${total} session(s) exist for other directories (this one has ${forCwd}).${C.reset}`);
+      console.error(`${C.dim}  Use --sessions to list them, or --session <id> to resume one explicitly.${C.reset}`);
+    } else {
+      console.error(`${C.dim}  No sessions have been saved yet.${C.reset}`);
+    }
+    process.exit(1);
+  } else if (sessionManager.count > 0) {
+    const latest = sessionManager.getLatestSessionForCwd(process.cwd());
+    if (latest) {
+      const date = new Date(latest.updatedAt).toLocaleString();
+      console.log(`${C.dim}Tip: Resume this directory's last session with --resume (${latest.name || latest.id}, ${latest.messageCount} msgs, ${date})${C.reset}
+`);
+    }
+  }
+  const autoSaveSession = (name) => {
+    if (!autoSaveEnabled) return;
+    const state = agentLoop.exportSessionState();
+    if (state.messages.length === 0) return;
+    const id = currentSessionId || sessionManager.generateId();
+    const sessionName = name || currentSessionName || `Session ${(/* @__PURE__ */ new Date()).toLocaleString()}`;
+    const saved = sessionManager.saveSession(
+      id,
+      sessionName,
+      modeManager.currentMode,
+      state.messages,
+      state.systemPrompt,
+      state.extraSystemPrompt,
+      agentLoop.planner.currentPlan
+    );
+    currentSessionId = saved.id;
+    currentSessionName = saved.name;
+  };
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    completer: createCompleter(sessionManager, skillsLoader, taskLogManager)
+  });
+  console.log(`${C.dim}Commands: /mode, /profile, /profiles, /stream, /skill, /skills, /parallel, /btw, /help, exit${C.reset}`);
+  console.log(`${C.dim}Session:  /save, /sessions [/all], /resume [id], /new, /auto-save, /delete-session${C.reset}`);
+  console.log(`${C.dim}Tasks:   /tasks, /task <id>, /delete-task <id>${C.reset}`);
+  console.log(`${C.dim}Tip: /btw <hint> works any time (even while running). Conflicting instructions (e.g. "\u57FA\u4E8E\u6700\u65B0\u7248\u672C\u91CD\u65B0\u6267\u884C") auto-cancel the running tool/plan and pivot; /btw cancel aborts the current tool${C.reset}`);
+  console.log(`${C.dim}Tip: control commands (/mode, /tasks, /sessions, /save, /help, exit) run IMMEDIATELY even while a task runs \u2014 no need to wait${C.reset}`);
+  console.log(`${C.dim}Tip: press Tab to auto-complete commands like /resume, /mode, /profile, /skill${C.reset}
+`);
+  let agentIsRunning = false;
+  const bufferedLines = [];
+  let processingLock = false;
+  const currentModeLabel = () => {
+    switch (modeManager.currentMode) {
+      case "plan" /* Plan */:
+        return "Plan";
+      case "ask" /* Ask */:
+        return "Ask";
+      default:
+        return "Agent";
+    }
+  };
+  const displayPrompt = () => {
+    if (agentIsRunning) {
+      process.stdout.write(`${C.bold}${C.yellow}[running - /btw to intervene]${C.reset} `);
+    } else {
+      process.stdout.write(`${C.bold}${C.blue}${currentModeLabel()}> ${C.reset}`);
+    }
+  };
+  const processTask = async (task) => {
+    try {
+      const taskExtra = buildSkillsContext(skillsLoader, void 0, task);
+      agentLoop.setExtraSystemPrompt(taskExtra);
+      applyModelRouting(task);
+      await agentLoop.run(task);
+      autoSaveSession(task.substring(0, 80));
+      const status = agentLoop.lastTaskError ? "failed" : "completed";
+      const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
+      taskLogManager.saveTaskLog(taskLog);
+    } catch (err) {
+      log(C.red, "ERROR", err.message);
+    }
+  };
+  const drainBufferedLines = async () => {
+    while (bufferedLines.length > 0) {
+      const next = bufferedLines.shift();
+      const decision = decideRunningLine(next, { agentRunning: agentIsRunning });
+      if (decision.route === "immediate" || decision.route === "refuse") {
+        if (EXIT_WORDS.has(next.toLowerCase())) {
+          void gracefulExit();
+          return;
+        }
+        if (decision.route === "refuse") {
+          log(C.yellow, "REFUSED", refusalMessage(decision, false));
+        } else if (await handleCommand(next)) {
+          if (agentIsRunning) {
+            log(C.dim, "QUEUED", `${decision.command} \u2014 ${decision.reason ?? "executed from the queue"}`);
+          }
+        } else {
+          log(C.yellow, "REPL", `no handler for ${decision.command} \u2014 nothing was done`);
+        }
+        continue;
+      }
+      if (decision.route === "btw") {
+        const hint = next.slice(4).trim();
+        if (hint && hint !== "cancel" && hint !== "abort") {
+          log(C.magenta, "BTW", `Buffered hint as prompt: "${hint.substring(0, 80)}${hint.length > 80 ? "..." : ""}"`);
+          await runAgentTask(hint);
+        }
+        continue;
+      }
+      console.log(`
+${C.dim}--- Processing queued: "${next.substring(0, 80)}${next.length > 80 ? "..." : ""}" ---${C.reset}`);
+      await runAgentTask(next);
+    }
+  };
+  const gracefulExit = async () => {
+    try {
+      if (agentIsRunning) {
+        agentLoop.cancel();
+        agentIsRunning = false;
+      }
+      autoSaveSession();
+      if (currentSessionId) {
+        console.log(`
+${C.dim}Session saved: ${currentSessionId}${C.reset}`);
+      }
+      console.log(`${C.dim}Goodbye!${C.reset}`);
+    } catch (e) {
+      console.error("Error during graceful exit:", e);
+    }
+    rl.close();
+    agentLoop.dispose();
+    await flushTracing();
+    setTimeout(() => process.exit(0), 100);
+  };
+  const handleCommand = async (trimmed) => {
+    if (trimmed.startsWith("/save")) {
+      const name = trimmed.slice(5).trim() || currentSessionName || "";
+      autoSaveSession(name);
+      console.log(`${C.green}Session saved: ${currentSessionId}${C.reset}${name ? ` (${name})` : ""}`);
+      return true;
+    }
+    if (trimmed === "/sessions" || trimmed === "/sessions all") {
+      const all = trimmed.endsWith(" all");
+      const sessions = all ? sessionManager.listSessions() : sessionManager.listSessionsForCwd(process.cwd());
+      const scope = all ? "all directories" : `this directory: ${process.cwd()}`;
+      if (sessions.length === 0) {
+        const total = sessionManager.count;
+        console.log(`${C.dim}No saved sessions for ${scope}.${C.reset}`);
+        if (!all && total > 0) {
+          console.log(`${C.dim}${total} session(s) exist for other directories \u2014 /sessions all to list them.${C.reset}`);
+        }
+      } else {
+        console.log(`
+${C.bold}Saved sessions (${sessions.length} \u2014 ${scope}):${C.reset}
+`);
+        for (const s of sessions) {
+          const date = new Date(s.updatedAt).toLocaleString();
+          const modeLabel2 = s.mode === "plan" /* Plan */ ? "Plan" : s.mode === "ask" /* Ask */ ? "Ask" : "Agent";
+          const isCurrent = s.id === currentSessionId ? ` ${C.green}(current)` : "";
+          console.log(`  ${C.cyan}${s.id}${C.reset}${isCurrent}`);
+          console.log(`    ${C.bold}Name:${C.reset} ${s.name || "(unnamed)"}  ${C.bold}Mode:${C.reset} ${modeLabel2}  ${C.bold}Msgs:${C.reset} ${s.messageCount}`);
+          console.log(`    ${C.bold}Updated:${C.reset} ${date}`);
+          if (s.summary) {
+            console.log(`    ${C.dim}${s.summary.substring(0, 120)}${C.reset}`);
+          }
+          console.log("");
+        }
+      }
+      return true;
+    }
+    if (trimmed.startsWith("/resume")) {
+      const targetId = trimmed.slice(7).trim();
+      const session = targetId ? sessionManager.loadSession(targetId) : sessionManager.getLatestSessionForCwd(process.cwd());
+      if (!session) {
+        if (targetId) {
+          log(C.yellow, "SESSION", `Session "${targetId}" not found`);
+        } else {
+          log(C.yellow, "SESSION", `No saved session for this directory (${process.cwd()}). Use /sessions to list them all.`);
+        }
+        return true;
+      }
+      autoSaveSession();
+      modeManager.switchMode(session.mode);
+      const rebuiltExtra = buildSkillsContext(skillsLoader, void 0, void 0);
+      agentLoop.restoreFromSession(
+        session.messages,
+        session.systemPrompt || "",
+        rebuiltExtra || ""
+      );
+      currentSessionId = session.id;
+      currentSessionName = session.name;
+      const date = new Date(session.updatedAt).toLocaleString();
+      console.log(`${C.magenta}[SESSION]${C.reset} Resumed "${session.name || session.id}" (${session.messageCount} msgs, ${date})`);
+      return true;
+    }
+    if (trimmed === "/new") {
+      autoSaveSession();
+      agentLoop.restoreFromSession([], "", extraPrompt || "");
+      currentSessionId = void 0;
+      currentSessionName = "";
+      console.log(`${C.magenta}[SESSION]${C.reset} Started new session`);
+      return true;
+    }
+    if (trimmed === "/auto-save") {
+      autoSaveEnabled = !autoSaveEnabled;
+      console.log(`${C.magenta}[SESSION]${C.reset} Auto-save ${autoSaveEnabled ? "enabled" : "disabled"}`);
+      return true;
+    }
+    if (trimmed === "/tasks") {
+      const taskLogs = taskLogManager.listTaskLogs();
+      if (taskLogs.length === 0) {
+        console.log(`${C.dim}No saved task logs.${C.reset}`);
+      } else {
+        console.log(`
+${C.bold}Task logs (${taskLogs.length}):${C.reset}
+`);
+        for (const t of taskLogs) {
+          const date = new Date(t.startedAt).toLocaleString();
+          const dur = (t.durationMs / 1e3).toFixed(1);
+          const statusIcon = t.status === "completed" ? `${C.green}\u2713` : t.status === "failed" ? `${C.red}\u2717` : `${C.yellow}\u2298`;
+          console.log(`  ${C.cyan}${t.id}${C.reset} ${statusIcon}${C.reset}  ${C.dim}${dur}s${C.reset}`);
+          console.log(`    ${t.task.substring(0, 100)}`);
+          console.log(`    ${C.dim}${new Date(t.startedAt).toLocaleString()} | ${t.mode} | ${t.totalSteps} steps | ${t.totalToolCalls} tools${C.reset}`);
+          console.log("");
+        }
+      }
+      return true;
+    }
+    if (trimmed.startsWith("/task ") || trimmed === "/task") {
+      const targetId = trimmed.slice(6).trim();
+      if (!targetId) {
+        log(C.yellow, "TASK", "Usage: /task <id>   (use /tasks to list ids)");
+        return true;
+      }
+      const entry = taskLogManager.loadTaskLog(targetId);
+      if (!entry) {
+        console.log(`${C.yellow}Task log "${targetId}" not found${C.reset}`);
+      } else {
+        console.log(`
+${C.bold}=== Task Log: ${entry.id} ===${C.reset}
+`);
+        console.log(taskLogManager.formatTaskLog(entry));
+      }
+      return true;
+    }
+    if (trimmed.startsWith("/delete-task ")) {
+      const targetId = trimmed.slice(13).trim();
+      if (taskLogManager.deleteTaskLog(targetId)) {
+        console.log(`${C.green}Task log "${targetId}" deleted${C.reset}`);
+      } else {
+        console.log(`${C.yellow}Task log "${targetId}" not found${C.reset}`);
+      }
+      return true;
+    }
+    if (trimmed === "/delete-task") {
+      log(C.yellow, "TASK", "Usage: /delete-task <id>   (use /tasks to list ids)");
+      return true;
+    }
+    if (trimmed.startsWith("/delete-session")) {
+      const targetId = trimmed.slice(15).trim();
+      if (!targetId) {
+        log(C.yellow, "SESSION", "Usage: /delete-session <id>   (use /sessions to list ids)");
+        return true;
+      }
+      const deleted = sessionManager.deleteSession(targetId);
+      if (deleted) {
+        if (currentSessionId === targetId) {
+          currentSessionId = void 0;
+          currentSessionName = "";
+        }
+        console.log(`${C.green}Session "${targetId}" deleted${C.reset}`);
+      } else {
+        console.log(`${C.yellow}Session "${targetId}" not found${C.reset}`);
+      }
+      return true;
+    }
+    if (trimmed === "/help") {
+      console.log(`
+${C.bold}Commands${C.reset}`);
+      for (const line of REPL_COMMAND_HELP) console.log(`  ${line}`);
+      console.log(`
+${C.dim}Tip: /btw <hint> works even while a task runs; control commands like${C.reset}`);
+      console.log(`${C.dim}/mode, /tasks, /sessions, /save and exit run immediately without waiting.${C.reset}
+`);
+      return true;
+    }
+    if (trimmed.startsWith("/mode ") || trimmed === "/mode") {
+      const newMode = trimmed.slice(6).trim();
+      if (!newMode) {
+        log(C.magenta, "MODE", `Current mode: ${currentModeLabel()}. Usage: /mode <agent|plan|ask>`);
+        return true;
+      }
+      if (newMode === "plan") modeManager.switchMode("plan" /* Plan */);
+      else if (newMode === "ask") modeManager.switchMode("ask" /* Ask */);
+      else modeManager.switchMode("agent" /* Agent */);
+      log(C.magenta, "MODE", `Switched to ${newMode}`);
+      return true;
+    }
+    if (trimmed === "/stream") {
+      agentLoop.setStreaming(!opts.streaming);
+      opts.streaming = !opts.streaming;
+      log(C.magenta, "STREAM", `Streaming ${opts.streaming ? "enabled" : "disabled"}`);
+      return true;
+    }
+    if (trimmed === "/profiles") {
+      const profiles = listProfiles();
+      for (const p of profiles) {
+        const active = p.name === resolved.profileName ? ` ${C.green}(active)` : "";
+        console.log(`  ${C.cyan}${p.name}${C.reset}  ${C.dim}${p.provider}/${p.model}${active}${C.reset}`);
+      }
+      return true;
+    }
+    if (trimmed.startsWith("/profile ")) {
+      const newProfileName = trimmed.slice(9).trim();
+      const previousProfile = resolved.profileName;
+      const previousModel = currentModel;
+      try {
+        const newResolved = loadConfigForProfile(newProfileName);
+        if (!newResolved.agentConfig.apiKey) {
+          log(C.red, "ERROR", `Profile "${newProfileName}" has no API key configured`);
+          return true;
+        }
+        const newProvider = LLMProviderFactory.create(newResolved.agentConfig);
+        agentLoop.swapProvider(newResolved.agentConfig, newProvider, "profile");
+        resolved = newResolved;
+        setResolvedSkillDirs(newResolved.skillsDirs);
+        modelRouter = new ModelRouter(newResolved.modelRouting, newResolved.profiles, newResolved.agentConfig);
+        currentModel = newResolved.agentConfig.model;
+        wireModelFallback(agentLoop, modelRouter);
+        const nc = newResolved.agentConfig;
+        log(C.magenta, "PROFILE", `Switched ${previousProfile} (${previousModel}) \u2192 ${newProfileName} (${nc.provider}/${nc.model})`);
+      } catch (err) {
+        log(C.red, "ERROR", `Failed to switch profile: ${err.message}`);
+      }
+      return true;
+    }
+    if (trimmed === "/skills") {
+      if (skillsLoader.skills.length === 0) {
+        console.log(`${C.dim}No skills loaded. Configure skills directories in config.yaml.${C.reset}`);
+      } else {
+        console.log(`
+${C.bold}Loaded skills (${skillsLoader.skills.length}):${C.reset}`);
+        for (const s of skillsLoader.skills) {
+          console.log(`  ${C.cyan}${s.name}${C.reset}  ${C.dim}${s.description.substring(0, 80)}${C.reset}`);
+          if (s.whenToUse) {
+            console.log(`      whenToUse: ${C.dim}${s.whenToUse.substring(0, 100)}${C.reset}`);
+          }
+        }
+      }
+      console.log(`${C.dim}Skill tools: skill_catalog / create_skill / update_skill (ask the agent to manage skills)${C.reset}`);
+      return true;
+    }
+    if (trimmed.startsWith("/skill ")) {
+      const skillName = trimmed.slice(7).trim();
+      const newExtra = buildSkillsContext(skillsLoader, skillName, void 0);
+      agentLoop.setExtraSystemPrompt(newExtra);
+      log(C.magenta, "SKILL", skillName ? `Activated skill: ${skillName}` : "Cleared active skill");
+      return true;
+    }
+    if (trimmed.startsWith("/use-skill ")) {
+      const skillName = trimmed.slice(11).trim();
+      const newExtra = buildSkillsContext(skillsLoader, skillName, void 0);
+      agentLoop.setExtraSystemPrompt(newExtra);
+      const known = skillsLoader.skills.some((s) => s.name === skillName);
+      log(C.magenta, "SKILL", known ? `Activated skill: ${skillName}` : `Activated skill: ${skillName} ${C.yellow}(not in the loaded skill list \u2014 /skills to check)${C.reset}`);
+      return true;
+    }
+    if (trimmed.startsWith("/parallel ")) {
+      const tasks = trimmed.slice(10).match(/"[^"]+"/g)?.map((t) => t.replace(/"/g, "")) || [];
+      if (tasks.length >= 2) {
+        await runParallelMode(tasks, resolved, opts.memory);
+      } else {
+        log(C.red, "ERROR", 'Provide at least 2 tasks in quotes: /parallel "task1" "task2"');
+      }
+      return true;
+    }
+    if (trimmed === "/continue" || trimmed === "continue") {
+      try {
+        agentIsRunning = true;
+        try {
+          await agentLoop.continueSession();
+        } finally {
+          agentIsRunning = false;
+        }
+        autoSaveSession();
+        const status = agentLoop.lastTaskError ? "failed" : "completed";
+        const taskLog = agentLoop.exportTaskLog(status, agentLoop.lastTaskError);
+        taskLogManager.saveTaskLog(taskLog);
+      } catch (err) {
+        log(C.red, "ERROR", err.message);
+      }
+      return true;
+    }
+    if (trimmed.startsWith("/btw ")) {
+      const hint = trimmed.slice(5).trim();
+      if (hint) {
+        if (hint === "cancel" || hint === "abort") {
+          log(C.yellow, "BTW", "No agent currently running. Use /btw cancel while agent is running to abort a tool.");
+        } else {
+          log(C.magenta, "BTW", `Direct prompt: "${hint.substring(0, 100)}${hint.length > 100 ? "..." : ""}"`);
+          await runAgentTask(hint);
+          await drainBufferedLines();
+        }
+      } else {
+        log(C.yellow, "BTW", "Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)");
+      }
+      return true;
+    }
+    if (trimmed === "/cancel") {
+      log(C.yellow, "CANCEL", "No task currently running.");
+      return true;
+    }
+    return false;
+  };
+  const runAgentTask = async (task) => {
+    agentIsRunning = true;
+    try {
+      await processTask(task);
+    } finally {
+      agentIsRunning = false;
+    }
+  };
+  const handleBtw = async (hint) => {
+    if (!hint) {
+      log(C.yellow, "BTW", "Usage: /btw <your hint>  or  /btw cancel  (to abort current tool)");
+      return;
+    }
+    if (hint === "cancel" || hint === "abort") {
+      if (agentLoop.cancelCurrentTool()) {
+        log(C.magenta, "BTW", "Cancelling current tool execution...");
+        return;
+      }
+      const outcome2 = await agentLoop.injectBtwHint(hint);
+      log(C.yellow, "BTW", outcome2.kind === "superseded" ? "No tool running \u2014 asking the agent to stop the current task" : "No tool currently running to cancel");
+      return;
+    }
+    const outcome = await agentLoop.injectBtwHint(hint);
+    if (outcome.kind === "superseded") {
+      log(C.magenta, "BTW", `Task superseded \u2014 ${outcome.toolCancelled ? "aborted the running tool and " : ""}pivoting to: "${hint.substring(0, 80)}${hint.length > 80 ? "..." : ""}"`);
+      if (outcome.reason) log(C.dim, "BTW", `reason: ${outcome.reason}`);
+    } else if (outcome.kind === "cancelled") {
+      log(C.magenta, "BTW", "Cancelling current tool execution...");
+    } else {
+      log(C.magenta, "BTW", `Hint injected: "${hint.substring(0, 100)}${hint.length > 100 ? "..." : ""}"`);
+    }
+  };
+  rl.on("line", async (input) => {
+    const trimmed = input.trim();
+    if (agentIsRunning) {
+      const decision = decideRunningLine(trimmed, { agentRunning: true });
+      switch (decision.route) {
+        case "btw":
+          await handleBtw(trimmed.slice(4).trim());
+          break;
+        case "immediate":
+          if (EXIT_WORDS.has(trimmed.toLowerCase())) {
+            void gracefulExit();
+            return;
+          }
+          log(C.dim, "NOW", `${decision.command} \u2014 ${decision.reason ?? "running immediately"}`);
+          if (!await handleCommand(trimmed)) {
+            log(C.yellow, "REPL", `no handler for ${decision.command} \u2014 nothing was done`);
+          }
+          break;
+        case "refuse":
+          log(C.yellow, "REFUSED", refusalMessage(decision));
+          break;
+        default:
+          if (trimmed) {
+            bufferedLines.push(trimmed);
+            log(C.dim, "QUEUED", `"${trimmed.substring(0, 60)}${trimmed.length > 60 ? "..." : ""}" \u2014 will process after current task`);
+          }
+          break;
+      }
+      displayPrompt();
+      return;
+    }
+    if (processingLock) {
+      bufferedLines.push(trimmed);
+      return;
+    }
+    if (!trimmed) {
+      displayPrompt();
+      return;
+    }
+    if (EXIT_WORDS.has(trimmed.toLowerCase())) {
+      void gracefulExit();
+      return;
+    }
+    processingLock = true;
+    try {
+      await drainBufferedLines();
+      if (agentIsRunning) return;
+      if (await handleCommand(trimmed)) {
+        await drainBufferedLines();
+        return;
+      }
+      await runAgentTask(trimmed);
+      await drainBufferedLines();
+    } finally {
+      processingLock = false;
+      displayPrompt();
+    }
+  });
+  rl.on("SIGINT", () => {
+    void gracefulExit();
+  });
+  displayPrompt();
+  if (opts.tasks.length > 0) {
+    const task = opts.tasks.join(" ");
+    rl.write(task + "\n");
+  }
+}
+var CLI_EXCLUDED_RULE_PATTERNS = ["askquestion", "durable-request", "durable request"];
+function buildSkillsContext(loader, activeSkill, taskDescription) {
+  let prompt = "";
+  prompt += loader.buildPreloadRulesPromptSection(CLI_EXCLUDED_RULE_PATTERNS);
+  let preActivatedSkills;
+  if (taskDescription) {
+    preActivatedSkills = loader.getAutoMatchedSkills(taskDescription);
+  }
+  if (activeSkill) {
+    if (!preActivatedSkills) preActivatedSkills = /* @__PURE__ */ new Set();
+    preActivatedSkills.add(activeSkill);
+  }
+  prompt += loader.buildSkillsPromptSection(preActivatedSkills);
+  const skillDirs = getResolvedSkillDirs();
+  prompt += loader.buildMetaSkillPromptSection(skillDirs);
+  prompt += buildSelfEvolvePromptSection(selfUpdateConfig());
+  if (activeSkill) {
+    const content = loader.getSkillContent(activeSkill);
+    if (content && preActivatedSkills?.has(activeSkill)) {
+    } else if (content) {
+      prompt += `
+## Active Skill: ${activeSkill}
 
-${i}
-`)}return n}var ro=[];function Oa(){return ro}function eo(s){ro=s&&s.length>0?s:[Gt()]}Da().catch(s=>{console.error("Fatal:",s),process.exit(1)});
+${content}
+`;
+    }
+  }
+  return prompt;
+}
+var _resolvedSkillDirs = [];
+function getResolvedSkillDirs() {
+  return _resolvedSkillDirs;
+}
+function setResolvedSkillDirs(dirs) {
+  _resolvedSkillDirs = dirs && dirs.length > 0 ? dirs : [defaultSkillsDir()];
+}
+main().catch((err) => {
+  console.error("Fatal:", err);
+  process.exit(1);
+});
 //# sourceMappingURL=agent-cli.js.map

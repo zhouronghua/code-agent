@@ -90,10 +90,11 @@ function testHomeResolution(): void {
 	const previous = process.env.AGENT_HOME;
 	const previousCwd = process.cwd();
 	process.env.AGENT_HOME = override;
-	// `findConfigFile()` prefers `<cwd>/config.yaml`, so an ambient project config
-	// (a developer's local, gitignored config.yaml listing `skills:`) would leak
-	// into the "default dirs follow the home" assertions below. Run from the
-	// override home so the assertions really test the DEFAULT computation.
+	// findConfigFile() looks at <cwd>/config.yaml BEFORE the agent home, so a
+	// machine-local untracked config.yaml (this repo ships one) would inject its
+	// explicit skills:/rules: into the "defaults" assertions below and turn
+	// `npm run test` red for a reason that has nothing to do with the behaviour
+	// under test. An isolated run needs an isolated cwd as well.
 	process.chdir(override);
 	try {
 		fs.writeFileSync(path.join(override, 'config.yaml'), 'active_profile: x\n');
