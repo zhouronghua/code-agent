@@ -1920,7 +1920,7 @@ export class AgentLoop {
 			const effectiveTimeout =
 				(args.timeout as number) || tool.timeoutFor(args, this._config) || this._config.stepTimeout;
 			const result = await Promise.race([
-				tool.execute({ ...args, _toolCallId: toolCallId }, controller.signal),
+				tool.execute({ ...args, _toolCallId: toolCallId, _timeoutMs: effectiveTimeout }, controller.signal),
 				this._timeout(effectiveTimeout, toolCallId),
 			]);
 			return result;

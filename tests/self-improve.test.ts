@@ -723,6 +723,33 @@ async function testPollBudget(): Promise<void> {
 		`the slow poll finished instead of dying on the step timeout (error=${exec?.error ?? 'none'})`);
 	ok(!!exec && /Success/.test(String(exec.result)),
 		`the successful poll reports its attempts (${String(exec?.result).slice(-70)})`);
+
+	// Behavioural: when the requested poll budget is LARGER than the agent's task
+	// budget, the harness clamps the call to the task budget. The poll must stop
+	// itself and report the attempts it already made BEFORE that clamp kills it —
+	// otherwise the agent gets a bare "Tool execution timed out" with no history.
+	// This is the largest failure group in the 14-day evidence (120 occurrences,
+	// e.g. "Tool execution timed out after 600000ms" = the shipped task_timeout).
+	const tightConfig: IAgentConfig = {
+		provider: 'openai', model: 'm', apiKey: 'k', apiBase: 'http://127.0.0.1:9/v1',
+		maxSteps: 10, maxContextTokens: 100000, maxOutputTokens: 1000,
+		temperature: 0, stepTimeout: 200, taskTimeout: 2000,
+	};
+	const tightRegistry = new ToolRegistry();
+	tightRegistry.register(new PollTool(new ScriptedTerminalService([1], 100), '/tmp'));
+	const tightAgent = new AgentLoop(tightConfig,
+		new PollToolProvider({ command: 'check', max_attempts: 30, initial_delay: 1, max_delay: 1, command_timeout: 300 }),
+		tightRegistry, new AgentModeManager(), new AgentCheckpointManager({} as never), '/tmp');
+	await tightAgent.run('poll a check that never passes');
+	const tightLog = tightAgent.exportTaskLog('completed');
+	tightAgent.dispose();
+
+	const tightExec = tightLog.steps.flatMap(s => s.toolExecutions).find(e => e.toolName === 'poll');
+	ok(!!tightExec, 'the over-budget poll really ran in the ReAct loop');
+	ok(!!tightExec && !/timed out/i.test(String(tightExec.error ?? '')),
+		`the over-budget poll stops itself instead of being killed by the harness (error=${tightExec?.error ?? 'none'})`);
+	ok(!!tightExec && /Attempt 1\//.test(String(tightExec.error ?? '')),
+		`the over-budget poll keeps the attempts it already made (${String(tightExec?.error ?? '').slice(0, 90)})`);
 }
 
 async function main(): Promise<void> {

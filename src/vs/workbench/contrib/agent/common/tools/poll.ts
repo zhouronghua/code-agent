@@ -19,6 +19,28 @@ import { AgentTool } from '../agentTools';
 const POLL_ATTEMPT_OVERHEAD_MS = 1000;
 
 /**
+ * Head-room kept between the poll's own deadline and the harness timeout that
+ * races it. The harness clock starts slightly before `execute()` does, so the
+ * poll has to give up a little early in order to be the one that reports the
+ * outcome — otherwise the race rejects and every attempt already made is lost.
+ */
+const POLL_DEADLINE_MARGIN_MIN_MS = 250;
+const POLL_DEADLINE_MARGIN_RATIO = 0.05;
+const POLL_DEADLINE_MARGIN_MAX_MS = 30000;
+
+/**
+ * How much of the call budget the poll leaves to the harness. Never more than
+ * half the budget, so a small budget still gets to run at least one attempt.
+ */
+export function pollDeadlineMarginMs(budgetMs: number): number {
+	return Math.min(
+		Math.max(POLL_DEADLINE_MARGIN_MIN_MS, budgetMs * POLL_DEADLINE_MARGIN_RATIO),
+		POLL_DEADLINE_MARGIN_MAX_MS,
+		budgetMs / 2,
+	);
+}
+
+/**
  * Worst-case wall clock (ms) one poll call with these arguments can occupy its caller.
  *
  * Mirrors `execute()` exactly: every attempt may burn its full `command_timeout`,
@@ -120,6 +142,17 @@ export class PollTool extends AgentTool {
 		const cwd = (args.cwd as string) || this._defaultCwd;
 		const commandTimeout = (args.command_timeout as number) || 30000;
 
+		// The harness races this call against the same budget `timeoutFor()`
+		// declared. When the requested poll budget is larger than the agent's task
+		// budget the harness clamps it, and losing that race throws away every
+		// attempt already made (the "Tool execution timed out after 600000ms"
+		// signature). Keep our own deadline just inside it so the poll reports
+		// what it saw instead of being killed silently.
+		const budgetMs = (args._timeoutMs as number) || 0;
+		const deadline = budgetMs > 0
+			? Date.now() + Math.max(0, budgetMs - pollDeadlineMarginMs(budgetMs))
+			: Number.POSITIVE_INFINITY;
+
 		if (maxAttempts < 1) {
 			return this.failure(toolCallId, 'max_attempts must be >= 1');
 		}
@@ -138,8 +171,20 @@ export class PollTool extends AgentTool {
 				return this.failure(toolCallId, allOutputs.join('\n\n'));
 			}
 
-			// Run the check command
-			const output = await this._runCheck(command, cwd, commandTimeout);
+			// Out of budget: report the attempts we have rather than let the
+			// harness timeout reject the whole call with no output at all.
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) {
+				allOutputs.push(
+					`❌ Stopped: poll budget exhausted after ${attempt} attempt(s) — the agent's ` +
+					`task budget (${budgetMs}ms) is smaller than the requested poll budget ` +
+					`(${pollBudgetMs(args)}ms). Re-run poll to keep waiting.`
+				);
+				return this.failure(toolCallId, allOutputs.join('\n\n'));
+			}
+
+			// Run the check command, never past the deadline
+			const output = await this._runCheck(command, cwd, Math.min(commandTimeout, remainingMs));
 			const exitCode = output.exitCode;
 
 			allOutputs.push(
@@ -180,7 +225,9 @@ export class PollTool extends AgentTool {
 					`⏳ Waiting ${delay}s before next poll (attempt ${attempt + 2}/${maxAttempts})...`
 				);
 
-				await this._sleep(delayMs, signal);
+				// Never sleep past the deadline: wake up and let the top-of-loop
+				// check report the budget as exhausted.
+				await this._sleep(Math.min(delayMs, Math.max(0, deadline - Date.now())), signal);
 			}
 		}
 
