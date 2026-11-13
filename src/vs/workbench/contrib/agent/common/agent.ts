@@ -167,7 +167,14 @@ export function isApiTimeoutError(err: unknown): boolean {
 		if (cause.code) parts.push(String(cause.code));
 	}
 	const hay = parts.join(' ').toLowerCase();
-	return /timed?\s*out|timeout|etimedout|esockettimedout|econnaborted|und_err_connect_timeout|und_err_headers_timeout|und_err_body_timeout/.test(hay);
+	// "the request timed out" AND "the endpoint is unreachable" are the same
+	// condition from the agent's point of view: the primary cannot serve this
+	// request, so the 保底 model must take over. `fetch failed` /
+	// ECONNREFUSED / ENOTFOUND / EAI_AGAIN are what Node throws for a dead host,
+	// a refused port or broken DNS — leaving them unclassified means a task dies
+	// with "fetch failed" instead of falling back (observed while pointing the
+	// primary at an unreachable apiBase).
+	return /timed?\s*out|timeout|etimedout|esockettimedout|econnaborted|und_err_connect_timeout|und_err_headers_timeout|und_err_body_timeout|fetch failed|econnrefused|econnreset|enotfound|eai_again|network|socket hang up/.test(hay);
 }
 
 /**
@@ -1101,6 +1108,15 @@ export class AgentLoop {
 			// Never leave an assistant `tool_calls` unanswered: this is the last
 			// point of control before the session is saved and resumed.
 			this._answerDanglingToolCalls();
+			// A probe that found the primary healthy while a request was in flight
+			// sets `_primaryRecovered` and defers the switch-back to the next loop
+			// iteration. If the run ends first (cancelled, or the request threw) that
+			// iteration never comes, so the deferred switch would be lost and the
+			// agent would stay on the 保底 model — the reported "卡住". Apply it here.
+			if (this._usingFallback && this._primaryRecovered) {
+				this._primaryRecovered = false;
+				this._switchBackToPrimary(FALLBACK_RECOVERY_DETAIL);
+			}
 			this._isRunning = false;
 			this._cancellation?.dispose();
 			this._cancellation = undefined;
@@ -1467,6 +1483,12 @@ export class AgentLoop {
 			let overflowRetries = 0;
 			const MAX_OVERFLOW_RETRIES = 3;
 			this._llmRequestInFlight = true;
+			// The flag must be cleared on EVERY exit, not just success. It gates the
+			// recovery probe's switch-back ("a request is in flight, defer to the next
+			// loop iteration"), so leaving it set after a throw means the probe keeps
+			// deferring to an iteration that will never come — the agent stays on the
+			// 保底 model forever, which is the reported "切到保底模型之后就卡住了".
+			try {
 			for (;;) {
 				messages = this._context.getContextWindow();
 
@@ -1587,8 +1609,10 @@ export class AgentLoop {
 					throw err;
 				}
 			}
-			// The request finished — a recovery probe may swap providers again.
-			this._llmRequestInFlight = false;
+			} finally {
+				// Cleared on success, on a thrown API error, and on cancellation.
+				this._llmRequestInFlight = false;
+			}
 
 			this._context.addMessage(response);
 			this._onDidReceiveMessage.fire(response);

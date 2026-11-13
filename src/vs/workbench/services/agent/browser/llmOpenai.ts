@@ -136,6 +136,34 @@ export function isUnknownThinkingParamError(errorText: string): boolean {
 		|| lower.includes('unrecognized');
 }
 
+/**
+ * Does this HTTP 400 say the completion budget exceeds the model's own cap?
+ *
+ * Verified on api.enflame.cn for `gpt-5.6-luna` (the configured 保底 model):
+ *   {"error":{"message":"max_tokens is too large: 393216. This model supports at
+ *    most 128000 completion tokens, whereas you provided 393216.",
+ *    "type":"invalid_request_error","param":"max_tokens","code":"invalid_value"}}
+ *
+ * `models.json` advertises maxOutputTokens 393216 for that model while the gateway
+ * caps completion at 128000, and `_clampMaxTokens` returns
+ * `min(maxOutputTokens, remaining)` — so a SHORT history sends the full 393216 and
+ * the first fallback request dies. A longer history happens to clamp below the cap,
+ * which is why the 保底 model sometimes worked and sometimes did not.
+ *
+ * The cap is read from the error rather than hard-coded: it is a property of the
+ * gateway, not of this client, and a different deployment may cap differently.
+ *
+ * @returns the advertised cap, or undefined when this is not that error.
+ */
+export function parseMaxTokensCap(errorText: string): number | undefined {
+	if (!/max_tokens is too large/i.test(errorText)) return undefined;
+	// "supports at most 128000 completion tokens"
+	const match = /supports at most (\d+) completion tokens/i.exec(errorText);
+	if (!match) return undefined;
+	const cap = Number(match[1]);
+	return Number.isSafeInteger(cap) && cap > 0 ? cap : undefined;
+}
+
 export class OpenAIProvider implements ILLMProvider {
 	readonly name = 'openai';
 	private readonly _apiKey: string;
@@ -175,6 +203,17 @@ export class OpenAIProvider implements ILLMProvider {
 	 * alive on a 保底-model switch.
 	 */
 	private _skipThinking = false;
+
+	/**
+	 * Completion cap the gateway reported for this model, learned from a
+	 * "max_tokens is too large" 400 (see `parseMaxTokensCap`).
+	 *
+	 * `models.json` can advertise a larger budget than the endpoint accepts, and the
+	 * 保底 model is exactly where that bites: the first request after a fallback
+	 * carries the full advertised budget and dies before the task can continue.
+	 * Remembering the cap keeps every later request legal without a round trip.
+	 */
+	private _completionCap: number | undefined;
 
 	constructor(config: IAgentConfig) {
 		this._apiKey = config.apiKey;
@@ -257,15 +296,24 @@ export class OpenAIProvider implements ILLMProvider {
 					const errorText = await response.text();
 
 					// Special handling for temperature validation error
+					// (keeps allowRetry: the repairs are independent — see the thinking
+					// branch below for why passing false would disable them).
 					if (allowRetry && response.status === 400 && this._isTemperatureError(errorText)) {
 						this._skipTemperature = true;
 						clearTimeout(apiTimeout);
-						return this._doComplete(messages, tools, temperature, topK, false);
+						return this._doComplete(messages, tools, temperature, topK, true);
 					}
 
 					// The endpoint does not implement the `thinking` param. It is an
 					// optional accelerator, so drop it and resend instead of failing
 					// the run (verified: gpt-5.6-luna on api.enflame.cn).
+					//
+					// NB: the resend keeps `allowRetry` TRUE. These repairs are
+					// independent — a gateway can reject `thinking` AND cap completion
+					// below the configured budget (gpt-5.6-luna does both), and passing
+					// false here would disable the max_tokens repair for the retry, so
+					// the second 400 would kill the task. Each repair is guarded by its
+					// own one-shot flag, so this cannot loop.
 					if (allowRetry && response.status === 400 && !this._skipThinking && isUnknownThinkingParamError(errorText)) {
 						this._skipThinking = true;
 						clearTimeout(apiTimeout);
@@ -273,7 +321,24 @@ export class OpenAIProvider implements ILLMProvider {
 							`[LLM] ${this._model} does not implement the 'thinking' parameter — ` +
 							`resending the request without it`
 						);
-						return this._doComplete(messages, tools, temperature, topK, false);
+						return this._doComplete(messages, tools, temperature, topK, true);
+					}
+
+					// The gateway caps completion below what models.json advertises.
+					// Learn the cap and resend with a legal budget instead of failing the
+					// task — this is what killed the 保底 model on its FIRST request after
+					// a fallback (short history => full advertised budget => 400).
+					if (allowRetry && response.status === 400) {
+						const cap = parseMaxTokensCap(errorText);
+						if (cap !== undefined && (this._completionCap === undefined || cap < this._completionCap)) {
+							this._completionCap = cap;
+							clearTimeout(apiTimeout);
+							console.warn(
+								`[LLM] ${this._model} caps completion at ${cap} tokens ` +
+								`(configured ${this._maxOutputTokens}) — resending with a legal max_tokens`
+							);
+							return this._doComplete(messages, tools, temperature, topK, false);
+						}
 					}
 
 					// "maximum context length" — input + max_tokens exceeds the model window.
@@ -309,7 +374,9 @@ export class OpenAIProvider implements ILLMProvider {
 							`[LLM] ${this._model} answers in thinking mode — resending the request with ` +
 							`reasoning_content echoed back on every assistant message`
 						);
-						return this._doComplete(messages, tools, temperature, topK, false);
+						// Keep allowRetry: this repair is independent of the thinking-param
+						// and max_tokens repairs, and a gateway can need more than one.
+						return this._doComplete(messages, tools, temperature, topK, true);
 					}
 
 					// Graceful recovery from DeepSeek-specific transient errors
@@ -512,6 +579,36 @@ export class OpenAIProvider implements ILLMProvider {
 						break;
 					}
 
+					// The gateway caps completion below what models.json advertises —
+					// learn the cap and resend with a legal budget (same policy as
+					// complete()). Without this the 保底 model's first request after a
+					// fallback dies on a short history.
+					if (response.status === 400) {
+						const cap = parseMaxTokensCap(errorText);
+						if (cap !== undefined && (this._completionCap === undefined || cap < this._completionCap)) {
+							this._completionCap = cap;
+							body.max_tokens = Math.min(body.max_tokens as number, cap);
+							clearTimeout(apiTimeout);
+							console.warn(
+								`[LLM] ${this._model} caps completion at ${cap} tokens ` +
+								`(configured ${this._maxOutputTokens}) — resending with a legal max_tokens`
+							);
+							response = await fetch(`${this._apiBase}/chat/completions`, {
+								method: 'POST',
+								headers: {
+									'Content-Type': 'application/json',
+									'Authorization': `Bearer ${this._apiKey}`,
+								},
+								body: JSON.stringify(body),
+							});
+							if (!response.ok) {
+								const retryErrorText = await response.text();
+								throw new Error(`OpenAI API error ${response.status}: ${retryErrorText}`);
+							}
+							break;
+						}
+					}
+
 					// "maximum context length" — reduce the completion budget and retry,
 					// then escalate to ContextOverflowError so the agent loop compacts.
 					if (response.status === 400 && this._isContextOverflowError(errorText)) {
@@ -661,7 +758,13 @@ export class OpenAIProvider implements ILLMProvider {
 		// estimate so a slightly-off estimate can never fill the window completely.
 		const safetyReserve = Math.max(MIN_CONTEXT_RESERVE, Math.floor(this._maxContextTokens * CONTEXT_RESERVE_RATIO));
 		const remaining = this._maxContextTokens - inputTokens - safetyReserve;
-		return Math.max(1, Math.min(this._maxOutputTokens, remaining));
+		// The gateway's own completion cap (learned from a 400) is a hard ceiling on
+		// top of the configured budget: `models.json` may advertise more than the
+		// endpoint accepts, and sending the advertised value fails the request.
+		const budget = this._completionCap === undefined
+			? this._maxOutputTokens
+			: Math.min(this._maxOutputTokens, this._completionCap);
+		return Math.max(1, Math.min(budget, remaining));
 	}
 
 	/**

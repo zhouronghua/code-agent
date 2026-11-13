@@ -609,6 +609,23 @@ async function testRateLimitFallback(): Promise<void> {
 	);
 	ok(!isApiRateLimitError(reasoning400), 'the reasoning_content 400 is NOT a rate limit');
 	ok(!isApiFallbackTrigger(reasoning400), 'the reasoning_content 400 does not burn the 保底 model');
+
+	// An UNREACHABLE primary is the same condition as a timeout: the request cannot
+	// be served, so the 保底 model must take over. Node reports these as
+	// `fetch failed` / ECONNREFUSED / ENOTFOUND, not as the word "timeout" —
+	// leaving them unclassified killed tasks with a bare "fetch failed".
+	eq(classifyApiFallback(new Error('fetch failed')), 'timeout',
+		'a dead endpoint (fetch failed) falls back like a timeout');
+	eq(classifyApiFallback(new TypeError('fetch failed')), 'timeout',
+		'the fetch TypeError shape also falls back');
+	{
+		const connErr = new Error('fetch failed') as Error & { cause?: unknown };
+		connErr.cause = { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:9' };
+		eq(classifyApiFallback(connErr), 'timeout', 'a refused port falls back');
+		const dnsErr = new Error('fetch failed') as Error & { cause?: unknown };
+		dnsErr.cause = { code: 'ENOTFOUND' };
+		eq(classifyApiFallback(dnsErr), 'timeout', 'a DNS failure falls back');
+	}
 	ok(!isApiRateLimitError(new Error('OpenAI API error 500: internal error')), 'a 500 is not a rate limit');
 	ok(!isApiTimeoutError(tpm), 'a rate limit is not a timeout (the two triggers stay distinguishable)');
 	eq(classifyApiFallback(tpm), 'rate-limit', 'classification: quota error → rate-limit');
